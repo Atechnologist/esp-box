@@ -6,47 +6,37 @@ on:
       - master
   workflow_dispatch:
 
-permissions:
-  contents: read
-  id-token: write
-
 jobs:
-  build-factory-demo:
+  build:
     runs-on: ubuntu-latest
     container: espressif/idf:release-v5.1
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
         with:
-          submodules: 'recursive'
+          submodules: recursive
 
       - name: Build factory_demo
         shell: bash
         run: |
-          # Source ESP-IDF environment
           . $IDF_PATH/export.sh
 
-          # Install required Python dependencies
-          pip install --upgrade idf-component-manager
-          pip install "idf_build_apps<2.0"
+          cd examples/factory_demo
 
-          # Go to the example folder
-          cd $GITHUB_WORKSPACE/examples/factory_demo
-
-          # Merge SDK config defaults for box-3
-          comm -23 <(grep -v '^#' sdkconfig.ci.box-3 | sort) \
-                    <(grep -v '^#' sdkconfig.defaults | sort) | \
-                    sed 's/.*/\n&/' >> sdkconfig.defaults
-
-          # Build the project
+          # Build project
           idf.py build
 
-          # Create a single merged BIN for flashing
-          idf.py fullflash -o $GITHUB_WORKSPACE/factory_demo_box3.bin
+          # Merge into single flashable binary
+          cd build
+          esptool.py --chip esp32s3 merge_bin \
+            -o factory_demo_box3.bin \
+            @flash_args.json
 
-      - name: Upload artifact
+          # Move to workspace root for upload
+          mv factory_demo_box3.bin $GITHUB_WORKSPACE/
+
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: factory-demo-box3
-          path: $GITHUB_WORKSPACE/factory_demo_box3.bin
-          overwrite: true
+          path: factory_demo_box3.bin
