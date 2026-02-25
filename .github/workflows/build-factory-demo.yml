@@ -1,0 +1,51 @@
+name: "Build ESP32-S3-BOX Factory Demo"
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-factory-demo:
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.1
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          submodules: 'recursive'
+
+      - name: Set up ESP-IDF
+        run: |
+          . $IDF_PATH/export.sh
+          pip install --upgrade idf-component-manager
+          pip install "idf_build_apps<2.0"
+
+      - name: Build factory_demo
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE/examples/factory_demo
+
+          # Merge SDK config defaults
+          comm -23 <(grep -v '^#' sdkconfig.ci.box-3 | sort) \
+                    <(grep -v '^#' sdkconfig.defaults | sort) | \
+                    sed 's/.*/\n&/' >> sdkconfig.defaults
+
+          # Build the project
+          idf.py build
+
+          # Merge binaries for flashing
+          cd build
+          esptool.py --chip esp32s3 merge_bin -o "$GITHUB_WORKSPACE/factory_demo_box3.bin" @flash_args
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-demo-box3
+          path: $GITHUB_WORKSPACE/factory_demo_box3.bin
+          overwrite: true
