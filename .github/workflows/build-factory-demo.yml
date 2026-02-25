@@ -23,17 +23,17 @@ jobs:
       - name: Build factory_demo
         shell: bash
         run: |
-          # Source ESP-IDF environment for this shell session
+          # Source ESP-IDF environment
           . $IDF_PATH/export.sh
 
-          # Install Python dependencies
+          # Install required Python dependencies
           pip install --upgrade idf-component-manager
           pip install "idf_build_apps<2.0"
 
-          # Go to example
+          # Go to the example folder
           cd $GITHUB_WORKSPACE/examples/factory_demo
 
-          # Merge SDK config defaults
+          # Merge SDK config defaults for box-3
           comm -23 <(grep -v '^#' sdkconfig.ci.box-3 | sort) \
                     <(grep -v '^#' sdkconfig.defaults | sort) | \
                     sed 's/.*/\n&/' >> sdkconfig.defaults
@@ -41,9 +41,8 @@ jobs:
           # Build the project
           idf.py build
 
-          # Merge binaries for flashing
-          cd build
-          esptool.py --chip esp32s3 merge_bin -o "$GITHUB_WORKSPACE/factory_demo_box3.bin" @flash_args
+          # Create a single merged BIN for flashing
+          idf.py fullflash -o $GITHUB_WORKSPACE/factory_demo_box3.bin
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
