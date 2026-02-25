@@ -1,9 +1,6 @@
-name: "Build ESP32-S3-BOX Factory Demo"
+name: Build ESP32-S3-BOX Factory Demo
 
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 jobs:
@@ -17,22 +14,23 @@ jobs:
           submodules: recursive
 
       - name: Build factory_demo
-        shell: bash
         run: |
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
 
-          # Build project
           idf.py build
 
-          # Merge into single flashable binary
           cd build
+
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box3.bin \
-            @flash_args.json
+            --flash_mode dio \
+            --flash_size 16MB \
+            0x0 bootloader/bootloader.bin \
+            0x8000 partition_table/partition-table.bin \
+            0x10000 factory_demo.bin
 
-          # Move to workspace root for upload
           mv factory_demo_box3.bin $GITHUB_WORKSPACE/
 
       - name: Upload firmware
