@@ -29,7 +29,7 @@ jobs:
             --flash_size 16MB \
             0x0 bootloader/bootloader.bin \
             0x8000 partition_table/partition-table.bin \
-            0x10000 factory_demo.bin
+            0x20000 factory_demo.bin
 
           mv factory_demo_box3.bin $GITHUB_WORKSPACE/
 
