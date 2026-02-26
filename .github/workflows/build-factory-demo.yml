@@ -8,40 +8,34 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   build-factory-demo:
     runs-on: ubuntu-latest
     container: espressif/idf:release-v5.1
     steps:
-      # 1️⃣ Checkout your repo and submodules
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
         with:
           submodules: 'recursive'
 
-      # 2️⃣ Source ESP-IDF environment and install Python tools
-      - name: Setup ESP-IDF environment
+      - name: Build factory_demo
         shell: bash
         run: |
+          # 1️⃣ Source ESP-IDF environment in the same shell
           . $IDF_PATH/export.sh
+          
+          # 2️⃣ Install dependencies
           pip install --upgrade idf-component-manager
           pip install "idf_build_apps<2.0"
-
-      # 3️⃣ Build the factory_demo with sdkconfig.ci.box
-      - name: Build factory_demo for ESP32-S3-BOX
-        shell: bash
-        run: |
+          
+          # 3️⃣ Go to the example and set target
           cd $GITHUB_WORKSPACE/examples/factory_demo
           idf.py set-target esp32s3
+          
+          # 4️⃣ Clean and build using the correct sdkconfig
           idf.py -DSDKCONFIG=sdkconfig.ci.box fullclean build
-
-      # 4️⃣ Merge binaries for flashing
-      - name: Create flash-ready binary
-        shell: bash
-        run: |
-          cd $GITHUB_WORKSPACE/examples/factory_demo/build
+          
+          # 5️⃣ Merge binaries
           APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition)
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
@@ -51,8 +45,7 @@ jobs:
             0x8000 partition_table/partition-table.bin \
             0x20000 $APP_BIN
 
-      # 5️⃣ Upload artifact
-      - name: Upload factory demo binary
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: factory-demo-box
