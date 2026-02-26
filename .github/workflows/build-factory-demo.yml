@@ -2,6 +2,9 @@ name: Build ESP32-S3-BOX Factory Demo
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
 
 jobs:
   build:
@@ -9,33 +12,39 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout esp-box repository
+        uses: actions/checkout@v3
         with:
           submodules: recursive
 
-      - name: Build factory_demo
+      - name: Build factory_demo and merge firmware
+        shell: bash
         run: |
+          set -e
+
+          # Load ESP-IDF environment
           . $IDF_PATH/export.sh
 
+          # Go to factory_demo example
           cd examples/factory_demo
 
+          # Optional: Ensure correct target
+          idf.py set-target esp32s3
+
+          # Build project
           idf.py build
 
           cd build
 
-          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition)
-
+          # Merge all partitions exactly as IDF expects
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box3.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            0x0 bootloader/bootloader.bin \
-            0x8000 partition_table/partition-table.bin \
-            0x20000 $APP_BIN
+            @flash_args
 
+          # Move merged firmware to workspace root
           mv factory_demo_box3.bin $GITHUB_WORKSPACE/
 
-      - name: Upload firmware
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: factory-demo-box3
