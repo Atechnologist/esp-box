@@ -1,57 +1,60 @@
-name: Build ESP32-S3-BOX Factory Demo
+name: "Build ESP32-S3-BOX Factory Demo"
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  build:
+  build-factory-demo:
     runs-on: ubuntu-latest
     container: espressif/idf:release-v5.1
-
     steps:
-      - name: Checkout esp-box repository
+      # 1️⃣ Checkout your repo and submodules
+      - name: Checkout repo
         uses: actions/checkout@v3
         with:
-          submodules: recursive
+          submodules: 'recursive'
 
-      - name: Build ESP32-S3-BOX firmware
+      # 2️⃣ Source ESP-IDF environment and install Python tools
+      - name: Setup ESP-IDF environment
         shell: bash
         run: |
-          set -e
-
-          # Load ESP-IDF
           . $IDF_PATH/export.sh
+          pip install --upgrade idf-component-manager
+          pip install "idf_build_apps<2.0"
 
-          # Go to factory demo example
-          cd examples/factory_demo
-
-          # Ensure correct chip target
+      # 3️⃣ Build the factory_demo with sdkconfig.ci.box
+      - name: Build factory_demo for ESP32-S3-BOX
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE/examples/factory_demo
           idf.py set-target esp32s3
+          idf.py -DSDKCONFIG=sdkconfig.ci.box fullclean build
 
-          # Remove any previous config (important!)
-          rm -f sdkconfig
-
-          # Use defaults for ESP32-S3-BOX (NOT BOX-3)
-          cp sdkconfig.defaults sdkconfig
-
-          # Build project
-          idf.py build
-
-          cd build
-
-          # Merge firmware using official flash layout
+      # 4️⃣ Merge binaries for flashing
+      - name: Create flash-ready binary
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE/examples/factory_demo/build
+          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition)
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
-            @flash_args
+            --flash_mode dio \
+            --flash_size 16MB \
+            0x0 bootloader/bootloader.bin \
+            0x8000 partition_table/partition-table.bin \
+            0x20000 $APP_BIN
 
-          # Move merged firmware to root
-          mv factory_demo_box.bin $GITHUB_WORKSPACE/
-
-      - name: Upload firmware artifact
+      # 5️⃣ Upload artifact
+      - name: Upload factory demo binary
         uses: actions/upload-artifact@v4
         with:
           name: factory-demo-box
-          path: factory_demo_box.bin
+          path: $GITHUB_WORKSPACE/examples/factory_demo/build/factory_demo_box.bin
+          overwrite: true
