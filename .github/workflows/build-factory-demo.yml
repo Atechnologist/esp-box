@@ -11,44 +11,39 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout esp-box
+      - name: Checkout Repository
         uses: actions/checkout@v3
         with:
           submodules: recursive
 
-      - name: Build Factory Demo (ESP32-S3-BOX)
+      - name: Build Factory Demo for ESP32-S3-BOX
         shell: bash
         run: |
-          # Load ESP-IDF environment
+          # Load ESP-IDF tools
           . $IDF_PATH/export.sh
 
-          # Go to factory demo
+          # Enter factory demo
           cd examples/factory_demo
 
-          # Set correct chip
+          # Set target chip
           idf.py set-target esp32s3
 
-          # IMPORTANT:
-          # Copy correct CI config BEFORE first build
+          # Use correct CI config for ESP32-S3-BOX
           cp sdkconfig.ci.box sdkconfig
 
-          # Clean + build
+          # Clean and build
           idf.py fullclean build
 
-          # Merge into single flashable binary
+          # Merge binaries using official flash layout
           cd build
-
-          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition)
 
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
             --flash_mode dio \
             --flash_size 16MB \
-            0x0 bootloader/bootloader.bin \
-            0x8000 partition_table/partition-table.bin \
-            0x20000 $APP_BIN
+            $(cat flash_args)
 
-      - name: Upload Firmware
+      - name: Upload Firmware Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ESP32-S3-BOX-factory-demo
