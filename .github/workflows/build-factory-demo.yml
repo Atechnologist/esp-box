@@ -17,35 +17,41 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build factory_demo and merge firmware
+      - name: Build ESP32-S3-BOX firmware
         shell: bash
         run: |
           set -e
 
-          # Load ESP-IDF environment
+          # Load ESP-IDF
           . $IDF_PATH/export.sh
 
-          # Go to factory_demo example
+          # Go to factory demo example
           cd examples/factory_demo
 
-          # Optional: Ensure correct target
+          # Ensure correct chip target
           idf.py set-target esp32s3
+
+          # Remove any previous config (important!)
+          rm -f sdkconfig
+
+          # Use defaults for ESP32-S3-BOX (NOT BOX-3)
+          cp sdkconfig.defaults sdkconfig
 
           # Build project
           idf.py build
 
           cd build
 
-          # Merge all partitions exactly as IDF expects
+          # Merge firmware using official flash layout
           esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_box3.bin \
+            -o factory_demo_box.bin \
             @flash_args
 
-          # Move merged firmware to workspace root
-          mv factory_demo_box3.bin $GITHUB_WORKSPACE/
+          # Move merged firmware to root
+          mv factory_demo_box.bin $GITHUB_WORKSPACE/
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: factory-demo-box3
-          path: factory_demo_box3.bin
+          name: factory-demo-box
+          path: factory_demo_box.bin
