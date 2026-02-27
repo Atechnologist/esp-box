@@ -1,8 +1,7 @@
-name: Build ESP32-S3-BOX Factory Demo + Web/MQTT
+name: Build ESP-BOX Factory Demo (Web Enabled)
 
 on:
   push:
-    branches: [ master ]
   workflow_dispatch:
 
 jobs:
@@ -11,47 +10,83 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # 1️⃣ Checkout repository
       - name: Checkout Repository
         uses: actions/checkout@v3
         with:
           submodules: recursive
 
-      # 2️⃣ Build ESP32-S3-BOX factory demo with enhancements
-      - name: Build Factory Demo with Web + MQTT
-        shell: bash
+      # ----------------------------
+      # Inject Web Server Source File
+      # ----------------------------
+      - name: Create web_server.c
         run: |
-          # Load ESP-IDF tools
+          cd examples/factory_demo/main
+
+          cat << 'EOF' > web_server.c
+          #include "esp_http_server.h"
+          #include "esp_log.h"
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
+          #include "driver/gpio.h"
+
+          static const char *TAG = "webserver";
+
+          static esp_err_t ping_handler(httpd_req_t *req)
+          {
+              const char resp[] = "ESP-BOX ONLINE";
+              httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          void start_webserver(void)
+          {
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              httpd_handle_t server = NULL;
+
+              if (httpd_start(&server, &config) == ESP_OK)
+              {
+                  httpd_uri_t ping_uri = {
+                      .uri      = "/ping",
+                      .method   = HTTP_GET,
+                      .handler  = ping_handler,
+                      .user_ctx = NULL
+                  };
+
+                  httpd_register_uri_handler(server, &ping_uri);
+                  ESP_LOGI(TAG, "Web server started");
+              }
+          }
+          EOF
+
+      # ----------------------------
+      # Patch main.c Automatically
+      # ----------------------------
+      - name: Modify main.c
+        run: |
+          cd examples/factory_demo/main
+
+          # Add declaration at top if not present
+          grep -q "start_webserver" main.c || sed -i '1i extern void start_webserver(void);' main.c
+
+          # Insert call inside app_main()
+          sed -i '/void app_main(void)/,/}/ s/}/    start_webserver();\n}/' main.c
+
+      # ----------------------------
+      # Build Firmware
+      # ----------------------------
+      - name: Build Factory Demo
+        run: |
           . $IDF_PATH/export.sh
-
-          # Go to factory_demo example
           cd examples/factory_demo
-
-          # Set target chip to ESP32-S3
           idf.py set-target esp32s3
-
-          # Use ESP32-S3-BOX CI config
           cp sdkconfig.ci.box sdkconfig
+          idf.py build
 
-          # Optional: add local config overrides for web server & MQTT
-          echo "CONFIG_WEBSERVER_ENABLE=y" >> sdkconfig
-          echo "CONFIG_MQTT_ENABLE=y" >> sdkconfig
-          echo "CONFIG_HOMEASSISTANT_HUB=y" >> sdkconfig
-
-          # Clean and build
-          idf.py fullclean build
-
-          # Merge binaries using flash layout
-          cd build
-          esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_box_web.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      # 3️⃣ Upload the compiled firmware
-      - name: Upload Firmware Artifact
-        uses: actions/upload-artifact@v4
+      # ----------------------------
+      # Upload Firmware
+      # ----------------------------
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v3
         with:
-          name: ESP32-S3-BOX-factory-demo-web
-          path: examples/factory_demo/build/factory_demo_box_web.bin
+          name: esp-box-web-firmware
+          path: examples/factory_demo/build/*.bin
