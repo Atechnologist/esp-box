@@ -1,0 +1,49 @@
+name: Build ESP-BOX-HUB (ESP32-S3-BOX)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.1
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Build ESP-BOX-HUB
+        shell: bash
+        run: |
+          # Load ESP-IDF environment
+          . $IDF_PATH/export.sh
+
+          # Enter project directory
+          cd esp-box-hub
+
+          # Set correct chip target
+          idf.py set-target esp32s3
+
+          # Clean build (safe first run)
+          idf.py fullclean
+
+          # Build project
+          idf.py build
+
+          # Merge binaries using official flash layout
+          cd build
+          esptool.py --chip esp32s3 merge_bin \
+            -o esp_box_hub.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
+
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ESP-BOX-HUB
+          path: esp-box-hub/build/esp_box_hub.bin
