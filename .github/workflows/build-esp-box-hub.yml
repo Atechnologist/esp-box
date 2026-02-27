@@ -1,8 +1,9 @@
-name: Build ESP-BOX Factory Demo with Web Server
+name: Build ESP32-S3-BOX Factory Demo
 
 on:
-  push:
   workflow_dispatch:
+  push:
+    branches: [ master ]
 
 jobs:
   build:
@@ -15,75 +16,36 @@ jobs:
         with:
           submodules: recursive
 
-      # ----------------------------
-      # Inject Web Server Source File
-      # ----------------------------
-      - name: Create web_server.c
+      - name: Build Factory Demo for ESP32-S3-BOX
+        shell: bash
         run: |
-          cd examples/factory_demo/main
-          cat << 'EOF' > web_server.c
-          #include "esp_http_server.h"
-          #include "esp_log.h"
-          #include "freertos/FreeRTOS.h"
-          #include "freertos/task.h"
-          #include "driver/gpio.h"
-
-          static const char *TAG = "webserver";
-
-          static esp_err_t ping_handler(httpd_req_t *req)
-          {
-              const char resp[] = "ESP-BOX ONLINE";
-              httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
-
-          void start_webserver(void)
-          {
-              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-              httpd_handle_t server = NULL;
-
-              if (httpd_start(&server, &config) == ESP_OK)
-              {
-                  httpd_uri_t ping_uri = {
-                      .uri      = "/ping",
-                      .method   = HTTP_GET,
-                      .handler  = ping_handler,
-                      .user_ctx = NULL
-                  };
-
-                  httpd_register_uri_handler(server, &ping_uri);
-                  ESP_LOGI(TAG, "Web server started");
-              }
-          }
-          EOF
-
-      # ----------------------------
-      # Patch main.c Automatically
-      # ----------------------------
-      - name: Modify main.c
-        run: |
-          cd examples/factory_demo/main
-          grep -q "start_webserver" main.c || sed -i '1i extern void start_webserver(void);' main.c
-          sed -i '/void app_main(void)/,/}/ s/}/    start_webserver();\n}/' main.c
-
-      # ----------------------------
-      # Build Firmware
-      # ----------------------------
-      - name: Build Factory Demo
-        run: |
+          # Load ESP-IDF environment
           . $IDF_PATH/export.sh
+
+          # Enter factory demo folder
           cd examples/factory_demo
+
+          # Set target chip
           idf.py set-target esp32s3
+
+          # Use correct CI config for ESP32-S3-BOX
           cp sdkconfig.ci.box sdkconfig
+
+          # Clean and build
           idf.py fullclean build
 
-      # ----------------------------
-      # Merge binaries into single flashable .bin
-      # ----------------------------
-      - name: Merge Binaries
+      - name: Merge binaries
+        shell: bash
         run: |
+          . $IDF_PATH/export.sh
+          python -m pip install --upgrade pip
+          pip install esptool
           cd examples/factory_demo/build
+          
+          # Find main app binary
           APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | grep -v factory_demo_box.bin)
+          
+          # Merge flashable binary
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
             --flash_mode dio \
@@ -95,11 +57,8 @@ jobs:
             0x43a000 storage.bin \
             0x6c4000 srmodels/srmodels.bin
 
-      # ----------------------------
-      # Upload Merged Firmware
-      # ----------------------------
       - name: Upload Firmware Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: esp-box-web-factory-demo
+          name: ESP32-S3-BOX-factory-demo
           path: examples/factory_demo/build/factory_demo_box.bin
