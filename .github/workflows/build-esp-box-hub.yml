@@ -1,4 +1,4 @@
-name: Build ESP-BOX Factory Demo (Web Enabled)
+name: Build ESP-BOX Factory Demo with Web Server
 
 on:
   push:
@@ -21,7 +21,6 @@ jobs:
       - name: Create web_server.c
         run: |
           cd examples/factory_demo/main
-
           cat << 'EOF' > web_server.c
           #include "esp_http_server.h"
           #include "esp_log.h"
@@ -64,11 +63,7 @@ jobs:
       - name: Modify main.c
         run: |
           cd examples/factory_demo/main
-
-          # Add declaration at top if not present
           grep -q "start_webserver" main.c || sed -i '1i extern void start_webserver(void);' main.c
-
-          # Insert call inside app_main()
           sed -i '/void app_main(void)/,/}/ s/}/    start_webserver();\n}/' main.c
 
       # ----------------------------
@@ -80,13 +75,31 @@ jobs:
           cd examples/factory_demo
           idf.py set-target esp32s3
           cp sdkconfig.ci.box sdkconfig
-          idf.py build
+          idf.py fullclean build
 
       # ----------------------------
-      # Upload Firmware
+      # Merge binaries into single flashable .bin
       # ----------------------------
-      - name: Upload Firmware
-        uses: actions/upload-artifact@v3
+      - name: Merge Binaries
+        run: |
+          cd examples/factory_demo/build
+          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | grep -v factory_demo_box.bin)
+          esptool.py --chip esp32s3 merge_bin \
+            -o factory_demo_box.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            0x0 bootloader/bootloader.bin \
+            0x8000 partition_table/partition-table.bin \
+            0x16000 ota_data_initial.bin \
+            0x20000 $APP_BIN \
+            0x43a000 storage.bin \
+            0x6c4000 srmodels/srmodels.bin
+
+      # ----------------------------
+      # Upload Merged Firmware
+      # ----------------------------
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: esp-box-web-firmware
-          path: examples/factory_demo/build/*.bin
+          name: esp-box-web-factory-demo
+          path: examples/factory_demo/build/factory_demo_box.bin
