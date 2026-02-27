@@ -1,4 +1,4 @@
-name: Build ESP-BOX-HUB (ESP32-S3-BOX)
+name: Build ESP-BOX-HUB (ESP32-S3)
 
 on:
   workflow_dispatch:
@@ -11,30 +11,63 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v3
+
+      - name: Generate ESP-BOX-HUB Project
+        run: |
+          mkdir -p esp-box-hub/main
+
+          cat << 'EOF' > esp-box-hub/CMakeLists.txt
+          cmake_minimum_required(VERSION 3.16)
+          include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+          project(esp_box_hub)
+          EOF
+
+          cat << 'EOF' > esp-box-hub/sdkconfig.defaults
+          CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+          CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+          CONFIG_SPIRAM=y
+          CONFIG_SPIRAM_MODE_OCT=y
+          CONFIG_SPIRAM_SPEED_80M=y
+          CONFIG_WIFI_ENABLED=y
+          CONFIG_PARTITION_TABLE_SINGLE_APP=y
+          EOF
+
+          cat << 'EOF' > esp-box-hub/main/CMakeLists.txt
+          idf_component_register(
+              SRCS "app_main.c"
+              INCLUDE_DIRS "."
+              REQUIRES nvs_flash esp_wifi esp_event esp_netif
+          )
+          EOF
+
+          cat << 'EOF' > esp-box-hub/main/app_main.c
+          #include "esp_log.h"
+          #include "nvs_flash.h"
+          #include "esp_wifi.h"
+          #include "esp_event.h"
+          #include "esp_netif.h"
+
+          void app_main(void)
+          {
+              ESP_ERROR_CHECK(nvs_flash_init());
+              ESP_ERROR_CHECK(esp_netif_init());
+              ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+              ESP_LOGI("ESP-BOX-HUB", "Boot OK");
+              while (1) {
+                  vTaskDelay(pdMS_TO_TICKS(2000));
+              }
+          }
+          EOF
 
       - name: Build ESP-BOX-HUB
-        shell: bash
         run: |
-          # Load ESP-IDF environment
           . $IDF_PATH/export.sh
-
-          # Enter project directory
           cd esp-box-hub
-
-          # Set correct chip target
           idf.py set-target esp32s3
-
-          # Clean build (safe first run)
-          idf.py fullclean
-
-          # Build project
           idf.py build
 
-          # Merge binaries using official flash layout
           cd build
           esptool.py --chip esp32s3 merge_bin \
             -o esp_box_hub.bin \
@@ -42,8 +75,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      - name: Upload Firmware Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ESP-BOX-HUB
           path: esp-box-hub/build/esp_box_hub.bin
