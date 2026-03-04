@@ -24,6 +24,10 @@
 #include "gui/ui_main.h"
 #include "ui_sensor_monitor.h"
 
+#include "wifi_connect.h"
+#include "web_server.h"
+#include "device_control.h"
+
 #include "bsp_board.h"
 #include "bsp/esp-bsp.h"
 
@@ -146,4 +150,21 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(4 * 1000));
     app_sr_start(false);
     app_rmaker_start();
+    
+    /* ----------------------------- */
+    /* WiFi + Web Server Integration */
+    /* ----------------------------- */
+
+    ESP_LOGI(TAG, "Initializing WiFi...");
+    wifi_connect();
+
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    ESP_LOGI(TAG, "Starting Web Server...");
+    httpd_handle_t server = start_webserver();
+
+    ESP_LOGI(TAG, "Registering Device Control Routes...");
+    register_device_routes(server);
+
+    ESP_LOGI(TAG, "Web control ready.");
 }
