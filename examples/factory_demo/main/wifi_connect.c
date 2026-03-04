@@ -54,8 +54,8 @@ void wifi_connect(void)
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = "YOUR_SSID",
-            .password = "YOUR_PASSWORD"
+            .ssid = "glaatos",
+            .password = "aatos2023"
         },
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
