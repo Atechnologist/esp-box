@@ -25,12 +25,3 @@ set_source_files_properties(
     -DLV_LVGL_H_INCLUDE_SIMPLE)
 
 spiffs_create_partition_image(storage ../spiffs FLASH_IN_PROJECT)
-
-idf_component_register(
-    SRCS "main.c"
-         "wifi_connect.c"
-         "web_server.c"
-         "device_control.c"
-    INCLUDE_DIRS "."
-    REQUIRES esp_wifi esp_http_server nvs_flash
-)
