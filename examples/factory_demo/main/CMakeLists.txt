@@ -1,11 +1,13 @@
 file(GLOB_RECURSE LV_DEMOS_SOURCES ./*.c)
 
 idf_component_register(
-    SRCS
-        main.c
-        wifi_connect.c
-        web_server.c
-        device_control.c
+    SRC_DIRS
+        "."
+        "app"
+        "gui"
+        "gui/font"
+        "gui/image"
+        "rmaker"
 
     INCLUDE_DIRS
         "."
