@@ -9,11 +9,23 @@ idf_component_register(
         "gui/image"
         "rmaker"
 
+    SRCS
+        "main.c"
+        "wifi_connect.c"
+        "web_server.c"
+        "device_control.c"
+
     INCLUDE_DIRS
         "."
         "gui"
         "app"
-        "rmaker")
+        "rmaker"
+
+    REQUIRES
+        esp_wifi
+        esp_http_server
+        nvs_flash
+)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-Wno-format" "-Wno-deprecated-declarations")
 
