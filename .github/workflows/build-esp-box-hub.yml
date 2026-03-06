@@ -27,8 +27,6 @@ jobs:
           # Go to factory demo
           cd examples/factory_demo
           
-          # Install ESP-BOX BSP component
-          idf.py add-dependency "espressif/esp-box"
 
           # Set target chip
           idf.py set-target esp32s3
