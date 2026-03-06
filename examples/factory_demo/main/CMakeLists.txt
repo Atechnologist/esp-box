@@ -9,6 +9,12 @@ idf_component_register(
         "gui/image"
         "rmaker"
 
+    SRCS
+        "main.c"
+        "wifi_connect.c"
+        "web_server.c"
+        "device_control.c"
+
     INCLUDE_DIRS
         "."
         "gui"
@@ -23,8 +29,7 @@ idf_component_register(
 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-Wno-format" "-Wno-deprecated-declarations")
 
-target_compile_definitions(${COMPONENT_TARGET} PRIVATE
-    "-D RMAKER_DEMO_PROJECT_NAME=\"${CMAKE_PROJECT_NAME}\"")
+target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-D RMAKER_DEMO_PROJECT_NAME=\"${CMAKE_PROJECT_NAME}\"")
 
 set_source_files_properties(
     ${LV_DEMOS_SOURCES}
