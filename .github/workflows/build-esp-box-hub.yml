@@ -6,61 +6,50 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-factory-demo:
+  build:
     runs-on: ubuntu-latest
     container: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v3
         with:
           submodules: recursive
-      - name: Fix Git Safe Directory
-        run: git config --global --add safe.directory '*'
+          fetch-depth: 0
+
+      - name: Fix Git safe directory
+        run: |
+          git config --global --add safe.directory /__w/esp-box/esp-box
+
+      - name: Update submodules
+        run: |
+          git submodule update --init --recursive
 
       - name: Build Factory Demo
         shell: bash
         run: |
           set -e
 
-          # Load ESP-IDF tools
           . $IDF_PATH/export.sh
 
-          # Go to factory demo
           cd examples/factory_demo
-          
-  
-          # Set target chip
+
           idf.py set-target esp32s3
 
-          # Use CI config for ESP32-S3-BOX
           cp sdkconfig.ci.box sdkconfig
 
-          # Clean and build
-          idf.py fullclean build
+          idf.py fullclean
 
-          # Go to build folder
-          cd build
+          idf.py build
 
-          # Ensure esptool is installed
+      - name: Merge Flash Binary
+        run: |
+          cd examples/factory_demo/build
+
           pip install --upgrade esptool
 
-          # Check required binaries
-          for f in bootloader/bootloader.bin partition_table/partition-table.bin ota_data_initial.bin storage.bin srmodels/srmodels.bin; do
-            if [ ! -f "$f" ]; then
-              echo "Error: Required binary $f not found!"
-              exit 1
-            fi
-          done
+          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | head -n1)
 
-          # Get main app binary (exclude bootloader, partition table, factory_demo_box.bin)
-          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | grep -v factory_demo_box.bin | head -n1)
-          if [ -z "$APP_BIN" ]; then
-            echo "Error: Main application binary not found!"
-            exit 1
-          fi
-
-          # Merge all binaries into one flashable file
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
             --flash_mode dio \
@@ -72,8 +61,8 @@ jobs:
             0x43a000 storage.bin \
             0x6c4000 srmodels/srmodels.bin
 
-      - name: Upload Firmware Artifact
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-S3-BOX-factory-demo
+          name: ESP32-S3-BOX-firmware
           path: examples/factory_demo/build/factory_demo_box.bin
