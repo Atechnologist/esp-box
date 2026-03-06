@@ -2,14 +2,27 @@
 dependencies:
   idf: '>=5.1'
 
+  # Audio & file system
   chmorgan/esp-audio-player: 1.0.5
   chmorgan/esp-file-iterator: 1.0.0
 
+  # ESP RainMaker & scheduling
   espressif/esp_rainmaker: ~1.1.0
   espressif/esp_schedule: ~1.1.0
+
+  # Speech recognition
   espressif/esp-sr: 1.4.*
+
+  # LED & display
   espressif/led_strip: ~2.0.0
   espressif/qrcode: ^0.1.0
   espressif/ir_learn: ^0.1.0
+
+  # Sensors
   espressif/aht20: ^0.1.0
   espressif/at581x: ^0.1.0
+
+  # Other common ESP-IDF components
+  espressif/mdns: ^1.10.0
+  espressif/jsmn: ^1.1.0
+  espressif/json_parser: ^1.0.3
