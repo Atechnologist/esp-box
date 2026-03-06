@@ -19,6 +19,10 @@ idf_component_register(
         esp_wifi
         esp_http_server
         nvs_flash
+        esp_netif
+        esp_event
+        esp_timer
+        esp-bsp
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
