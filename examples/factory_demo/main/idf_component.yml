@@ -13,4 +13,4 @@ dependencies:
   espressif/ir_learn: ^0.1.0
   espressif/aht20: ^0.1.0
   espressif/at581x: ^0.1.0
- ## espressif/esp-box: "*"
+  espressif/esp-box: "*"
