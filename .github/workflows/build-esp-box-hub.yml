@@ -27,7 +27,8 @@ jobs:
           # Go to factory demo
           cd examples/factory_demo
           
-
+           - name: Fix Git Safe Directory
+           run: git config --global --add safe.directory '*'
           # Set target chip
           idf.py set-target esp32s3
 
