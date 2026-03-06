@@ -26,18 +26,16 @@ jobs:
       - name: Build Factory Demo
         shell: bash
         run: |
-          set -e
-          cd examples/factory_demo
-
-          # Set target chip
-          idf.py set-target esp32s3
-
-          # Use CI-specific config for ESP32-S3-BOX
-          cp sdkconfig.ci.box sdkconfig
-
-          # Clean previous builds
-          idf.py fullclean
-
+         set -e
+        
+         # Load ESP-IDF tools
+         . $IDF_PATH/export.sh
+         
+         cd examples/factory_demo
+         idf.py set-target esp32s3
+         cp sdkconfig.ci.box sdkconfig
+         idf.py fullclean build
+      
           # Build project
           idf.py build
 
