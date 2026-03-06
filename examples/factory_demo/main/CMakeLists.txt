@@ -1,15 +1,15 @@
-## IDF Component Manager Manifest File
-dependencies:
-  idf: '>=5.1'
+# main/CMakeLists.txt
 
-  chmorgan/esp-audio-player: 1.0.5
-  chmorgan/esp-file-iterator: 1.0.0
-
-  espressif/esp_rainmaker: ~1.1.0
-  espressif/esp_schedule: ~1.1.0
-  espressif/esp-sr: 1.4.*
-  espressif/led_strip: ~2.0.0
-  espressif/qrcode: ^0.1.0
-  espressif/ir_learn: ^0.1.0
-  espressif/aht20: ^0.1.0
-  espressif/at581x: ^0.1.0
+idf_component_register(
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES 
+        esp_rainmaker
+        esp_schedule
+        esp_sr
+        led_strip
+        qrcode
+        ir_learn
+        aht20
+        at581x
+)
