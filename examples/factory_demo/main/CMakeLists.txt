@@ -1,15 +1,19 @@
 # main/CMakeLists.txt
 
+file(GLOB_RECURSE app_sources
+    "*.c"
+)
+
 idf_component_register(
-    SRCS "main.c"
+    SRCS ${app_sources}
     INCLUDE_DIRS
         "."
         "app"
-    REQUIRES 
+    REQUIRES
         bsp
+        esp_sr
         esp_rainmaker
         esp_schedule
-        esp-sr
         led_strip
         qrcode
         ir_learn
