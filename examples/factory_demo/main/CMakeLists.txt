@@ -2,7 +2,9 @@
 
 idf_component_register(
     SRCS "main.c"
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS
+        "."
+        "app"
     REQUIRES 
         bsp
         esp_rainmaker
