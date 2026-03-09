@@ -30,7 +30,9 @@ jobs:
             ~/.espressif
             examples/factory_demo/build
           key: esp-idf-${{ runner.os }}-${{ hashFiles('**/idf_component.yml') }}
-
+           rm -f examples/factory_demo/dependencies.lock
+           rm -rf examples/factory_demo/build
+           idf.py fullclean
       - name: Build firmware
         shell: bash
         run: |
