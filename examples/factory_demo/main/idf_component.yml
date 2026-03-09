@@ -11,7 +11,7 @@ dependencies:
   espressif/esp_schedule: ~1.1.0
 
   # Speech recognition
-  espressif/esp_speech_recognition: "1.4.*"
+  espressif/esp-sr: 1.4.*
 
   # LED & display
   espressif/led_strip: ~2.0.0
