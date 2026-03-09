@@ -6,7 +6,7 @@ idf_component_register(
     REQUIRES 
         esp_rainmaker
         esp_schedule
-        esp_sr
+        esp_speech_recognition
         led_strip
         qrcode
         ir_learn
