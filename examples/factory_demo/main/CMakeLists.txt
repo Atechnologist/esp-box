@@ -11,7 +11,6 @@ idf_component_register(
         "gui/font"
     REQUIRES
         bsp
-        esp-bsp
         esp_lvgl_port
         esp_rainmaker
         esp_schedule
