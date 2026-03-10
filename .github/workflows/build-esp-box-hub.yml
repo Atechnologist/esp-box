@@ -23,8 +23,8 @@ jobs:
 
       - name: Build firmware
         run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
           . /opt/esp/esp-idf/export.sh
+          git config --global --add safe.directory $GITHUB_WORKSPACE
           cd examples/factory_demo
           idf.py set-target esp32s3
           idf.py build
