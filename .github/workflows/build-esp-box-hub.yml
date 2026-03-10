@@ -1,53 +1,30 @@
-name: Build ESP32S3 Factory Demo
+name: ESP-BOX Factory Demo Build
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+on: [push]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      IDF_PATH: /opt/esp/idf
-      IDF_TARGET: esp32s3
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
         with:
-          submodules: recursive   # ✅ Important to fetch all submodules
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.8
+          submodules: recursive
 
       - name: Install ESP-IDF
         run: |
           mkdir -p /opt/esp
           cd /opt/esp
-          # Clone ESP-IDF 5.1.x
-          git clone --branch v5.1.7 --recursive https://github.com/espressif/esp-idf.git
+          git clone --recursive https://github.com/espressif/esp-idf.git
           cd esp-idf
-          ./install.sh
-        shell: bash
+          git checkout v5.0.4
+          ./install.sh esp32s3
 
-      - name: Export ESP-IDF environment
+      - name: Build firmware
         run: |
-          . $IDF_PATH/export.sh
-        shell: bash
-
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
-
-      - name: Install IDF component dependencies
-        run: idf.py install-dependencies
-
-      - name: Set target
-        run: idf.py set-target esp32s3
-
-      - name: Build Factory Demo
-        run: idf.py build
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+          . /opt/esp/esp-idf/export.sh
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          idf.py build
