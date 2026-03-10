@@ -1,26 +1,27 @@
-# main/CMakeLists.txt
+# SPDX-License-Identifier: Apache-2.0
 
 idf_component_register(
-    SRCS
-        main.c
-        app/app_sr.c
-        app/app_wifi.c
-        app/app_button.c
-        gui/ui_main.c
-        gui/ui_net_config.c
-        gui/font/font_en_bold_10.c
-        gui/font/font_en_64.c
-    INCLUDE_DIRS
-        .                # main folder
-        app              # headers in app/
-        gui              # headers in gui/
-        gui/font         # headers in gui/font/
+    SRCS 
+        "main.c"
+        "app/app_wifi.c"
+        "app/app_sr.c"
+        "gui/ui_main.c"
+        "gui/font/font_en_bold_10.c"
+        "gui/font/font_en_64.c"
+        "settings.c"
+    INCLUDE_DIRS 
+        "include"
+        "app"
+        "gui"
     REQUIRES
-        esp_sr           # speech recognition component
-        bsp              # board support package
-        lvgl             # LVGL graphics library
-        wifi_provisioning # Wi-Fi provisioning library
-        esp_box          # ESP-BOX core support
-        esp_box_3        # ESP-BOX-3 support
-        esp_box_lite     # ESP-BOX-LITE support
+        esp-box
+        esp-box-3
+        esp-box-lite
+        lvgl
+        esp-dsp
+        esp-lcd-ili9341
+        esp-lcd-touch
+        led_strip
+        mdns
+        wifi_provisioning
 )
