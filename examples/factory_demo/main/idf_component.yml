@@ -1,14 +1,25 @@
-name: main
-version: "1.0.0"
-description: Factory Demo main application
-dependencies:
-  - espressif/esp-box ^3.0.5
-  - espressif/esp-box-3 ^1.1.3
-  - espressif/esp-box-lite ^2.0.4
-  - lvgl/lvgl ^8.4.0
-  - espressif/esp-dsp ^1.7.1
-  - espressif/esp_lcd_ili9341 ^1.2.0
-  - espressif/esp_lcd_touch ^1.2.1
-  - espressif/led_strip ^2.0.0
-  - espressif/mdns ^1.10.1
-  - espressif/wifi_provisioning ^1.0.0
+idf_component_register(
+    SRCS 
+        "main.c"
+        "app/app_wifi.c"
+        "app/app_sr.c"
+        "gui/ui_main.c"
+        "gui/font/font_en_bold_10.c"
+        "gui/font/font_en_64.c"
+        "settings.c"
+    INCLUDE_DIRS 
+        "include"
+        "app"
+        "gui"
+    REQUIRES
+        esp-box
+        esp-box-3
+        esp-box-lite
+        lvgl
+        esp-dsp
+        esp_lcd_ili9341
+        esp_lcd_touch
+        led_strip
+        mdns
+        wifi_provisioning
+)
