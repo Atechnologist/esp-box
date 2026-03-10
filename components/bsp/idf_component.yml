@@ -1,21 +1,26 @@
-## IDF Component Manager Manifest File
+name: factory_demo
+version: "1.0.0"
+description: ESP-Box Factory Demo project
+
+# List all components required by this project
 dependencies:
+  - espressif/esp-box: "3.0.5"
+  - espressif/esp-box-3: "1.1.3"
+  - espressif/esp-box-lite: "2.0.4"
+  - espressif/esp-sr: "1.9.5"
+  - espressif/esp-lcd-ili9341: "1.2.0"
+  - espressif/esp-lcd-touch: "1.2.1"
+  - espressif/esp-lcd-touch-gt911: "1.2.0~1"
+  - espressif/esp-lcd-touch-tt21100: "1.2.0"
+  - espressif/esp_lvgl_port: "1.4.0"
+  - espressif/esp_rainmaker: "1.1.0"
+  - espressif/button: "3.5.0"
+  - espressif/aht20: "0.1.0~1"
+  - espressif/at581x: "0.1.0~1"
+  - chmorgan/esp-audio-player: "1.0.5"
+  - chmorgan/esp-file-iterator: "1.0.0"
+  - chmorgan/esp-libhelix-mp3: "1.0.3"
 
-  esp_codec_dev:
-    public: true
-    version: "1.1.0"
-
-  espressif/button:
-    version: "^3.5.0"
-
-  espressif/esp-box:
-    version: "3.0.*"
-    require: "no"
-
-  espressif/esp-box-lite:
-    version: "2.0.*"
-    require: "no"
-
-  espressif/esp-box-3:
-    version: "1.1.*"
-    require: "no"
+# Optional: directories containing local components
+component_dirs:
+  - ../../components
