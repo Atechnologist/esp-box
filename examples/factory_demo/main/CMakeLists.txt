@@ -1,27 +1,37 @@
-# SPDX-License-Identifier: Apache-2.0
+# examples/factory_demo/CMakeLists.txt
 
+cmake_minimum_required(VERSION 3.22)
+
+# Set the project name and the ESP-IDF target
+set(PROJECT_NAME "factory_demo")
+project(${PROJECT_NAME} LANGUAGES C CXX ASM)
+
+# Register the main component
 idf_component_register(
     SRCS 
-        "main.c"
-        "app/app_wifi.c"
-        "app/app_sr.c"
-        "gui/ui_main.c"
-        "gui/font/font_en_bold_10.c"
-        "gui/font/font_en_64.c"
-        "settings.c"
+        "main/main.c"
+        "main/app/app_wifi.c"
+        "main/app/app_sr.c"
+        "main/gui/ui_main.c"
+        "main/gui/font/font_en_bold_10.c"
+        "main/gui/font/font_en_64.c"
+        # add any other source files here
     INCLUDE_DIRS 
-        "include"
-        "app"
-        "gui"
+        "main/include"
+        "main/app"
+        "main/gui"
     REQUIRES
-        esp-box
-        esp-box-3
-        esp-box-lite
-        lvgl
-        esp-dsp
-        esp-lcd-ili9341
-        esp-lcd-touch
-        led_strip
-        mdns
+        espressif/esp_lcd_ili9341
+        espressif/esp_lcd_touch
+        espressif/esp_lcd_touch_gt911
+        lvgl/lvgl
+        espressif/esp_dsp
+        espressif/mdns
+        espressif/led_strip
+        espressif/esp_codec_dev
+        espressif/ir_learn
+        espressif/qrcode
+        espressif/esp_rainmaker
         wifi_provisioning
+        esp-box-3
 )
