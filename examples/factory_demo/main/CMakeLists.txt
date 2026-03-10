@@ -11,6 +11,7 @@ idf_component_register(
         "gui/font"
     REQUIRES
         bsp
+        esp-bsp
         esp_lvgl_port
         esp_rainmaker
         esp_schedule
@@ -19,4 +20,5 @@ idf_component_register(
         ir_learn
         aht20
         at581x
+        wifi_provisioning
 )
