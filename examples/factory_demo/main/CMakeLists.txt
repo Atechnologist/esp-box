@@ -11,6 +11,8 @@ idf_component_register(
         "app"
     REQUIRES
         bsp
+        esp_lvgl_port
+        lvgl
         esp_rainmaker
         esp_schedule
         led_strip
