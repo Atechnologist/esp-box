@@ -1,30 +1,53 @@
-name: ESP-BOX Factory Demo Build
+name: ESP32S3 Factory Demo Build
 
-on: [push]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      IDF_PATH: /opt/esp/idf
+      PATH: /opt/esp/tools/cmake/3.30.2/bin:/opt/esp/tools/xtensa-esp32s3-elf/esp-12.2.0_20250801/xtensa-esp32s3-elf/bin:$PATH
 
     steps:
-      - name: Checkout repo
+      - name: Checkout Repository
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
 
-      - name: Install ESP-IDF
+      - name: Set up Python 3
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.8
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y git wget ninja-build ccache flex bison gperf python3-pip
+
+      - name: Install ESP-IDF 5.1
         run: |
           mkdir -p /opt/esp
           cd /opt/esp
-          git clone --recursive https://github.com/espressif/esp-idf.git
-          cd esp-idf
-          git checkout v5.0.4
-          ./install.sh esp32s3
+          wget https://dl.espressif.com/dl/esp-idf/releases/esp-idf-v5.1.zip
+          unzip -q esp-idf-v5.1.zip
+          rm esp-idf-v5.1.zip
 
-      - name: Build firmware
-        run: |
-          . /opt/esp/esp-idf/export.sh
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-          cd examples/factory_demo
-          idf.py set-target esp32s3
-          idf.py build
+      - name: Export ESP-IDF Environment
+        shell: bash
+        run: . $IDF_PATH/export.sh
+
+      - name: Ensure Git Safe Directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Clean previous builds
+        run: idf.py fullclean
+        shell: bash
+
+      - name: Set Target ESP32-S3
+        run: idf.py set-target esp32s3
+        shell: bash
+
+      - name: Build Factory Demo
+        run: idf.py build
+        shell: bash
