@@ -9,50 +9,49 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     env:
-      IDF_PATH: /opt/esp/idf
-      IDF_TARGET: esp32s3
+      IDF_PATH: ${{ github.workspace }}/esp-idf
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-        with:
-          submodules: true  # ensure submodules/components are fetched
 
-      - name: Set up ESP-IDF
-        uses: espressif/setup-esp-idf@v2
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
-          version: v5.1
-
-      - name: Add ESP-IDF tools to PATH
-        run: |
-          echo "$IDF_PATH/tools" >> $GITHUB_PATH
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r $IDF_PATH/tools/requirements/requirements.all.txt
+          sudo apt update
+          sudo apt install -y git wget flex bison gperf python3-pip cmake ninja-build ccache libffi-dev libssl-dev dfu-util
 
-      - name: Add required components via IDF Component Manager
+      - name: Install ESP-IDF
         run: |
-          idf.py add-dependency espressif/esp-box ^3.0.5
-          idf.py add-dependency espressif/esp-box-3 ^1.1.3
-          idf.py add-dependency espressif/esp-box-lite ^2.0.4
-          idf.py add-dependency lvgl/lvgl ^8.4.0
+          git clone --branch v5.1.7 --recursive https://github.com/espressif/esp-idf.git $IDF_PATH
+          cd $IDF_PATH
+          ./install.sh
+        shell: bash
+
+      - name: Export ESP-IDF environment
+        run: |
+          . $IDF_PATH/export.sh
+        shell: bash
+
+      - name: Add component dependencies
+        run: |
+          . $IDF_PATH/export.sh
           idf.py add-dependency espressif/esp-dsp ^1.7.1
           idf.py add-dependency espressif/esp_lcd_ili9341 ^1.2.0
           idf.py add-dependency espressif/esp_lcd_touch ^1.2.1
-          # Only add components you actually have, do NOT include esp_sr if missing
+          idf.py add-dependency lvgl/lvgl ^8.4.0
+          idf.py add-dependency espressif/mdns ^1.10.1
+          idf.py add-dependency espressif/led_strip ^2.0.0
+          idf.py add-dependency esp-box ^3.5.0
 
-      - name: Configure project
-        working-directory: examples/factory_demo
-        run: idf.py set-target esp32s3
-
-      - name: Build project
-        working-directory: examples/factory_demo
-        run: idf.py build -DCCACHE_ENABLE=1
-
-      - name: Show build output size
-        working-directory: examples/factory_demo
-        run: idf.py size
+      - name: Build factory_demo
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py fullclean
+          idf.py build
