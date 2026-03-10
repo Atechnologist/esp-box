@@ -1,27 +1,26 @@
+# main/CMakeLists.txt
 idf_component_register(
     SRCS
-        "main.c"
-        "app/app_sr.c"
         "app/app_wifi.c"
-        "gui/ui_main.c"
         "gui/font/font_en_bold_10.c"
         "gui/font/font_en_64.c"
+        "gui/ui_main.c"
+        "gui/ui_net_config.c"
+        # Add other .c files in main here
     INCLUDE_DIRS
-        "."
-        "app"
-        "gui"
+        "."       # main/include or current folder
+        "include"
     REQUIRES
-        espressif/esp_lcd_ili9341       # <-- Must use slash, not dash
-        espressif/esp_lcd_touch
-        espressif/esp_lcd_touch_gt911
-        lvgl/lvgl
-        espressif/esp-dsp
-        espressif/mdns
-        espressif/led_strip
-        espressif/esp_codec_dev
-        espressif/ir_learn
-        espressif/qrcode
-        espressif/esp_rainmaker
+        esp_box
+        esp_box_3
+        esp_box_lite
+        esp_lcd_ili9341
+        esp_lcd_touch
+        esp_lcd_touch_gt911
+        esp_lcd_touch_tt21100
+        esp_lvgl_port
+        lvgl
+        esp_sr
         wifi_provisioning
-        esp-box-3
+        # Add other required components here
 )
