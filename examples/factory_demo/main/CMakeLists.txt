@@ -1,15 +1,17 @@
-file(GLOB_RECURSE app_sources "*.c")
-
 idf_component_register(
-    SRCS ${app_sources}
+    SRC_DIRS
+        "."
+        "app"
+        "gui"
+        "gui/font"
     INCLUDE_DIRS
         "."
         "app"
         "gui"
         "gui/font"
     REQUIRES
-        esp_lvgl_port
         bsp
+        esp_lvgl_port
         esp_rainmaker
         esp_schedule
         led_strip
