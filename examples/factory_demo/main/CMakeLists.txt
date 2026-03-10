@@ -20,4 +20,8 @@ idf_component_register(
         aht20
         at581x
         wifi_provisioning
+        esp_lcd
+        driver
+        nvs_flash
+        esp_netif
 )
