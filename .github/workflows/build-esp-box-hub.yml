@@ -1,8 +1,8 @@
-name: Build ESP32-S3-BOX Factory Demo
+name: ESP-BOX Build
 
 on:
   push:
-    branches: [ master ]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -14,65 +14,26 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
-        with:
-          submodules: recursive
+        uses: actions/checkout@v4
 
-      - name: Fix Git safe directory
-        run: git config --global --add safe.directory /__w/esp-box/esp-box
+      - name: Show IDF version
+        run: idf.py --version
 
-      # Cache ESP-IDF dependencies and build outputs
-      - name: Cache ESP-IDF build
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache
-            ~/.espressif
-            examples/factory_demo/build
-          key: esp-idf-${{ runner.os }}-${{ hashFiles('**/idf_component.yml') }}
-           rm -f examples/factory_demo/dependencies.lock
-           rm -rf examples/factory_demo/build
-           idf.py fullclean
-      - name: Build firmware
-        shell: bash
+      - name: Install dependencies
         run: |
-          set -e
-
-          # Load ESP-IDF tools
-          . $IDF_PATH/export.sh
-
           cd examples/factory_demo
+          idf.py reconfigure
 
-          idf.py set-target esp32s3
-
-          cp sdkconfig.ci.box sdkconfig
-
-          idf.py build
-
-      - name: Merge flash image
-        shell: bash
+      - name: Build firmware
         run: |
-          set -e
-
-          cd examples/factory_demo/build
-
-          pip install --upgrade esptool
-
-          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | head -n1)
-
-          esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_box.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            0x0 bootloader/bootloader.bin \
-            0x8000 partition_table/partition-table.bin \
-            0x16000 ota_data_initial.bin \
-            0x20000 $APP_BIN \
-            0x43a000 storage.bin \
-            0x6c4000 srmodels/srmodels.bin
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          idf.py build
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-S3-BOX-firmware
-          path: examples/factory_demo/build/factory_demo_box.bin
+          name: esp-box-firmware
+          path: |
+            examples/factory_demo/build/*.bin
+            examples/factory_demo/build/*.elf
