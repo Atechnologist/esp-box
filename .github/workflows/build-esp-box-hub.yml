@@ -13,19 +13,17 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show IDF version
-        run: idf.py --version
-
-      - name: Install dependencies
+      - name: Setup ESP-IDF environment
         run: |
-          cd examples/factory_demo
-          idf.py reconfigure
+          . $IDF_PATH/export.sh
+          idf.py --version
 
       - name: Build firmware
         run: |
+          . $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
           idf.py build
