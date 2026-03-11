@@ -2,7 +2,7 @@ name: ESP-Box Auto Builder
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -14,178 +14,92 @@ jobs:
 
     steps:
 
-    - name: Checkout repo
-      uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-    - name: Create ESP-Box project automatically
-      run: |
+      - name: Generate ESP-Box project
+        run: |
+          mkdir -p main
+          mkdir -p components/gpio_control/src
+          mkdir -p components/gpio_control/include
 
-        mkdir -p main
-        mkdir -p components/gpio_control/src
-        mkdir -p components/gpio_control/include
-        mkdir -p components/local_voice/src
-        mkdir -p components/local_voice/include
-        mkdir -p components/web_ui/src
-        mkdir -p components/web_ui/include
-        mkdir -p components/espnow_comm/src
-        mkdir -p components/espnow_comm/include
+          mkdir -p components/local_voice/src
+          mkdir -p components/local_voice/include
 
+          mkdir -p components/web_ui/src
+          mkdir -p components/web_ui/include
 
-        ############################################
-        # Root CMake
-        ############################################
-        cat << 'EOF' > CMakeLists.txt
-cmake_minimum_required(VERSION 3.16)
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(esp_box)
-EOF
+          mkdir -p components/espnow_comm/src
+          mkdir -p components/espnow_comm/include
 
+          # Root CMake
+          cat << 'EOF' > CMakeLists.txt
+          cmake_minimum_required(VERSION 3.16)
+          include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+          project(esp_box)
+          EOF
 
-        ############################################
-        # MAIN
-        ############################################
-        cat << 'EOF' > main/main.c
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_log.h"
+          # MAIN FILE
+          cat << 'EOF' > main/main.c
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
+          #include "esp_log.h"
 
-#include "gpio_control.h"
-#include "local_voice.h"
-#include "web_ui.h"
-#include "espnow_comm.h"
+          #include "gpio_control.h"
+          #include "local_voice.h"
+          #include "web_ui.h"
+          #include "espnow_comm.h"
 
-void app_main(void)
-{
-    ESP_LOGI("ESPBOX","Booting ESP-Box");
+          void app_main(void)
+          {
+              ESP_LOGI("ESPBOX","Booting ESP-Box");
 
-    gpio_control_init();
-    local_voice_init();
-    web_ui_init();
-    espnow_comm_init();
+              gpio_control_init();
+              local_voice_init();
+              web_ui_init();
+              espnow_comm_init();
 
-    while(1){
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
-EOF
+              while(1){
+                  vTaskDelay(pdMS_TO_TICKS(1000));
+              }
+          }
+          EOF
 
+          # MAIN CMAKE
+          cat << 'EOF' > main/CMakeLists.txt
+          idf_component_register(SRCS "main.c" INCLUDE_DIRS ".")
+          EOF
 
-        cat << 'EOF' > main/CMakeLists.txt
-idf_component_register(SRCS "main.c" INCLUDE_DIRS ".")
-EOF
+          # GPIO COMPONENT
+          cat << 'EOF' > components/gpio_control/include/gpio_control.h
+          #pragma once
+          void gpio_control_init(void);
+          EOF
 
+          cat << 'EOF' > components/gpio_control/src/gpio_control.c
+          #include "gpio_control.h"
+          #include "esp_log.h"
 
-        ############################################
-        # GPIO CONTROL COMPONENT
-        ############################################
-        cat << 'EOF' > components/gpio_control/include/gpio_control.h
-#pragma once
-void gpio_control_init(void);
-EOF
+          void gpio_control_init(void)
+          {
+              ESP_LOGI("GPIO","GPIO control ready");
+          }
+          EOF
 
-        cat << 'EOF' > components/gpio_control/src/gpio_control.c
-#include "gpio_control.h"
-#include "esp_log.h"
+          cat << 'EOF' > components/gpio_control/CMakeLists.txt
+          idf_component_register(
+          SRCS "src/gpio_control.c"
+          INCLUDE_DIRS "include")
+          EOF
 
-void gpio_control_init(void)
-{
-    ESP_LOGI("GPIO","GPIO control ready");
-}
-EOF
+      - name: Set target
+        run: idf.py set-target esp32s3
 
-        cat << 'EOF' > components/gpio_control/CMakeLists.txt
-idf_component_register(
-SRCS "src/gpio_control.c"
-INCLUDE_DIRS "include")
-EOF
+      - name: Build firmware
+        run: idf.py build
 
-
-        ############################################
-        # LOCAL VOICE COMPONENT
-        ############################################
-        cat << 'EOF' > components/local_voice/include/local_voice.h
-#pragma once
-void local_voice_init(void);
-EOF
-
-        cat << 'EOF' > components/local_voice/src/local_voice.c
-#include "local_voice.h"
-#include "esp_log.h"
-
-void local_voice_init(void)
-{
-    ESP_LOGI("VOICE","Local voice module ready");
-}
-EOF
-
-        cat << 'EOF' > components/local_voice/CMakeLists.txt
-idf_component_register(
-SRCS "src/local_voice.c"
-INCLUDE_DIRS "include")
-EOF
-
-
-        ############################################
-        # WEB UI COMPONENT
-        ############################################
-        cat << 'EOF' > components/web_ui/include/web_ui.h
-#pragma once
-void web_ui_init(void);
-EOF
-
-        cat << 'EOF' > components/web_ui/src/web_ui.c
-#include "web_ui.h"
-#include "esp_log.h"
-
-void web_ui_init(void)
-{
-    ESP_LOGI("WEB","Web UI module ready");
-}
-EOF
-
-        cat << 'EOF' > components/web_ui/CMakeLists.txt
-idf_component_register(
-SRCS "src/web_ui.c"
-INCLUDE_DIRS "include")
-EOF
-
-
-        ############################################
-        # ESPNOW COMPONENT
-        ############################################
-        cat << 'EOF' > components/espnow_comm/include/espnow_comm.h
-#pragma once
-void espnow_comm_init(void);
-EOF
-
-        cat << 'EOF' > components/espnow_comm/src/espnow_comm.c
-#include "espnow_comm.h"
-#include "esp_log.h"
-
-void espnow_comm_init(void)
-{
-    ESP_LOGI("ESPNOW","ESP-NOW module ready");
-}
-EOF
-
-        cat << 'EOF' > components/espnow_comm/CMakeLists.txt
-idf_component_register(
-SRCS "src/espnow_comm.c"
-INCLUDE_DIRS "include")
-EOF
-
-
-
-    - name: Set ESP32-S3 Target
-      run: idf.py set-target esp32s3
-
-
-    - name: Build Firmware
-      run: idf.py build
-
-
-    - name: Upload Firmware
-      uses: actions/upload-artifact@v4
-      with:
-        name: espbox_firmware
-        path: build/*.bin
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: espbox_firmware
+          path: build/*.bin
