@@ -1,8 +1,7 @@
-name: ESP-BOX Firmware CI
+name: ESP-BOX HUB CI
 
 on:
   push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -16,63 +15,135 @@ jobs:
 
     steps:
 
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
 
-    - name: Setup ESP-IDF
-      run: |
-        . $IDF_PATH/export.sh
-        idf.py --version
+      - name: Fix Git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
 
-    - name: Create project structure
-      run: |
+      - name: Generate ESP-BOX project
+        shell: bash
+        run: |
 
-        mkdir -p main
-        mkdir -p components/gpio_control/src
-        mkdir -p components/gpio_control/include
+          mkdir -p main
+          mkdir -p components/relay_control
 
-        # Root CMake
-        cat << 'EOF' > CMakeLists.txt
-        cmake_minimum_required(VERSION 3.16)
-        include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-        project(esp_box)
-        EOF
+          ############################
+          # Root CMake
+          ############################
 
-        # Main firmware
-        cat << 'EOF' > main/main.c
-        #include "freertos/FreeRTOS.h"
-        #include "freertos/task.h"
-        #include "esp_log.h"
-
-        void app_main(void)
-        {
-            ESP_LOGI("ESPBOX","ESP-BOX HUB STARTED");
-
-            while(1)
-            {
-                vTaskDelay(pdMS_TO_TICKS(1000));
-            }
-        }
-        EOF
-
-        cat << 'EOF' > main/CMakeLists.txt
-        idf_component_register(SRCS "main.c" INCLUDE_DIRS ".")
-        EOF
+          cat << 'EOF' > CMakeLists.txt
+          cmake_minimum_required(VERSION 3.16)
+          include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+          project(esp_box_hub)
+          EOF
 
 
-    - name: Build firmware
-      run: |
-        . $IDF_PATH/export.sh
-        idf.py set-target esp32s3
-        idf.py build
+          ############################
+          # Main firmware
+          ############################
+
+          cat << 'EOF' > main/main.c
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
+          #include "esp_log.h"
+
+          #include "relay_control.h"
+
+          static const char *TAG = "ESP_BOX_HUB";
+
+          void app_main(void)
+          {
+              ESP_LOGI(TAG, "ESP BOX HUB STARTED");
+
+              relay_init();
+
+              while(1)
+              {
+                  ESP_LOGI(TAG, "Hub running");
+                  vTaskDelay(pdMS_TO_TICKS(5000));
+              }
+          }
+          EOF
 
 
-    - name: Upload firmware artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: esp-box-firmware
-        path: |
-          build/*.bin
-          build/*.elf
+          ############################
+          # main CMake
+          ############################
+
+          cat << 'EOF' > main/CMakeLists.txt
+          idf_component_register(
+              SRCS "main.c"
+              INCLUDE_DIRS "."
+              REQUIRES relay_control
+          )
+          EOF
+
+
+          ############################
+          # Relay component
+          ############################
+
+          cat << 'EOF' > components/relay_control/relay_control.c
+          #include "relay_control.h"
+          #include "driver/gpio.h"
+
+          #define RELAY_GPIO GPIO_NUM_2
+
+          void relay_init()
+          {
+              gpio_config_t io_conf = {
+                  .pin_bit_mask = (1ULL << RELAY_GPIO),
+                  .mode = GPIO_MODE_OUTPUT
+              };
+
+              gpio_config(&io_conf);
+          }
+
+          void relay_on()
+          {
+              gpio_set_level(RELAY_GPIO, 1);
+          }
+
+          void relay_off()
+          {
+              gpio_set_level(RELAY_GPIO, 0);
+          }
+          EOF
+
+
+          cat << 'EOF' > components/relay_control/relay_control.h
+          #pragma once
+
+          void relay_init(void);
+          void relay_on(void);
+          void relay_off(void);
+          EOF
+
+
+          cat << 'EOF' > components/relay_control/CMakeLists.txt
+          idf_component_register(
+              SRCS "relay_control.c"
+              INCLUDE_DIRS "."
+          )
+          EOF
+
+
+      - name: Build ESP-BOX firmware
+        shell: bash
+        run: |
+
+          . $IDF_PATH/export.sh
+          idf.py set-target esp32s3
+          idf.py build
+
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: espbox-firmware
+          path: |
+            build/*.bin
+            build/*.elf
