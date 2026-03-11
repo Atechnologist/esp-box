@@ -1,4 +1,5 @@
+# Tell CMake this is a proper component
 idf_component_register(
-    SRCS "app_main.c"
-    INCLUDE_DIRS "."
+    SRCS "main.c"           # your main source file
+    INCLUDE_DIRS "."        # header files location
 )
