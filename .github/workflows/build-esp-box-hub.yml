@@ -1,26 +1,49 @@
-name: ESP-BOX Firmware Build
+name: ESP32-S3 Build
 
 on:
   push:
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      # 1️⃣ Checkout the repo
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      - name: Build ESP-IDF project
+      # 2️⃣ Cache ESP-IDF tools and Python dependencies
+      - name: Cache ESP-IDF and Python
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.espressif
+            ~/.cache/pip
+            ~/.ccache
+          key: ${{ runner.os }}-idf5.1-${{ hashFiles('**/requirements*.txt') }}
+
+      # 3️⃣ Setup ESP-IDF environment
+      - name: Setup ESP-IDF
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.1
+          version: 'v5.1'
           target: esp32s3
-          path: examples/factory_demo
 
-      - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp-box-firmware
-          path: examples/factory_demo/build/*.bin
+      # 4️⃣ Show ESP-IDF version (optional)
+      - name: Show ESP-IDF version
+        run: idf.py --version
+
+      # 5️⃣ Set target
+      - name: Set ESP-IDF target
+        run: idf.py set-target esp32s3
+
+      # 6️⃣ Install project dependencies
+      - name: Install dependencies
+        run: idf.py add-dependency "espressif/esp-box^3.0.5"
+
+      # 7️⃣ Build the project
+      - name: Build factory_demo
+        run: idf.py build
