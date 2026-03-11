@@ -1,105 +1,78 @@
-name: ESP-Box Auto Builder
+name: ESP-BOX Firmware CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
+
   build:
+
     runs-on: ubuntu-latest
 
     container:
-      image: espressif/idf:v5.1
+      image: espressif/idf:release-v5.1
 
     steps:
 
-      - name: Checkout repo
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Generate ESP-Box project
-        run: |
-          mkdir -p main
-          mkdir -p components/gpio_control/src
-          mkdir -p components/gpio_control/include
 
-          mkdir -p components/local_voice/src
-          mkdir -p components/local_voice/include
+    - name: Setup ESP-IDF
+      run: |
+        . $IDF_PATH/export.sh
+        idf.py --version
 
-          mkdir -p components/web_ui/src
-          mkdir -p components/web_ui/include
 
-          mkdir -p components/espnow_comm/src
-          mkdir -p components/espnow_comm/include
+    - name: Create project structure
+      run: |
 
-          # Root CMake
-          cat << 'EOF' > CMakeLists.txt
-          cmake_minimum_required(VERSION 3.16)
-          include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-          project(esp_box)
-          EOF
+        mkdir -p main
+        mkdir -p components/gpio_control/src
+        mkdir -p components/gpio_control/include
 
-          # MAIN FILE
-          cat << 'EOF' > main/main.c
-          #include "freertos/FreeRTOS.h"
-          #include "freertos/task.h"
-          #include "esp_log.h"
+        # Root CMake
+        cat << 'EOF' > CMakeLists.txt
+        cmake_minimum_required(VERSION 3.16)
+        include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+        project(esp_box)
+        EOF
 
-          #include "gpio_control.h"
-          #include "local_voice.h"
-          #include "web_ui.h"
-          #include "espnow_comm.h"
+        # Main firmware
+        cat << 'EOF' > main/main.c
+        #include "freertos/FreeRTOS.h"
+        #include "freertos/task.h"
+        #include "esp_log.h"
 
-          void app_main(void)
-          {
-              ESP_LOGI("ESPBOX","Booting ESP-Box");
+        void app_main(void)
+        {
+            ESP_LOGI("ESPBOX","ESP-BOX HUB STARTED");
 
-              gpio_control_init();
-              local_voice_init();
-              web_ui_init();
-              espnow_comm_init();
+            while(1)
+            {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+        }
+        EOF
 
-              while(1){
-                  vTaskDelay(pdMS_TO_TICKS(1000));
-              }
-          }
-          EOF
+        cat << 'EOF' > main/CMakeLists.txt
+        idf_component_register(SRCS "main.c" INCLUDE_DIRS ".")
+        EOF
 
-          # MAIN CMAKE
-          cat << 'EOF' > main/CMakeLists.txt
-          idf_component_register(SRCS "main.c" INCLUDE_DIRS ".")
-          EOF
 
-          # GPIO COMPONENT
-          cat << 'EOF' > components/gpio_control/include/gpio_control.h
-          #pragma once
-          void gpio_control_init(void);
-          EOF
+    - name: Build firmware
+      run: |
+        . $IDF_PATH/export.sh
+        idf.py set-target esp32s3
+        idf.py build
 
-          cat << 'EOF' > components/gpio_control/src/gpio_control.c
-          #include "gpio_control.h"
-          #include "esp_log.h"
 
-          void gpio_control_init(void)
-          {
-              ESP_LOGI("GPIO","GPIO control ready");
-          }
-          EOF
-
-          cat << 'EOF' > components/gpio_control/CMakeLists.txt
-          idf_component_register(
-          SRCS "src/gpio_control.c"
-          INCLUDE_DIRS "include")
-          EOF
-
-      - name: Set target
-        run: idf.py set-target esp32s3
-
-      - name: Build firmware
-        run: idf.py build
-
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: espbox_firmware
-          path: build/*.bin
+    - name: Upload firmware artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: esp-box-firmware
+        path: |
+          build/*.bin
+          build/*.elf
