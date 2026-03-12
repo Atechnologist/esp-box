@@ -15,47 +15,39 @@ jobs:
 
     steps:
 
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Force clean ESP project
-        run: |
-           echo "Cleaning old ESP-BOX project files..."
-
-           rm -rf build
-           rm -rf managed_components
-
-            find . -name "idf_component.yml" -delete
-            find . -name "dependencies.lock" -delete
-            find . -name "sdkconfig*" -delete
-
-      - name: Clean old ESP-BOX dependencies
-        run: |
-         rm -f idf_component.yml
-         rm -f main/idf_component.yml
-         rm -rf managed_components
-         - name: Remove board configuration
-         run: |
-         rm -f sdkconfig
-         rm -f sdkconfig.defaults
-         rm -f Kconfig.projbuild
-         rm -rf managed_components
-         rm -rf build
 
       - name: Fix Git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
 
-      - name: Generate ESP-BOX project
+      - name: Clean old ESP-BOX project
         shell: bash
         run: |
+          echo "Cleaning repository..."
+          rm -rf build
+          rm -rf managed_components
+          rm -f idf_component.yml
+          rm -f main/idf_component.yml
+          rm -f sdkconfig
+          rm -f sdkconfig.defaults
+          rm -f Kconfig.projbuild
+
+
+      - name: Generate minimal ESP-IDF project
+        shell: bash
+        run: |
+
+          echo "Generating project..."
 
           mkdir -p main
           mkdir -p components/relay_control
 
-          ############################
-          # Root CMake1
-          ############################
+          ###################################
+          # Root CMake
+          ###################################
 
           cat << 'EOF' > CMakeLists.txt
           cmake_minimum_required(VERSION 3.16)
@@ -64,100 +56,45 @@ jobs:
           EOF
 
 
-          ############################
+          ###################################
           # Main firmware
-          ############################
+          ###################################
 
           cat << 'EOF' > main/main.c
           #include "freertos/FreeRTOS.h"
           #include "freertos/task.h"
           #include "esp_log.h"
 
-          #include "relay_control.h"
-
-          static const char *TAG = "ESP_BOX_HUB";
+          static const char *TAG = "ESP_BOX";
 
           void app_main(void)
           {
               ESP_LOGI(TAG, "ESP BOX HUB STARTED");
 
-              relay_init();
-
-              while(1)
+              while (1)
               {
-                  ESP_LOGI(TAG, "Hub running");
+                  ESP_LOGI(TAG, "Hub running...");
                   vTaskDelay(pdMS_TO_TICKS(5000));
               }
           }
           EOF
 
 
-          ############################
+          ###################################
           # main CMake
-          ############################
+          ###################################
 
           cat << 'EOF' > main/CMakeLists.txt
           idf_component_register(
               SRCS "main.c"
               INCLUDE_DIRS "."
-              REQUIRES relay_control
           )
           EOF
 
 
-          ############################
-          # Relay component
-          ############################
-
-          cat << 'EOF' > components/relay_control/relay_control.c
-          #include "relay_control.h"
-          #include "driver/gpio.h"
-
-          #define RELAY_GPIO GPIO_NUM_2
-
-          void relay_init()
-          {
-              gpio_config_t io_conf = {
-                  .pin_bit_mask = (1ULL << RELAY_GPIO),
-                  .mode = GPIO_MODE_OUTPUT
-              };
-
-              gpio_config(&io_conf);
-          }
-
-          void relay_on()
-          {
-              gpio_set_level(RELAY_GPIO, 1);
-          }
-
-          void relay_off()
-          {
-              gpio_set_level(RELAY_GPIO, 0);
-          }
-          EOF
-
-
-          cat << 'EOF' > components/relay_control/relay_control.h
-          #pragma once
-
-          void relay_init(void);
-          void relay_on(void);
-          void relay_off(void);
-          EOF
-
-
-          cat << 'EOF' > components/relay_control/CMakeLists.txt
-          idf_component_register(
-              SRCS "relay_control.c"
-              INCLUDE_DIRS "."
-          )
-          EOF
-
-
-      - name: Build ESP-BOX firmware
+      - name: Build firmware
         shell: bash
         run: |
-
           . $IDF_PATH/export.sh
           idf.py set-target esp32s3
           idf.py build
