@@ -5,66 +5,29 @@ on:
   workflow_dispatch:
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
 
     container:
       image: espressif/idf:release-v5.1
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      - name: Fix Git safe directory
+      - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-
-      - name: Create clean firmware workspace
+      - name: Generate firmware project
         shell: bash
         run: |
-          mkdir firmware
-          cd firmware
+          mkdir -p firmware/main
 
-          mkdir main
+          printf "cmake_minimum_required(VERSION 3.16)\ninclude(\$ENV{IDF_PATH}/tools/cmake/project.cmake)\nproject(esp_box_hub)\n" > firmware/CMakeLists.txt
 
-          cat << 'EOF' > CMakeLists.txt
-          cmake_minimum_required(VERSION 3.16)
-          include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-          project(esp_box_hub)
-          EOF
+          printf "#include \"freertos/FreeRTOS.h\"\n#include \"freertos/task.h\"\n#include \"esp_log.h\"\n\nstatic const char *TAG = \"ESP_BOX\";\n\nvoid app_main(void)\n{\n    ESP_LOGI(TAG, \"ESP BOX HUB STARTED\");\n\n    while (1)\n    {\n        ESP_LOGI(TAG, \"Hub running...\");\n        vTaskDelay(pdMS_TO_TICKS(5000));\n    }\n}\n" > firmware/main/main.c
 
-
-          cat << 'EOF' > main/main.c
-          #include "freertos/FreeRTOS.h"
-          #include "freertos/task.h"
-          #include "esp_log.h"
-
-          static const char *TAG = "ESP_BOX";
-
-          void app_main(void)
-          {
-              ESP_LOGI(TAG, "ESP BOX HUB STARTED");
-
-              while (1)
-              {
-                  ESP_LOGI(TAG, "Hub running...");
-                  vTaskDelay(pdMS_TO_TICKS(5000));
-              }
-          }
-          EOF
-
-
-          cat << 'EOF' > main/CMakeLists.txt
-          idf_component_register(
-              SRCS "main.c"
-              INCLUDE_DIRS "."
-          )
-          EOF
-
+          printf "idf_component_register(\n    SRCS \"main.c\"\n    INCLUDE_DIRS \".\"\n)\n" > firmware/main/CMakeLists.txt
 
       - name: Build firmware
         shell: bash
@@ -74,11 +37,18 @@ jobs:
           idf.py set-target esp32s3
           idf.py build
 
+      - name: Create web flash manifest
+        shell: bash
+        run: |
+          cd firmware/build
+          printf '{\n  "name": "ESP-BOX Hub",\n  "version": "1.0",\n  "builds": [\n    {\n      "chipFamily": "ESP32-S3",\n      "parts": [\n        { "path": "bootloader/bootloader.bin", "offset": 0 },\n        { "path": "partition_table/partition-table.bin", "offset": 32768 },\n        { "path": "esp_box_hub.bin", "offset": 65536 }\n      ]\n    }\n  ]\n}\n' > manifest.json
 
-      - name: Upload firmware
+      - name: Upload firmware bundle
         uses: actions/upload-artifact@v4
         with:
-          name: espbox-firmware
+          name: espbox-webflash
           path: |
-            firmware/build/*.bin
-            firmware/build/*.elf
+            firmware/build/bootloader/bootloader.bin
+            firmware/build/partition_table/partition-table.bin
+            firmware/build/esp_box_hub.bin
+            firmware/build/manifest.json
