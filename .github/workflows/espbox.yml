@@ -34,7 +34,13 @@ jobs:
          rm -f idf_component.yml
          rm -f main/idf_component.yml
          rm -rf managed_components
-
+         - name: Remove board configuration
+         run: |
+         rm -f sdkconfig
+         rm -f sdkconfig.defaults
+         rm -f Kconfig.projbuild
+         rm -rf managed_components
+         rm -rf build
 
       - name: Fix Git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
