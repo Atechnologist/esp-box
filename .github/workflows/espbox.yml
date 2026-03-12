@@ -37,7 +37,7 @@ jobs:
           mkdir -p components/relay_control
 
           ############################
-          # Root CMake
+          # Root CMake1
           ############################
 
           cat << 'EOF' > CMakeLists.txt
