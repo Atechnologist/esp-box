@@ -1,25 +1,36 @@
 #!/bin/bash
-# setup_espbox.sh
-# Script to create ESP-Box repo structure and boilerplate files
+# setup_espbox_github.sh
+# Fully automate ESP-Box repo creation and push to GitHub
 
 set -e
 
-# Create folders
-mkdir -p esp-box/firmware/main
-mkdir -p esp-box/firmware/components/espnow
-mkdir -p esp-box/firmware/components/voice_control
-mkdir -p esp-box/firmware/components/hardware
-mkdir -p esp-box/.github/workflows
+# -----------------------------
+# CONFIGURATION - EDIT THESE
+# -----------------------------
+GITHUB_USER="YOUR_GITHUB_USERNAME"
+GITHUB_REPO="esp-box"
+GITHUB_TOKEN="YOUR_GITHUB_TOKEN"  # or use secrets in Actions
+BRANCH="main"
+
+# -----------------------------
+# CREATE LOCAL STRUCTURE
+# -----------------------------
+echo "Creating ESP-Box folder structure..."
+mkdir -p $GITHUB_REPO/firmware/main
+mkdir -p $GITHUB_REPO/firmware/components/espnow
+mkdir -p $GITHUB_REPO/firmware/components/voice_control
+mkdir -p $GITHUB_REPO/firmware/components/hardware
+mkdir -p $GITHUB_REPO/.github/workflows
 
 # Top-level CMakeLists.txt
-cat > esp-box/CMakeLists.txt <<'EOF'
+cat > $GITHUB_REPO/CMakeLists.txt <<'EOF'
 cmake_minimum_required(VERSION 3.16)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp_box)
 EOF
 
 # Firmware CMakeLists.txt
-cat > esp-box/firmware/CMakeLists.txt <<'EOF'
+cat > $GITHUB_REPO/firmware/CMakeLists.txt <<'EOF'
 idf_component_register(
     SRCS "main.c"
     INCLUDE_DIRS "."
@@ -28,7 +39,7 @@ idf_component_register(
 EOF
 
 # main.c
-cat > esp-box/firmware/main/main.c <<'EOF'
+cat > $GITHUB_REPO/firmware/main/main.c <<'EOF'
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -70,12 +81,12 @@ void app_main(void)
 EOF
 
 # Placeholder component files
-touch esp-box/firmware/components/espnow/espnow.c
-touch esp-box/firmware/components/voice_control/voice_control.c
-touch esp-box/firmware/components/hardware/hardware.c
+touch $GITHUB_REPO/firmware/components/espnow/espnow.c
+touch $GITHUB_REPO/firmware/components/voice_control/voice_control.c
+touch $GITHUB_REPO/firmware/components/hardware/hardware.c
 
 # GitHub Actions workflow
-cat > esp-box/.github/workflows/espbox.yml <<'EOF'
+cat > $GITHUB_REPO/.github/workflows/espbox.yml <<'EOF'
 name: ESP-Box Build
 
 on:
@@ -103,4 +114,16 @@ jobs:
           idf.py build
 EOF
 
-echo "ESP-Box repo structure created!"
+# -----------------------------
+# INITIALIZE GIT AND PUSH
+# -----------------------------
+cd $GITHUB_REPO
+
+git init
+git checkout -b $BRANCH
+git add .
+git commit -m "Initial ESP-Box repo structure with workflow"
+git remote add origin https://$GITHUB_TOKEN@github.com/$GITHUB_USER/$GITHUB_REPO.git
+git push -u origin $BRANCH --force
+
+echo "ESP-Box repo created and pushed to GitHub!"
