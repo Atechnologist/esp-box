@@ -18,6 +18,17 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Force clean ESP project
+        run: |
+           echo "Cleaning old ESP-BOX project files..."
+
+           rm -rf build
+           rm -rf managed_components
+
+            find . -name "idf_component.yml" -delete
+            find . -name "dependencies.lock" -delete
+            find . -name "sdkconfig*" -delete
+
       - name: Clean old ESP-BOX dependencies
         run: |
          rm -f idf_component.yml
