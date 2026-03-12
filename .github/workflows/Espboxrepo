@@ -1,19 +1,18 @@
 #!/bin/bash
-# setup_espbox_github.sh
-# Fully automate ESP-Box repo creation and push to GitHub
+# setup_espbox_repo.sh
+# Create ESP-Box folder structure and initial files
 
 set -e
 
 # -----------------------------
-# CONFIGURATION - EDIT THESE
+# CONFIGURATION
 # -----------------------------
-GITHUB_USER="YOUR_GITHUB_USERNAME"
-GITHUB_REPO="esp-box"
-GITHUB_TOKEN="YOUR_GITHUB_TOKEN"  # or use secrets in Actions
+GITHUB_USER="oneaacos@gmail.com"   # your GitHub username
+GITHUB_REPO="esp-box"                 # repo name
 BRANCH="main"
 
 # -----------------------------
-# CREATE LOCAL STRUCTURE
+# CREATE FOLDER STRUCTURE
 # -----------------------------
 echo "Creating ESP-Box folder structure..."
 mkdir -p $GITHUB_REPO/firmware/main
@@ -21,6 +20,10 @@ mkdir -p $GITHUB_REPO/firmware/components/espnow
 mkdir -p $GITHUB_REPO/firmware/components/voice_control
 mkdir -p $GITHUB_REPO/firmware/components/hardware
 mkdir -p $GITHUB_REPO/.github/workflows
+
+# -----------------------------
+# CREATE FILES
+# -----------------------------
 
 # Top-level CMakeLists.txt
 cat > $GITHUB_REPO/CMakeLists.txt <<'EOF'
@@ -114,16 +117,5 @@ jobs:
           idf.py build
 EOF
 
-# -----------------------------
-# INITIALIZE GIT AND PUSH
-# -----------------------------
-cd $GITHUB_REPO
-
-git init
-git checkout -b $BRANCH
-git add .
-git commit -m "Initial ESP-Box repo structure with workflow"
-git remote add origin https://$GITHUB_TOKEN@github.com/$GITHUB_USER/$GITHUB_REPO.git
-git push -u origin $BRANCH --force
-
-echo "ESP-Box repo created and pushed to GitHub!"
+echo "Folder structure and files created in '$GITHUB_REPO'."
+echo "You can now initialize git and push to GitHub using a secret token."
