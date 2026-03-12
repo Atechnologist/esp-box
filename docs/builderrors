@@ -1,0 +1,16 @@
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x7 (TG0WDT_SYS_RST),boot:0x2b (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403769b8
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3c020020,len:0x9920
+load:0x3fc91200,len:0x26d4
+load:0x40374000,len:0x3ff4
+load:0x42000020,len:0x12ff4
+load:0x40377ff4,len:0x91bc
+SHA-256 comparison failed:
+Calculated: c6f79c3dfd42733c1635388222fa5c6630d3640d83fc23f0b10cb241b06ded13
+Expected: 0738953e521f3803bbf8f5f1208dc22ab447d25cd63302f363002ce57dfaf8ac
+Attempting to boot anyway...
+entry 0x40375394
