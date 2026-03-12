@@ -1,0 +1,135 @@
+#!/bin/bash
+# espbox_setup_active.sh
+# Fully automate ESP-Box repo setup in GitHub Active
+
+set -e
+
+# -----------------------------
+# CONFIGURATION - EDIT THESE
+# -----------------------------
+GITHUB_USER="oneaacos@gmail.com"            # Your GitHub username
+GITHUB_REPO="esp-box"                  # Name of the repo
+BRANCH="main"
+
+# Use GitHub secret for token in GitHub Active
+GITHUB_TOKEN="${GT_TOKEN}" # Must be set in GitHub secrets
+
+# -----------------------------
+# CREATE FOLDER STRUCTURE
+# -----------------------------
+echo "Creating ESP-Box folder structure..."
+mkdir -p $GITHUB_REPO/firmware/main
+mkdir -p $GITHUB_REPO/firmware/components/espnow
+mkdir -p $GITHUB_REPO/firmware/components/voice_control
+mkdir -p $GITHUB_REPO/firmware/components/hardware
+mkdir -p $GITHUB_REPO/.github/workflows
+
+# -----------------------------
+# CREATE FILES
+# -----------------------------
+
+# Top-level CMakeLists.txt
+cat > $GITHUB_REPO/CMakeLists.txt <<'EOF'
+cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(esp_box)
+EOF
+
+# Firmware CMakeLists.txt
+cat > $GITHUB_REPO/firmware/CMakeLists.txt <<'EOF'
+idf_component_register(
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES driver esp_netif esp_wifi esp_http_server
+)
+EOF
+
+# main.c
+cat > $GITHUB_REPO/firmware/main/main.c <<'EOF'
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "driver/gpio.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
+#include "esp_http_server.h"
+
+static const char *TAG = "ESP_BOX";
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "ESP-Box starting...");
+
+    // Initialize network interface
+    esp_netif_init();
+    ESP_LOGI(TAG, "Network interface initialized");
+
+    // Initialize Wi-Fi
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_LOGI(TAG, "Wi-Fi started");
+
+    // Placeholder for relay/light/buzzer
+    ESP_LOGI(TAG, "Hardware initialized");
+
+    // Placeholder for local web server
+    ESP_LOGI(TAG, "Web server started");
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "ESP-Box running...");
+    }
+}
+EOF
+
+# Placeholder component files
+touch $GITHUB_REPO/firmware/components/espnow/espnow.c
+touch $GITHUB_REPO/firmware/components/voice_control/voice_control.c
+touch $GITHUB_REPO/firmware/components/hardware/hardware.c
+
+# GitHub Actions workflow
+cat > $GITHUB_REPO/.github/workflows/espbox.yml <<'EOF'
+name: ESP-Box Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup ESP-IDF
+        uses: espressif/esp-idf-action@v1
+        with:
+          version: v5.1
+          target: esp32s3
+
+      - name: Build ESP-IDF project
+        working-directory: firmware
+        run: |
+          idf.py set-target esp32s3
+          idf.py build
+EOF
+
+# -----------------------------
+# INITIALIZE GIT AND PUSH
+# -----------------------------
+cd $GITHUB_REPO
+
+git init
+git checkout -b $BRANCH
+git add .
+git commit -m "Initial ESP-Box repo structure with workflow"
+git remote add origin https://$GITHUB_USER:$GITHUB_TOKEN@github.com/$GITHUB_USER/$GITHUB_REPO.git
+git push -u origin $BRANCH --force
+
+echo "ESP-Box repo created and pushed to GitHub Active!"
