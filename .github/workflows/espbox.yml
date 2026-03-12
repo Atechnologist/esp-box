@@ -23,31 +23,13 @@ jobs:
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
 
-      - name: Clean old ESP-BOX project
+      - name: Create clean firmware workspace
         shell: bash
         run: |
-          echo "Cleaning repository..."
-          rm -rf build
-          rm -rf managed_components
-          rm -f idf_component.yml
-          rm -f main/idf_component.yml
-          rm -f sdkconfig
-          rm -f sdkconfig.defaults
-          rm -f Kconfig.projbuild
+          mkdir firmware
+          cd firmware
 
-
-      - name: Generate minimal ESP-IDF project
-        shell: bash
-        run: |
-
-          echo "Generating project..."
-
-          mkdir -p main
-          mkdir -p components/relay_control
-
-          ###################################
-          # Root CMake
-          ###################################
+          mkdir main
 
           cat << 'EOF' > CMakeLists.txt
           cmake_minimum_required(VERSION 3.16)
@@ -55,10 +37,6 @@ jobs:
           project(esp_box_hub)
           EOF
 
-
-          ###################################
-          # Main firmware
-          ###################################
 
           cat << 'EOF' > main/main.c
           #include "freertos/FreeRTOS.h"
@@ -80,10 +58,6 @@ jobs:
           EOF
 
 
-          ###################################
-          # main CMake
-          ###################################
-
           cat << 'EOF' > main/CMakeLists.txt
           idf_component_register(
               SRCS "main.c"
@@ -96,6 +70,7 @@ jobs:
         shell: bash
         run: |
           . $IDF_PATH/export.sh
+          cd firmware
           idf.py set-target esp32s3
           idf.py build
 
@@ -105,5 +80,5 @@ jobs:
         with:
           name: espbox-firmware
           path: |
-            build/*.bin
-            build/*.elf
+            firmware/build/*.bin
+            firmware/build/*.elf
