@@ -92,6 +92,32 @@ httpd_handle_t start_webserver(void)
 
 void app_main(void)
 {
+    #define WIFI_SSID "glaatos"
+    #define WIFI_PASS "aatos2023"
+
+static void wifi_init_sta(void)
+{
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASS,
+        },
+    };
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_connect());
+
+    ESP_LOGI(TAG, "WiFi connecting to %s", WIFI_SSID);
+}
+    
+    
     ESP_LOGI(TAG, "ESP-Box starting...");
 
     // Initialize NVS
