@@ -1,22 +1,20 @@
-name: ESP-BOX HUB CI
+name: Build ESP-BOX Firmware
 
 on:
-  push:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    container:
-      image: espressif/idf:release-v5.1
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-      - name: Fix git safe directory
-        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: Setup ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.1
 
       - name: Build firmware
         run: |
@@ -25,9 +23,25 @@ jobs:
           idf.py set-target esp32s3
           idf.py build
 
+      # 🔍 Debug (optional but recommended first run)
+      - name: Debug build output
+        run: |
+          cd examples/esp-box/firmware
+          echo "---- Firmware folder ----"
+          ls -la
+          echo "---- Build folder ----"
+          cd build
+          ls -la
+
       - name: Create Web Flash manifest
         run: |
-          cd firmware/build
+          cd examples/esp-box/firmware/build
+
+          # Auto-detect firmware bin name
+          BIN_NAME=$(ls *.bin | grep -v bootloader | grep -v partition | head -n 1)
+
+          echo "Detected firmware: $BIN_NAME"
+
           printf '{
             "name": "ESP-BOX Hub",
             "version": "2.0",
@@ -37,7 +51,7 @@ jobs:
                 "parts": [
                   { "path": "bootloader/bootloader.bin", "offset": 0 },
                   { "path": "partition_table/partition-table.bin", "offset": 32768 },
-                  { "path": "esp_box.bin", "offset": 65536 }
+                  { "path": "'$BIN_NAME'", "offset": 65536 }
                 ]
               }
             ]
@@ -48,7 +62,7 @@ jobs:
         with:
           name: espbox-webflash
           path: |
-            firmware/build/bootloader/bootloader.bin
-            firmware/build/partition_table/partition-table.bin
-            firmware/build/*.bin
-            firmware/build/manifest.json
+            examples/esp-box/firmware/build/bootloader/bootloader.bin
+            examples/esp-box/firmware/build/partition_table/partition-table.bin
+            examples/esp-box/firmware/build/*.bin
+            examples/esp-box/firmware/build/manifest.json
