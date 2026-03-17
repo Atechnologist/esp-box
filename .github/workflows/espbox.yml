@@ -1,68 +1,42 @@
-name: Build ESP-BOX Firmware
+name: ESP-BOX HUB CI
 
 on:
+  push:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+    container:
+      image: espressif/idf:release-v5.1
 
-      - name: Setup ESP-IDF
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          esp_idf_version: v5.1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - name: Build firmware
+        shell: bash
         run: |
-          . $IDF_PATH/export.sh
-          cd examples/esp-box/firmware
+          cd examples/esp-box/firmware   # Go to folder with CMakeLists.txt
           idf.py set-target esp32s3
           idf.py build
 
-      - name: Debug paths (IMPORTANT)
-        run: |
-          echo "ROOT:"
-          ls -la
-
-          echo "ESP-BOX PATH:"
-          ls -la examples/esp-box/firmware
-
-          echo "BUILD PATH:"
-          ls -la examples/esp-box/firmware/build
-
-      - name: Create manifest
+      - name: Create web flash manifest
+        shell: bash
         run: |
           cd examples/esp-box/firmware/build
+          printf '{\n  "name": "ESP-BOX Hub",\n  "version": "1.0",\n  "builds": [\n    {\n      "chipFamily": "ESP32-S3",\n      "parts": [\n        { "path": "bootloader/bootloader.bin", "offset": 0 },\n        { "path": "partition_table/partition-table.bin", "offset": 32768 },\n        { "path": "esp_box_hub.bin", "offset": 65536 }\n      ]\n    }\n  ]\n}\n' > manifest.json
 
-          BIN_NAME=$(ls *.bin | grep -v bootloader | grep -v partition | head -n 1)
-
-          echo "Using firmware: $BIN_NAME"
-
-          printf '{
-            "name": "ESP-BOX Hub",
-            "version": "2.0",
-            "builds": [
-              {
-                "chipFamily": "ESP32-S3",
-                "parts": [
-                  { "path": "bootloader/bootloader.bin", "offset": 0 },
-                  { "path": "partition_table/partition-table.bin", "offset": 32768 },
-                  { "path": "'$BIN_NAME'", "offset": 65536 }
-                ]
-              }
-            ]
-          }' > manifest.json
-
-      - name: Upload firmware
+      - name: Upload firmware bundle
         uses: actions/upload-artifact@v4
         with:
-          name: espbox
+          name: espbox-webflash
           path: |
             examples/esp-box/firmware/build/bootloader/bootloader.bin
             examples/esp-box/firmware/build/partition_table/partition-table.bin
-            examples/esp-box/firmware/build/*.bin
+            examples/esp-box/firmware/build/esp_box_hub.bin
             examples/esp-box/firmware/build/manifest.json
