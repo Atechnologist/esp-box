@@ -21,7 +21,8 @@ jobs:
       - name: Build firmware
         shell: bash
         run: |
-          cd examples/esp-box/firmware   # Go to folder with CMakeLists.txt
+          cd examples/esp-box/firmware
+          . $IDF_PATH/export.sh   # Load ESP-IDF environment
           idf.py set-target esp32s3
           idf.py build
 
