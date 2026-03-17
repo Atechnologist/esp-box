@@ -158,6 +158,7 @@ void start_server()
 
 void app_main(void)
 {
+    ESP_LOGI(TAG, "===== NEW FIRMWARE WITH PROVISIONING =====");
     ESP_LOGI(TAG, "ESP-BOX START");
 
     nvs_flash_init();
