@@ -23,24 +23,24 @@ jobs:
           idf.py set-target esp32s3
           idf.py build
 
-      # 🔍 Debug (optional but recommended first run)
-      - name: Debug build output
+      - name: Debug paths (IMPORTANT)
         run: |
-          cd examples/esp-box/firmware
-          echo "---- Firmware folder ----"
-          ls -la
-          echo "---- Build folder ----"
-          cd build
+          echo "ROOT:"
           ls -la
 
-      - name: Create Web Flash manifest
+          echo "ESP-BOX PATH:"
+          ls -la examples/esp-box/firmware
+
+          echo "BUILD PATH:"
+          ls -la examples/esp-box/firmware/build
+
+      - name: Create manifest
         run: |
           cd examples/esp-box/firmware/build
 
-          # Auto-detect firmware bin name
           BIN_NAME=$(ls *.bin | grep -v bootloader | grep -v partition | head -n 1)
 
-          echo "Detected firmware: $BIN_NAME"
+          echo "Using firmware: $BIN_NAME"
 
           printf '{
             "name": "ESP-BOX Hub",
@@ -57,10 +57,10 @@ jobs:
             ]
           }' > manifest.json
 
-      - name: Upload firmware bundle
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: espbox-webflash
+          name: espbox
           path: |
             examples/esp-box/firmware/build/bootloader/bootloader.bin
             examples/esp-box/firmware/build/partition_table/partition-table.bin
