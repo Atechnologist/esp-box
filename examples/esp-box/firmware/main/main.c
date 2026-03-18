@@ -10,6 +10,7 @@
 #include "esp_http_server.h"
 #include "nvs.h"
 #include "driver/gpio.h"
+#include "lwip/inet.h"  // For ip4addr_ntoa()
 
 static const char *TAG = "ESP_BOX";
 
