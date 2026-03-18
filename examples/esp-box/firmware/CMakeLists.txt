@@ -1,3 +1,5 @@
-cmake_minimum_required(VERSION 3.16)
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(esp_box_hub)
+idf_component_register(
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES esp_wifi esp_netif nvs_flash esp_event esp_http_server driver
+)
