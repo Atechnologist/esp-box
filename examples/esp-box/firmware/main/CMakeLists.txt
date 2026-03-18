@@ -1,5 +1,5 @@
-idf_component_register(
-    SRCS "main.c"
-    INCLUDE_DIRS "."
-    REQUIRES esp_wifi esp_http_server nvs_flash driver
-)
+printf "idf_component_register(
+SRCS \"main.c\"
+INCLUDE_DIRS \".\"
+REQUIRES esp_wifi esp_http_server nvs_flash driver
+)\n" > firmware/main/CMakeLists.txt
