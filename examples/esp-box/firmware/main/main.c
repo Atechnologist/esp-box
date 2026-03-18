@@ -1,22 +1,22 @@
 #include <stdio.h>
 #include <string.h>
-#include <stdbool.h>
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
-#include "nvs.h"
 #include "esp_http_server.h"
-#include "esp_system.h"
+#include "nvs.h"
 
 static const char *TAG = "ESP_BOX";
 
+/* Storage */
 #define STORAGE_NAMESPACE "wifi"
+
+/* Web server */
+httpd_handle_t server = NULL;
 
 /* ================= NVS ================= */
 
@@ -52,50 +52,95 @@ bool load_wifi_credentials(char *ssid, char *pass)
 
 /* ================= WEB ================= */
 
-httpd_handle_t server = NULL;
-
 esp_err_t root_handler(httpd_req_t *req)
 {
     const char *html =
         "<html><body>"
-        "<h2>ESP-BOX WiFi Setup</h2>"
-        "<form action=\"/save\">"
-        "SSID:<br><input name=\"ssid\"><br>"
-        "Password:<br><input name=\"pass\" type=\"password\"><br><br>"
-        "<input type=\"submit\" value=\"Save\">"
-        "</form></body></html>";
+        "<h2>ESP-BOX Control</h2>"
+        "<p><a href=\"/on\"><button>LED ON</button></a></p>"
+        "<p><a href=\"/off\"><button>LED OFF</button></a></p>"
+        "</body></html>";
 
     httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+esp_err_t led_on_handler(httpd_req_t *req)
+{
+    gpio_set_level(2, 1);
+    httpd_resp_sendstr(req, "LED ON");
+    return ESP_OK;
+}
+
+esp_err_t led_off_handler(httpd_req_t *req)
+{
+    gpio_set_level(2, 0);
+    httpd_resp_sendstr(req, "LED OFF");
     return ESP_OK;
 }
 
 esp_err_t save_handler(httpd_req_t *req)
 {
     char buf[128];
-    char ssid[32] = {0};
-    char pass[64] = {0};
+    httpd_req_get_url_query_str(req, buf, sizeof(buf));
 
-    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK)
-    {
-        httpd_query_key_value(buf, "ssid", ssid, sizeof(ssid));
-        httpd_query_key_value(buf, "pass", pass, sizeof(pass));
+    char ssid[32], pass[64];
+    sscanf(buf, "ssid=%31[^&]&pass=%63s", ssid, pass);
 
-        ESP_LOGI(TAG, "Saving WiFi: %s", ssid);
+    ESP_LOGI(TAG, "Saving SSID: %s", ssid);
 
-        save_wifi_credentials(ssid, pass);
+    save_wifi_credentials(ssid, pass);
 
-        httpd_resp_send(req, "Saved! Rebooting...", HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, "Saved! Rebooting...", HTTPD_RESP_USE_STRLEN);
 
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        esp_restart();
-    }
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
 
     return ESP_OK;
 }
 
+void start_webserver()
+{
+    if (server != NULL) return;
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    httpd_start(&server, &config);
+
+    httpd_uri_t root = {
+        .uri = "/",
+        .method = HTTP_GET,
+        .handler = root_handler
+    };
+
+    httpd_uri_t on = {
+        .uri = "/on",
+        .method = HTTP_GET,
+        .handler = led_on_handler
+    };
+
+    httpd_uri_t off = {
+        .uri = "/off",
+        .method = HTTP_GET,
+        .handler = led_off_handler
+    };
+
+    httpd_uri_t save = {
+        .uri = "/save",
+        .method = HTTP_GET,
+        .handler = save_handler
+    };
+
+    httpd_register_uri_handler(server, &root);
+    httpd_register_uri_handler(server, &on);
+    httpd_register_uri_handler(server, &off);
+    httpd_register_uri_handler(server, &save);
+
+    ESP_LOGI(TAG, "HTTP server started");
+}
+
 /* ================= WIFI ================= */
 
-void wifi_init_ap(void)
+static void wifi_init_ap(void)
 {
     esp_netif_create_default_wifi_ap();
 
@@ -116,9 +161,11 @@ void wifi_init_ap(void)
     esp_wifi_start();
 
     ESP_LOGI(TAG, "Started AP: ESP-BOX-SETUP");
+
+    start_webserver(); // Start immediately in AP mode
 }
 
-void wifi_init_sta(const char *ssid, const char *pass)
+static void wifi_init_sta(const char *ssid, const char *pass)
 {
     esp_netif_create_default_wifi_sta();
 
@@ -137,27 +184,15 @@ void wifi_init_sta(const char *ssid, const char *pass)
     ESP_LOGI(TAG, "Connecting to %s", ssid);
 }
 
-/* ================= SERVER ================= */
+/* ================= EVENT HANDLER ================= */
 
-void start_server()
+static void on_ip_event(void* arg, esp_event_base_t event_base,
+                        int32_t event_id, void* event_data)
 {
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    httpd_start(&server, &config);
-
-    httpd_uri_t root = {
-        .uri = "/",
-        .method = HTTP_GET,
-        .handler = root_handler
-    };
-
-    httpd_uri_t save = {
-        .uri = "/save",
-        .method = HTTP_GET,
-        .handler = save_handler
-    };
-
-    httpd_register_uri_handler(server, &root);
-    httpd_register_uri_handler(server, &save);
+    if (event_id == IP_EVENT_STA_GOT_IP) {
+        ESP_LOGI(TAG, "WiFi connected, starting web server...");
+        start_webserver();
+    }
 }
 
 /* ================= MAIN ================= */
@@ -170,8 +205,16 @@ void app_main(void)
     esp_netif_init();
     esp_event_loop_create_default();
 
-    char ssid[32] = {0};
-    char pass[64] = {0};
+    // Register event handler
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_register(IP_EVENT,
+                                        IP_EVENT_STA_GOT_IP,
+                                        &on_ip_event,
+                                        NULL,
+                                        &instance_any_id);
+
+    char ssid[32];
+    char pass[64];
 
     if (load_wifi_credentials(ssid, pass))
     {
@@ -182,6 +225,5 @@ void app_main(void)
     {
         ESP_LOGI(TAG, "No WiFi found → starting provisioning");
         wifi_init_ap();
-        start_server();
     }
 }
