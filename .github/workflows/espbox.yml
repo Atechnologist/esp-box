@@ -19,7 +19,6 @@ jobs:
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - name: Build firmware
-        shell: bash
         run: |
           cd examples/esp-box/firmware
           . $IDF_PATH/export.sh
@@ -27,19 +26,11 @@ jobs:
           idf.py build
 
       - name: Debug build output
-        shell: bash
         run: |
-          echo "==== ROOT ===="
-          ls -la
-
-          echo "==== FIRMWARE ===="
-          ls -la examples/esp-box/firmware
-
-          echo "==== BUILD ===="
+          echo "==== BUILD FILES ===="
           ls -la examples/esp-box/firmware/build
 
       - name: Create Web Flash manifest
-        shell: bash
         run: |
           cd examples/esp-box/firmware/build
 
@@ -47,22 +38,20 @@ jobs:
 
           echo "Detected firmware: $BIN_NAME"
 
-          cat <<EOF > manifest.json
-{
-  "name": "ESP-BOX Hub",
-  "version": "2.0",
-  "builds": [
-    {
-      "chipFamily": "ESP32-S3",
-      "parts": [
-        { "path": "bootloader/bootloader.bin", "offset": 0 },
-        { "path": "partition_table/partition-table.bin", "offset": 32768 },
-        { "path": "$BIN_NAME", "offset": 65536 }
-      ]
-    }
-  ]
-}
-EOF
+          printf "{\n" > manifest.json
+          printf "  \"name\": \"ESP-BOX Hub\",\n" >> manifest.json
+          printf "  \"version\": \"2.0\",\n" >> manifest.json
+          printf "  \"builds\": [\n" >> manifest.json
+          printf "    {\n" >> manifest.json
+          printf "      \"chipFamily\": \"ESP32-S3\",\n" >> manifest.json
+          printf "      \"parts\": [\n" >> manifest.json
+          printf "        { \"path\": \"bootloader/bootloader.bin\", \"offset\": 0 },\n" >> manifest.json
+          printf "        { \"path\": \"partition_table/partition-table.bin\", \"offset\": 32768 },\n" >> manifest.json
+          printf "        { \"path\": \"%s\", \"offset\": 65536 }\n" "$BIN_NAME" >> manifest.json
+          printf "      ]\n" >> manifest.json
+          printf "    }\n" >> manifest.json
+          printf "  ]\n" >> manifest.json
+          printf "}\n" >> manifest.json
 
       - name: Upload firmware bundle
         uses: actions/upload-artifact@v4
