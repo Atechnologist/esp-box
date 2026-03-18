@@ -19,14 +19,12 @@ jobs:
           esp_idf_version: v5.1
 
       - name: Build firmware
-        run: |
-          cd examples/esp-box/firmware
-          idf.py build
+        working-directory: examples/esp-box/firmware
+        run: idf.py build
 
       - name: Prepare firmware artifacts
+        working-directory: examples/esp-box/firmware/build
         run: |
-          cd examples/esp-box/firmware/build
-
           BIN_NAME=$(ls *.bin | grep -v bootloader | grep -v partition | head -n 1)
           echo "Detected firmware: $BIN_NAME"
 
