@@ -1,62 +1,28 @@
-name: Build ESP-BOX Firmware
+name: ESP-BOX HUB CI
 
 on:
   push:
-    branches: ["main"]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    env:
-      IDF_PROJECT_PATH: examples/esp-box/firmware
+    container:
+      image: espressif/idf:release-v5.1
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup ESP-IDF
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          esp_idf_version: v5.1
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - name: Debug paths
-        run: |
-          echo "==== ROOT ===="
-          pwd
-          ls -R
-
-          echo "==== TARGET DIR ===="
-          ls examples/esp-box/firmware || echo "❌ NOT FOUND"
-
-      # 🚀 THIS is the critical fix
       - name: Build firmware
         run: |
-          echo "Using project path: $IDF_PROJECT_PATH"
-          idf.py -C $IDF_PROJECT_PATH build
-
-      - name: Prepare manifest
-        run: |
-          BUILD_DIR=$IDF_PROJECT_PATH/build
-          cd $BUILD_DIR
-
-          BIN_NAME=$(ls *.bin | grep -v bootloader | grep -v partition | head -n 1)
-
-          echo "{" > manifest.json
-          echo "  \"name\": \"ESP-BOX Hub\"," >> manifest.json
-          echo "  \"version\": \"1.0\"," >> manifest.json
-          echo "  \"builds\": [" >> manifest.json
-          echo "    {" >> manifest.json
-          echo "      \"chipFamily\": \"ESP32-S3\"," >> manifest.json
-          echo "      \"parts\": [" >> manifest.json
-          echo "        { \"path\": \"bootloader/bootloader.bin\", \"offset\": 0 }," >> manifest.json
-          echo "        { \"path\": \"partition_table/partition-table.bin\", \"offset\": 32768 }," >> manifest.json
-          echo "        { \"path\": \"$BIN_NAME\", \"offset\": 65536 }" >> manifest.json
-          echo "      ]" >> manifest.json
-          echo "    }" >> manifest.json
-          echo "  ]" >> manifest.json
-          echo "}" >> manifest.json
+          cd examples/esp-box/firmware
+          . $IDF_PATH/export.sh
+          idf.py set-target esp32s3
+          idf.py build
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
@@ -66,4 +32,3 @@ jobs:
             examples/esp-box/firmware/build/*.bin
             examples/esp-box/firmware/build/bootloader/*.bin
             examples/esp-box/firmware/build/partition_table/*.bin
-            examples/esp-box/firmware/build/manifest.json
