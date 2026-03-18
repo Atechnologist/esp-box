@@ -1,64 +1,56 @@
-name: ESP-BOX HUB CI
+name: Build ESP-BOX Firmware
 
 on:
   push:
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    container:
-      image: espressif/idf:release-v5.1
-
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Fix git safe directory
-        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: Setup ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.1
 
       - name: Build firmware
         run: |
           cd examples/esp-box/firmware
-          . $IDF_PATH/export.sh
-          idf.py set-target esp32s3
           idf.py build
 
-      - name: Debug build output
-        run: |
-          echo "==== BUILD FILES ===="
-          ls -la examples/esp-box/firmware/build
-
-      - name: Create Web Flash manifest
+      - name: Prepare firmware artifacts
         run: |
           cd examples/esp-box/firmware/build
 
           BIN_NAME=$(ls *.bin | grep -v bootloader | grep -v partition | head -n 1)
-
           echo "Detected firmware: $BIN_NAME"
 
-          printf "{\n" > manifest.json
-          printf "  \"name\": \"ESP-BOX Hub\",\n" >> manifest.json
-          printf "  \"version\": \"2.0\",\n" >> manifest.json
-          printf "  \"builds\": [\n" >> manifest.json
-          printf "    {\n" >> manifest.json
-          printf "      \"chipFamily\": \"ESP32-S3\",\n" >> manifest.json
-          printf "      \"parts\": [\n" >> manifest.json
-          printf "        { \"path\": \"bootloader/bootloader.bin\", \"offset\": 0 },\n" >> manifest.json
-          printf "        { \"path\": \"partition_table/partition-table.bin\", \"offset\": 32768 },\n" >> manifest.json
-          printf "        { \"path\": \"%s\", \"offset\": 65536 }\n" "$BIN_NAME" >> manifest.json
-          printf "      ]\n" >> manifest.json
-          printf "    }\n" >> manifest.json
-          printf "  ]\n" >> manifest.json
-          printf "}\n" >> manifest.json
+          echo "{" > manifest.json
+          echo "  \"name\": \"ESP-BOX Hub\"," >> manifest.json
+          echo "  \"version\": \"1.0\"," >> manifest.json
+          echo "  \"builds\": [" >> manifest.json
+          echo "    {" >> manifest.json
+          echo "      \"chipFamily\": \"ESP32-S3\"," >> manifest.json
+          echo "      \"parts\": [" >> manifest.json
+          echo "        { \"path\": \"bootloader/bootloader.bin\", \"offset\": 0 }," >> manifest.json
+          echo "        { \"path\": \"partition_table/partition-table.bin\", \"offset\": 32768 }," >> manifest.json
+          echo "        { \"path\": \"$BIN_NAME\", \"offset\": 65536 }" >> manifest.json
+          echo "      ]" >> manifest.json
+          echo "    }" >> manifest.json
+          echo "  ]" >> manifest.json
+          echo "}" >> manifest.json
 
-      - name: Upload firmware bundle
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: espbox-webflash
+          name: espbox-firmware
           path: |
-            examples/esp-box/firmware/build/bootloader/bootloader.bin
-            examples/esp-box/firmware/build/partition_table/partition-table.bin
             examples/esp-box/firmware/build/*.bin
+            examples/esp-box/firmware/build/bootloader/*.bin
+            examples/esp-box/firmware/build/partition_table/*.bin
             examples/esp-box/firmware/build/manifest.json
