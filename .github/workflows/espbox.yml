@@ -18,26 +18,44 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
+      # 🔧 BUILD
       - name: Build firmware
         shell: bash
         run: |
           cd examples/esp-box/firmware
-          . $IDF_PATH/export.sh   # Load ESP-IDF environment
+          . $IDF_PATH/export.sh
           idf.py set-target esp32s3
           idf.py build
 
-      - name: Create web flash manifest
+      # 🔍 DEBUG (very useful)
+      - name: List build output
+        shell: bash
+        run: |
+          echo "==== ROOT ===="
+          ls -la
+
+          echo "==== FIRMWARE ===="
+          ls -la examples/esp-box/firmware
+
+          echo "==== BUILD ===="
+          ls -la examples/esp-box/firmware/build
+
+      # 📦 CREATE MANIFEST (AUTO-DETECT BIN)
+      - name: Create Web Flash manifest
         shell: bash
         run: |
           cd examples/esp-box/firmware/build
-          printf '{\n  "name": "ESP-BOX Hub",\n  "version": "1.0",\n  "builds": [\n    {\n      "chipFamily": "ESP32-S3",\n      "parts": [\n        { "path": "bootloader/bootloader.bin", "offset": 0 },\n        { "path": "partition_table/partition-table.bin", "offset": 32768 },\n        { "path": "esp_box_hub.bin", "offset": 65536 }\n      ]\n    }\n  ]\n}\n' > manifest.json
 
-      - name: Upload firmware bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: espbox-webflash
-          path: |
-            examples/esp-box/firmware/build/bootloader/bootloader.bin
-            examples/esp-box/firmware/build/partition_table/partition-table.bin
-            examples/esp-box/firmware/build/esp_box_hub.bin
-            examples/esp-box/firmware/build/manifest.json
+          BIN_NAME=$(ls *.bin | grep -v bootloader | grep -v partition | head -n 1)
+
+          echo "Detected firmware: $BIN_NAME"
+
+          printf '{
+            "name": "ESP-BOX Hub",
+            "version": "2.0",
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader/bootloader.bin", "offset": 0 },
+                  { "path": "partition_table/partition-table.bin
