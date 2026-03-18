@@ -9,6 +9,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      IDF_PROJECT_PATH: examples/esp-box/firmware
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,45 +21,27 @@ jobs:
         with:
           esp_idf_version: v5.1
 
-      # 🔍 DEBUG (you can remove later)
-      - name: Debug project structure
+      - name: Debug paths
         run: |
           echo "==== ROOT ===="
           pwd
           ls -R
 
-      # ✅ FORCE correct directory (this is the real fix)
+          echo "==== TARGET DIR ===="
+          ls examples/esp-box/firmware || echo "❌ NOT FOUND"
+
+      # 🚀 THIS is the critical fix
       - name: Build firmware
         run: |
-          echo "==== NAVIGATING ===="
-          
-          if [ -d "examples/esp-box/firmware" ]; then
-            cd examples/esp-box/firmware
-          elif [ -d "esp-box/examples/esp-box/firmware" ]; then
-            cd esp-box/examples/esp-box/firmware
-          else
-            echo "❌ Firmware directory not found"
-            exit 1
-          fi
-
-          echo "==== IN PROJECT DIR ===="
-          pwd
-          ls
-
-          idf.py build
+          echo "Using project path: $IDF_PROJECT_PATH"
+          idf.py -C $IDF_PROJECT_PATH build
 
       - name: Prepare manifest
         run: |
-          if [ -d "examples/esp-box/firmware/build" ]; then
-            BUILD_DIR="examples/esp-box/firmware/build"
-          else
-            BUILD_DIR="esp-box/examples/esp-box/firmware/build"
-          fi
-
+          BUILD_DIR=$IDF_PROJECT_PATH/build
           cd $BUILD_DIR
 
           BIN_NAME=$(ls *.bin | grep -v bootloader | grep -v partition | head -n 1)
-          echo "Firmware detected: $BIN_NAME"
 
           echo "{" > manifest.json
           echo "  \"name\": \"ESP-BOX Hub\"," >> manifest.json
@@ -82,7 +67,3 @@ jobs:
             examples/esp-box/firmware/build/bootloader/*.bin
             examples/esp-box/firmware/build/partition_table/*.bin
             examples/esp-box/firmware/build/manifest.json
-            esp-box/examples/esp-box/firmware/build/*.bin
-            esp-box/examples/esp-box/firmware/build/bootloader/*.bin
-            esp-box/examples/esp-box/firmware/build/partition_table/*.bin
-            esp-box/examples/esp-box/firmware/build/manifest.json
