@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <string.h>
-#include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -10,11 +9,20 @@
 #include "nvs_flash.h"
 #include "esp_http_server.h"
 #include "driver/gpio.h"
+#include "nvs.h"
 
 static const char *TAG = "ESP_BOX";
 
-/* ================= NVS STORAGE ================= */
+/* Storage namespace for NVS */
 #define STORAGE_NAMESPACE "wifi"
+
+/* GPIO */
+#define LED_GPIO 2
+
+/* Web server handle */
+httpd_handle_t server = NULL;
+
+/* ================= NVS ================= */
 
 void save_wifi_credentials(const char *ssid, const char *pass)
 {
@@ -24,7 +32,6 @@ void save_wifi_credentials(const char *ssid, const char *pass)
         nvs_set_str(nvs, "pass", pass);
         nvs_commit(nvs);
         nvs_close(nvs);
-        ESP_LOGI(TAG, "Saved WiFi credentials: %s", ssid);
     }
 }
 
@@ -48,8 +55,7 @@ bool load_wifi_credentials(char *ssid, char *pass)
     return true;
 }
 
-/* ================= WEB SERVER HANDLERS ================= */
-httpd_handle_t server = NULL;
+/* ================= PROVISIONING WEB ================= */
 
 esp_err_t root_handler(httpd_req_t *req)
 {
@@ -71,25 +77,29 @@ esp_err_t save_handler(httpd_req_t *req)
     char buf[128];
     httpd_req_get_url_query_str(req, buf, sizeof(buf));
 
-    char ssid[32] = {0};
-    char pass[64] = {0};
+    char ssid[32], pass[64];
     sscanf(buf, "ssid=%31[^&]&pass=%63s", ssid, pass);
+
+    ESP_LOGI(TAG, "Saving SSID: %s", ssid);
 
     save_wifi_credentials(ssid, pass);
 
     httpd_resp_send(req, "Saved! Rebooting...", HTTPD_RESP_USE_STRLEN);
+
     vTaskDelay(pdMS_TO_TICKS(2000));
     esp_restart();
+
     return ESP_OK;
 }
 
 /* ================= WIFI ================= */
+
 static void wifi_init_ap(void)
 {
     esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    esp_wifi_init(&cfg);
 
     wifi_config_t ap_config = {
         .ap = {
@@ -100,9 +110,9 @@ static void wifi_init_ap(void)
         },
     };
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_set_mode(WIFI_MODE_AP);
+    esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    esp_wifi_start();
 
     ESP_LOGI(TAG, "Started AP: ESP-BOX-SETUP");
 }
@@ -112,69 +122,67 @@ static void wifi_init_sta(const char *ssid, const char *pass)
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    esp_wifi_init(&cfg);
 
     wifi_config_t wifi_config = {0};
-    strncpy((char*)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid));
-    strncpy((char*)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password));
+    strcpy((char*)wifi_config.sta.ssid, ssid);
+    strcpy((char*)wifi_config.sta.password, pass);
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_connect());
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    esp_wifi_start();
+    esp_wifi_connect();
 
-    ESP_LOGI(TAG, "Connecting to WiFi: %s", ssid);
-
-    // Wait for IP
-    tcpip_adapter_ip_info_t ip_info;
-    while (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info) != ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-
-    const char *ip_str = ip4addr_ntoa(&ip_info.ip);
-    ESP_LOGI(TAG, "Connected, IP: %s", ip_str);
+    ESP_LOGI(TAG, "Connecting to %s", ssid);
 }
 
 /* ================= WEB SERVER ================= */
+
 void start_server()
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_start(&server, &config);
 
-    httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = root_handler };
-    httpd_uri_t save = { .uri = "/save", .method = HTTP_GET, .handler = save_handler };
+    httpd_uri_t root = {
+        .uri = "/",
+        .method = HTTP_GET,
+        .handler = root_handler
+    };
+
+    httpd_uri_t save = {
+        .uri = "/save",
+        .method = HTTP_GET,
+        .handler = save_handler
+    };
 
     httpd_register_uri_handler(server, &root);
     httpd_register_uri_handler(server, &save);
 }
 
 /* ================= MAIN ================= */
-#define LED_GPIO 2
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "===== ESP-BOX FIRMWARE START =====");
 
-    // Initialize NVS
-    ESP_ERROR_CHECK(nvs_flash_init());
+    nvs_flash_init();
+    esp_netif_init();
+    esp_event_loop_create_default();
 
-    // Initialize TCP/IP stack
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    char ssid[32];
+    char pass[64];
 
-    // Initialize LED GPIO
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
 
-    // Wi-Fi credentials
-    char ssid[32] = {0};
-    char pass[64] = {0};
-
-    if (load_wifi_credentials(ssid, pass)) {
-        ESP_LOGI(TAG, "Found saved WiFi credentials, connecting...");
+    if (load_wifi_credentials(ssid, pass))
+    {
+        ESP_LOGI(TAG, "Found saved WiFi, connecting...");
         wifi_init_sta(ssid, pass);
-    } else {
-        ESP_LOGI(TAG, "No saved WiFi, starting AP provisioning...");
+    }
+    else
+    {
+        ESP_LOGI(TAG, "No WiFi found, starting provisioning...");
         wifi_init_ap();
         start_server();
     }
