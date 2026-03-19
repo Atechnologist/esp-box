@@ -11,19 +11,17 @@
 #include "nvs.h"
 #include "driver/gpio.h"
 
-static const char *TAG = "ESP_BOX";
-
-#define STORAGE_NAMESPACE "wifi"
 #define LED_GPIO 2
 
+static const char *TAG = "ESP_BOX";
 httpd_handle_t server = NULL;
 
 /* ================= NVS ================= */
 
-void save_wifi_credentials(const char *ssid, const char *pass)
+void save_wifi(const char *ssid, const char *pass)
 {
     nvs_handle_t nvs;
-    if (nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+    if (nvs_open("wifi", NVS_READWRITE, &nvs) == ESP_OK) {
         nvs_set_str(nvs, "ssid", ssid);
         nvs_set_str(nvs, "pass", pass);
         nvs_commit(nvs);
@@ -31,13 +29,13 @@ void save_wifi_credentials(const char *ssid, const char *pass)
     }
 }
 
-bool load_wifi_credentials(char *ssid, char *pass)
+bool load_wifi(char *ssid, char *pass)
 {
     nvs_handle_t nvs;
     size_t ssid_len = 33;
     size_t pass_len = 65;
 
-    if (nvs_open(STORAGE_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK)
+    if (nvs_open("wifi", NVS_READONLY, &nvs) != ESP_OK)
         return false;
 
     if (nvs_get_str(nvs, "ssid", ssid, &ssid_len) != ESP_OK ||
@@ -57,10 +55,10 @@ esp_err_t root_handler(httpd_req_t *req)
 {
     const char *html =
         "<html><body>"
-        "<h2>ESP-BOX Setup</h2>"
+        "<h2>ESP-BOX</h2>"
         "<form action=\"/save\">"
-        "SSID:<br><input name=\"ssid\"><br>"
-        "Password:<br><input name=\"pass\" type=\"password\"><br><br>"
+        "SSID:<input name=\"ssid\"><br>"
+        "PASS:<input name=\"pass\"><br>"
         "<input type=\"submit\" value=\"Save\">"
         "</form>"
         "<br><a href=\"/on\">LED ON</a>"
@@ -83,7 +81,7 @@ esp_err_t save_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "Saving WiFi: %s", ssid);
 
-    save_wifi_credentials(ssid, pass);
+    save_wifi(ssid, pass);
 
     httpd_resp_send(req, "Saved! Rebooting...", HTTPD_RESP_USE_STRLEN);
 
@@ -109,7 +107,7 @@ esp_err_t led_off_handler(httpd_req_t *req)
 
 void start_webserver()
 {
-    if (server != NULL) return; // prevent double start
+    if (server != NULL) return;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_start(&server, &config);
@@ -127,50 +125,37 @@ void start_webserver()
     ESP_LOGI(TAG, "Web server started");
 }
 
-/* ================= WIFI EVENTS ================= */
+/* ================= WIFI ================= */
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
-    {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     }
-    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
-    {
-        ESP_LOGI(TAG, "Retrying WiFi...");
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGI(TAG, "Retrying...");
         esp_wifi_connect();
     }
-    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
-    {
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-
-        ESP_LOGI(TAG, "Connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
-
-        start_webserver();  // 🔥 correct place
+        ESP_LOGI(TAG, "IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        start_webserver();  // ✅ always start here
     }
 }
 
-/* ================= WIFI ================= */
-
-void wifi_init_sta(const char *ssid, const char *pass)
+void wifi_sta(const char *ssid, const char *pass)
 {
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
 
-    esp_event_handler_instance_register(WIFI_EVENT,
-        ESP_EVENT_ANY_ID,
-        &wifi_event_handler,
-        NULL,
-        NULL);
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+        &wifi_event_handler, NULL, NULL);
 
-    esp_event_handler_instance_register(IP_EVENT,
-        IP_EVENT_STA_GOT_IP,
-        &wifi_event_handler,
-        NULL,
-        NULL);
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+        &wifi_event_handler, NULL, NULL);
 
     wifi_config_t wifi_config = {0};
     strcpy((char*)wifi_config.sta.ssid, ssid);
@@ -181,39 +166,11 @@ void wifi_init_sta(const char *ssid, const char *pass)
     esp_wifi_start();
 }
 
-void wifi_init_ap(void)
-{
-    esp_netif_create_default_wifi_ap();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&cfg);
-
-    wifi_config_t ap_config = {
-        .ap = {
-            .ssid = "ESP-BOX-SETUP",
-            .password = "12345678",
-            .max_connection = 4,
-            .authmode = WIFI_AUTH_WPA_WPA2_PSK
-        }
-    };
-
-    esp_wifi_set_mode(WIFI_MODE_AP);
-    esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-    esp_wifi_start();
-
-    ESP_LOGI(TAG, "AP Mode started → Connect to 192.168.4.1");
-
-    start_webserver();
-}
-
 /* ================= MAIN ================= */
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "ESP-BOX START");
-
-    // 🔥 IMPORTANT: Use this ONCE if WiFi not loading
-    // nvs_flash_erase();
+    ESP_LOGI(TAG, "ESP START");
 
     nvs_flash_init();
     esp_netif_init();
@@ -225,14 +182,15 @@ void app_main(void)
     char ssid[32] = {0};
     char pass[64] = {0};
 
-    if (load_wifi_credentials(ssid, pass))
+    if (load_wifi(ssid, pass))
     {
-        ESP_LOGI(TAG, "Connecting to saved WiFi...");
-        wifi_init_sta(ssid, pass);
+        ESP_LOGI(TAG, "Using saved WiFi");
+        wifi_sta(ssid, pass);
     }
     else
     {
-        ESP_LOGI(TAG, "No WiFi → starting AP provisioning");
-        wifi_init_ap();
+        ESP_LOGI(TAG, "No WiFi → using default (edit in code)");
+
+        wifi_sta("YOUR_WIFI", "YOUR_PASSWORD"); // fallback
     }
 }
