@@ -23,18 +23,19 @@ httpd_handle_t server = NULL;
 void save_wifi_credentials(const char *ssid, const char *pass)
 {
     nvs_handle_t nvs;
-    nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &nvs);
-    nvs_set_str(nvs, "ssid", ssid);
-    nvs_set_str(nvs, "pass", pass);
-    nvs_commit(nvs);
-    nvs_close(nvs);
+    if (nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_str(nvs, "ssid", ssid);
+        nvs_set_str(nvs, "pass", pass);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
 }
 
 bool load_wifi_credentials(char *ssid, char *pass)
 {
     nvs_handle_t nvs;
-    size_t ssid_len = 32;
-    size_t pass_len = 64;
+    size_t ssid_len = 33;
+    size_t pass_len = 65;
 
     if (nvs_open(STORAGE_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK)
         return false;
@@ -72,10 +73,12 @@ esp_err_t root_handler(httpd_req_t *req)
 
 esp_err_t save_handler(httpd_req_t *req)
 {
-    char buf[128];
+    char buf[128] = {0};
     httpd_req_get_url_query_str(req, buf, sizeof(buf));
 
-    char ssid[32], pass[64];
+    char ssid[32] = {0};
+    char pass[64] = {0};
+
     sscanf(buf, "ssid=%31[^&]&pass=%63s", ssid, pass);
 
     ESP_LOGI(TAG, "Saving WiFi: %s", ssid);
@@ -106,32 +109,15 @@ esp_err_t led_off_handler(httpd_req_t *req)
 
 void start_webserver()
 {
+    if (server != NULL) return; // prevent double start
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_start(&server, &config);
 
-    httpd_uri_t root = {
-        .uri = "/",
-        .method = HTTP_GET,
-        .handler = root_handler
-    };
-
-    httpd_uri_t save = {
-        .uri = "/save",
-        .method = HTTP_GET,
-        .handler = save_handler
-    };
-
-    httpd_uri_t on = {
-        .uri = "/on",
-        .method = HTTP_GET,
-        .handler = led_on_handler
-    };
-
-    httpd_uri_t off = {
-        .uri = "/off",
-        .method = HTTP_GET,
-        .handler = led_off_handler
-    };
+    httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
+    httpd_uri_t save = {.uri="/save", .method=HTTP_GET, .handler=save_handler};
+    httpd_uri_t on = {.uri="/on", .method=HTTP_GET, .handler=led_on_handler};
+    httpd_uri_t off = {.uri="/off", .method=HTTP_GET, .handler=led_off_handler};
 
     httpd_register_uri_handler(server, &root);
     httpd_register_uri_handler(server, &save);
@@ -141,20 +127,31 @@ void start_webserver()
     ESP_LOGI(TAG, "Web server started");
 }
 
-/* ================= WIFI ================= */
+/* ================= WIFI EVENTS ================= */
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data)
 {
-    if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
+        esp_wifi_connect();
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        ESP_LOGI(TAG, "Retrying WiFi...");
+        esp_wifi_connect();
+    }
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
 
         ESP_LOGI(TAG, "Connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
-        start_webserver();
+        start_webserver();  // 🔥 correct place
     }
 }
+
+/* ================= WIFI ================= */
 
 void wifi_init_sta(const char *ssid, const char *pass)
 {
@@ -162,6 +159,12 @@ void wifi_init_sta(const char *ssid, const char *pass)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
+
+    esp_event_handler_instance_register(WIFI_EVENT,
+        ESP_EVENT_ANY_ID,
+        &wifi_event_handler,
+        NULL,
+        NULL);
 
     esp_event_handler_instance_register(IP_EVENT,
         IP_EVENT_STA_GOT_IP,
@@ -176,7 +179,6 @@ void wifi_init_sta(const char *ssid, const char *pass)
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
-    esp_wifi_connect();
 }
 
 void wifi_init_ap(void)
@@ -199,7 +201,8 @@ void wifi_init_ap(void)
     esp_wifi_set_config(WIFI_IF_AP, &ap_config);
     esp_wifi_start();
 
-    ESP_LOGI(TAG, "AP Mode started");
+    ESP_LOGI(TAG, "AP Mode started → Connect to 192.168.4.1");
+
     start_webserver();
 }
 
@@ -209,6 +212,9 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "ESP-BOX START");
 
+    // 🔥 IMPORTANT: Use this ONCE if WiFi not loading
+    // nvs_flash_erase();
+
     nvs_flash_init();
     esp_netif_init();
     esp_event_loop_create_default();
@@ -216,8 +222,8 @@ void app_main(void)
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
 
-    char ssid[32];
-    char pass[64];
+    char ssid[32] = {0};
+    char pass[64] = {0};
 
     if (load_wifi_credentials(ssid, pass))
     {
@@ -226,7 +232,7 @@ void app_main(void)
     }
     else
     {
-        ESP_LOGI(TAG, "No WiFi → starting AP");
+        ESP_LOGI(TAG, "No WiFi → starting AP provisioning");
         wifi_init_ap();
     }
 }
