@@ -7,6 +7,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     container:
       image: espressif/idf:release-v5.1
 
@@ -16,6 +17,13 @@ jobs:
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      # 🔥 ADD THIS (critical fix)
+      - name: Get ESP-BOX BSP (local component)
+        run: |
+          cd examples/esp-box/firmware
+          mkdir -p components
+          git clone --depth 1 https://github.com/espressif/esp-box.git components/esp-box
 
       - name: Build firmware
         run: |
