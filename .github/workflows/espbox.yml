@@ -20,7 +20,7 @@ jobs:
       - name: Build firmware
         run: |
           cd examples/esp-box/firmware
-          source $IDF_PATH/export.sh
+          . $IDF_PATH/export.sh
           idf.py set-target esp32s3
           idf.py build
 
