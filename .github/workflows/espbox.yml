@@ -23,10 +23,10 @@ jobs:
           cd examples/esp-box/firmware
           # Source ESP-IDF environment
           . $IDF_PATH/export.sh
-          # Ensure dependencies are installed
-          idf.py add-dependency lvgl/lvgl@9.5.0
-          idf.py add-dependency espressif/esp_lvgl_port@2.7.2
-          # Set the target and build
+          # Add dependencies (without version)
+          idf.py add-dependency lvgl/lvgl@*
+          idf.py add-dependency espressif/esp_lvgl_port@*
+          # Set target and build
           idf.py set-target esp32s3
           idf.py build
 
