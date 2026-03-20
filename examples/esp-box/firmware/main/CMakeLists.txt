@@ -7,6 +7,5 @@ idf_component_register(
         nvs_flash 
         driver 
         esp_lcd 
-        lvgl 
-        esp_box
+        lvgl
 )
