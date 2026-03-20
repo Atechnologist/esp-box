@@ -15,9 +15,9 @@
 #include "esp_http_server.h"
 #include "driver/gpio.h"
 
-/* ESP-BOX BSP */
-#include "bsp/esp_box.h"
-#include "bsp/esp_box_lvgl.h"
+/* ESP-BOX */
+#include "esp_box.h"
+#include "esp_box_lvgl.h"
 #include "lvgl.h"
 
 #define MAX_APS 20
