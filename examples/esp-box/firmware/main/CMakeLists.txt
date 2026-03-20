@@ -9,4 +9,5 @@ idf_component_register(
         esp_lcd 
         lvgl 
         esp_lvgl_port
+        espressif__esp-box
 )
