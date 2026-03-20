@@ -16,7 +16,7 @@
 #include "driver/gpio.h"
 
 /* ESP-BOX */
-##include "bsp/esp_box.h"
+#include "bsp/esp_box.h"
 #include "bsp/esp_box_lvgl.h"
 
 #define MAX_APS 20
