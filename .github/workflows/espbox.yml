@@ -17,17 +17,16 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - name: Set up ESP-IDF environment
-        run: . $IDF_PATH/export.sh
-
-      - name: Add LVGL dependency
-        run: |
-          cd examples/esp-box/firmware
-          idf.py add-dependency lvgl@^9.5.0
-
       - name: Build firmware
+        shell: bash
         run: |
           cd examples/esp-box/firmware
+          # Source ESP-IDF environment
+          . $IDF_PATH/export.sh
+          # Ensure dependencies are installed
+          idf.py add-dependency lvgl/lvgl@9.5.0
+          idf.py add-dependency espressif/esp_lvgl_port@2.7.2
+          # Set the target and build
           idf.py set-target esp32s3
           idf.py build
 
