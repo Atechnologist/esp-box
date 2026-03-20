@@ -7,39 +7,30 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     container:
       image: espressif/idf:release-v5.1
 
     steps:
-      # Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Fix git safe directory
       - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      # Build firmware
       - name: Build firmware
         shell: bash
         run: |
           cd examples/esp-box/firmware
-          
-          # Source ESP-IDF environment
+          # Export ESP-IDF environment
           . $IDF_PATH/export.sh
-          
-          # Add dependencies (no @* version specifier)
-          idf.py add-dependency lvgl/lvgl
-          idf.py add-dependency espressif/esp_lvgl_port
-          idf.py add-dependency espressif/esp_box
-          
-          # Set target ESP32-S3
+          # Set target to ESP32-S3
           idf.py set-target esp32s3
-          
-          # Build project
+          # Clean previous builds
+          idf.py fullclean
+          # Build firmware
           idf.py build
 
-      # Upload firmware binaries
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
