@@ -18,6 +18,9 @@
 /* ESP-BOX */
 #include "bsp/esp_box.h"
 #include "bsp/esp_box_lvgl.h"
+#include "bsp/esp_box.h"
+#include "bsp/esp_box_lvgl.h"
+#include "lvgl.h"
 
 #define MAX_APS 20
 
