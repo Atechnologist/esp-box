@@ -18,12 +18,17 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      
       - name: Build firmware
         shell: bash
         run: |
           cd examples/esp-box/firmware
+          
+          # Clean problematic components
+          rm -rf managed_components
+          rm -rf build
+          
           . $IDF_PATH/export.sh
+          
           idf.py set-target esp32s3
           idf.py build
 
