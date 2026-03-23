@@ -18,14 +18,7 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      # 🔥 FIX: Get ONLY BSP correctly
-      - name: Get ESP-BOX BSP
-        run: |
-          cd examples/esp-box/firmware
-          mkdir -p components
-          git clone --depth 1 https://github.com/espressif/esp-box.git esp-box-repo
-          cp -r esp-box-repo/components/bsp components/
-
+      
       - name: Build firmware
         shell: bash
         run: |
