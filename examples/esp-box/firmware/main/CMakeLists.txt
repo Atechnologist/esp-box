@@ -6,6 +6,7 @@ idf_component_register(
         esp_http_server 
         nvs_flash 
         driver 
-        esp_lcd 
+        esp_lcd
         lvgl
+        esp_lvgl_port
 )
