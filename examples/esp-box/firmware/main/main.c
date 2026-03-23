@@ -8,7 +8,6 @@
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "driver/gpio.h"
-#include "bsp/esp_box.h"
 
 #define WIFI_SSID "YOUR_WIFI"
 #define WIFI_PASS "YOUR_PASSWORD"
