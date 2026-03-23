@@ -62,11 +62,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT) {
 
         if (event_id == WIFI_EVENT_STA_START) {
+            ESP_LOGI(TAG, "Connecting...");
             esp_wifi_connect();
         }
 
         else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-            ESP_LOGI(TAG, "Retrying WiFi...");
+            ESP_LOGW(TAG, "Retrying WiFi...");
             esp_wifi_connect();
         }
 
@@ -82,17 +83,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-/* ---------------- WIFI INIT ---------------- */
+/* ---------------- WIFI BASE INIT ---------------- */
 
-void wifi_init()
+void wifi_init_base()
 {
     wifi_event_group = xEventGroupCreate();
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    esp_netif_create_default_wifi_ap();
-    esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -104,10 +102,12 @@ void wifi_init()
         IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 }
 
-/* ---------------- MODES ---------------- */
+/* ---------------- START AP ---------------- */
 
 void start_ap()
 {
+    esp_netif_create_default_wifi_ap();
+
     wifi_config_t ap_config = {
         .ap = {
             .ssid = WIFI_AP_SSID,
@@ -125,8 +125,12 @@ void start_ap()
     ESP_LOGI(TAG, "AP MODE: %s", WIFI_AP_SSID);
 }
 
+/* ---------------- START STA ---------------- */
+
 void start_sta(char *ssid, char *pass)
 {
+    esp_netif_create_default_wifi_sta();
+
     wifi_config_t sta_config = {0};
 
     strcpy((char *)sta_config.sta.ssid, ssid);
@@ -139,14 +143,14 @@ void start_sta(char *ssid, char *pass)
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-/* ---------------- WEB ---------------- */
+/* ---------------- WEB SERVER ---------------- */
 
 esp_err_t root_handler(httpd_req_t *req)
 {
     const char *html =
         "<h1>ESP BOX</h1>"
-        "<a href='/on'>ON</a><br>"
-        "<a href='/off'>OFF</a>";
+        "<a href='/on'>LED ON</a><br>"
+        "<a href='/off'>LED OFF</a>";
 
     httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
@@ -155,14 +159,14 @@ esp_err_t root_handler(httpd_req_t *req)
 esp_err_t on_handler(httpd_req_t *req)
 {
     gpio_set_level(LED_GPIO, 1);
-    httpd_resp_sendstr(req, "ON");
+    httpd_resp_sendstr(req, "LED ON");
     return ESP_OK;
 }
 
 esp_err_t off_handler(httpd_req_t *req)
 {
     gpio_set_level(LED_GPIO, 0);
-    httpd_resp_sendstr(req, "OFF");
+    httpd_resp_sendstr(req, "LED OFF");
     return ESP_OK;
 }
 
@@ -180,6 +184,8 @@ void start_webserver()
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &on);
         httpd_register_uri_handler(server, &off);
+
+        ESP_LOGI(TAG, "Web server started");
     }
 }
 
@@ -194,25 +200,29 @@ void app_main(void)
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
 
-    wifi_init();
+    wifi_init_base();
 
     char ssid[32] = {0};
     char pass[64] = {0};
 
     if (load_wifi(ssid, pass)) {
+
         ESP_LOGI(TAG, "Connecting to saved WiFi...");
         start_sta(ssid, pass);
 
-        xEventGroupWaitBits(wifi_event_group,
-                            WIFI_CONNECTED_BIT,
-                            pdFALSE,
-                            pdTRUE,
-                            pdMS_TO_TICKS(10000));
+        xEventGroupWaitBits(
+            wifi_event_group,
+            WIFI_CONNECTED_BIT,
+            pdFALSE,
+            pdTRUE,
+            pdMS_TO_TICKS(10000)
+        );
 
         if (!(xEventGroupGetBits(wifi_event_group) & WIFI_CONNECTED_BIT)) {
-            ESP_LOGI(TAG, "Failed → fallback to AP");
+            ESP_LOGW(TAG, "WiFi failed → fallback AP");
             start_ap();
         }
+
     } else {
         ESP_LOGI(TAG, "No WiFi → AP mode");
         start_ap();
