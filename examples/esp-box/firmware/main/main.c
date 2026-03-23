@@ -9,7 +9,7 @@
 #include "esp_http_server.h"
 #include "driver/gpio.h"
 
-#define WIFI_SSID "glastos"
+#define WIFI_SSID "glaatos"
 #define WIFI_PASS "aatos2023"
 
 #define LED_GPIO 2
