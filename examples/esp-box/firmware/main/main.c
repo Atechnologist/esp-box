@@ -1,67 +1,133 @@
-static void wifi_init(void)
+#include <stdio.h>
+#include <string.h>
+
+#include "nvs_flash.h"
+#include "esp_log.h"
+#include "esp_event.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
+
+#include "wifi_provisioning/manager.h"
+#include "wifi_provisioning/scheme_softap.h"
+
+static const char *TAG = "ESP_BOX_PROV";
+
+/* ================= EVENT HANDLER ================= */
+static void prov_event_handler(void* arg, esp_event_base_t event_base,
+                               int32_t event_id, void* event_data)
 {
-    static bool initialized = false;
+    if (event_base == WIFI_PROV_EVENT) {
+        switch (event_id) {
 
-    if (initialized) {
-        ESP_LOGW(TAG, "WiFi already initialized");
-        return;
+        case WIFI_PROV_START:
+            ESP_LOGI(TAG, "Provisioning started");
+            break;
+
+        case WIFI_PROV_CRED_RECV: {
+            wifi_sta_config_t *wifi_sta_cfg = (wifi_sta_config_t *)event_data;
+            ESP_LOGI(TAG, "Received WiFi SSID: %s",
+                     (const char *) wifi_sta_cfg->ssid);
+            break;
+        }
+
+        case WIFI_PROV_CRED_FAIL:
+            ESP_LOGE(TAG, "Provisioning failed. Try again");
+            break;
+
+        case WIFI_PROV_CRED_SUCCESS:
+            ESP_LOGI(TAG, "Provisioning successful!");
+            break;
+
+        case WIFI_PROV_END:
+            ESP_LOGI(TAG, "Provisioning ended");
+            wifi_prov_mgr_deinit();
+            break;
+
+        default:
+            break;
+        }
     }
-    initialized = true;
 
-    /* SAFE NETIF INIT */
-    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    if (!ap_netif) esp_netif_create_default_wifi_ap();
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        ESP_LOGI(TAG, "Connecting to WiFi...");
+        esp_wifi_connect();
+    }
 
-    esp_netif_t *sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (!sta_netif) esp_netif_create_default_wifi_sta();
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGW(TAG, "Disconnected. Retrying...");
+        esp_wifi_connect();
+    }
 
+    if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
+        ESP_LOGI(TAG, "Connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+    }
+}
+
+/* ================= MAIN ================= */
+void app_main(void)
+{
+    /* Initialize NVS */
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    }
+
+    /* Init network stack */
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    /* Create default interfaces */
+    esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_ap();
+
+    /* Init WiFi */
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
+    /* Register events */
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, &prov_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &prov_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &prov_event_handler, NULL));
 
-    wifi_config_t ap_config = {
-        .ap = {
-            .ssid = "ESP-BOX-SETUP",
-            .password = "12345678",
-            .max_connection = 4,
-            .authmode = WIFI_AUTH_WPA_WPA2_PSK
-        }
+    /* Provisioning config */
+    wifi_prov_mgr_config_t config = {
+        .scheme = wifi_prov_scheme_softap,
+        .scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE
     };
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+    ESP_ERROR_CHECK(wifi_prov_mgr_init(config));
 
-    ESP_ERROR_CHECK(esp_wifi_start());
+    bool provisioned = false;
+    ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
 
-    /* ===== SAFE NVS LOAD ===== */
-    nvs_handle_t nvs;
-    char ssid[32] = {0}, pass[64] = {0};
+    if (!provisioned) {
 
-    if (nvs_open("wifi", NVS_READONLY, &nvs) == ESP_OK) {
-        size_t ssid_len = sizeof(ssid);
-        size_t pass_len = sizeof(pass);
+        ESP_LOGI(TAG, "Starting provisioning...");
 
-        if (nvs_get_str(nvs, "ssid", ssid, &ssid_len) == ESP_OK) {
-            nvs_get_str(nvs, "pass", pass, &pass_len);
+        ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
+            WIFI_PROV_SECURITY_1,
+            "abcd1234",          // Proof of possession (POP)
+            "ESP-BOX-PROV",      // AP name
+            "12345678"           // AP password
+        ));
 
-            wifi_config_t sta_config = {0};
-            strcpy((char*)sta_config.sta.ssid, ssid);
-            strcpy((char*)sta_config.sta.password, pass);
+        ESP_LOGI(TAG, "=================================");
+        ESP_LOGI(TAG, "Connect to WiFi: ESP-BOX-PROV");
+        ESP_LOGI(TAG, "Password: 12345678");
+        ESP_LOGI(TAG, "Open browser: http://192.168.4.1");
+        ESP_LOGI(TAG, "=================================");
 
-            ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+    } else {
 
-            ESP_LOGI(TAG, "Connecting to saved WiFi: %s", ssid);
+        ESP_LOGI(TAG, "Already provisioned. Connecting...");
 
-            esp_err_t err = esp_wifi_connect();
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "WiFi connect failed: %s", esp_err_to_name(err));
-            }
-        }
-        nvs_close(nvs);
+        wifi_prov_mgr_deinit();
+
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+        ESP_ERROR_CHECK(esp_wifi_start());
+
+        ESP_LOGI(TAG, "WiFi started in STA mode");
     }
-
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    wifi_scan();
 }
