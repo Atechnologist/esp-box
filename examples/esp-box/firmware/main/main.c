@@ -16,43 +16,10 @@
 
 #define LED_GPIO 2
 
-#define NVS_NAMESPACE "wifi"
-#define KEY_SSID "ssid"
-#define KEY_PASS "pass"
-
 static EventGroupHandle_t wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
 
-/* ---------------- NVS ---------------- */
-
-bool load_wifi(char *ssid, char *pass)
-{
-    nvs_handle_t nvs;
-    size_t ssid_len = 32;
-    size_t pass_len = 64;
-
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK)
-        return false;
-
-    if (nvs_get_str(nvs, KEY_SSID, ssid, &ssid_len) != ESP_OK ||
-        nvs_get_str(nvs, KEY_PASS, pass, &pass_len) != ESP_OK) {
-        nvs_close(nvs);
-        return false;
-    }
-
-    nvs_close(nvs);
-    return true;
-}
-
-void save_wifi(const char *ssid, const char *pass)
-{
-    nvs_handle_t nvs;
-    nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
-    nvs_set_str(nvs, KEY_SSID, ssid);
-    nvs_set_str(nvs, KEY_PASS, pass);
-    nvs_commit(nvs);
-    nvs_close(nvs);
-}
+static esp_netif_t *netif = NULL;
 
 /* ---------------- WIFI EVENTS ---------------- */
 
@@ -67,25 +34,25 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         }
 
         else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-            ESP_LOGW(TAG, "Retrying WiFi...");
+            ESP_LOGW(TAG, "Retry...");
             esp_wifi_connect();
         }
 
         else if (event_id == WIFI_EVENT_AP_START) {
-            ESP_LOGI(TAG, "SoftAP started");
+            ESP_LOGI(TAG, "AP Started");
         }
     }
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "IP: " IPSTR, IP2STR(&event->ip_info.ip));
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
 
-/* ---------------- WIFI BASE INIT ---------------- */
+/* ---------------- WIFI BASE ---------------- */
 
-void wifi_init_base()
+void wifi_init()
 {
     wifi_event_group = xEventGroupCreate();
 
@@ -95,18 +62,18 @@ void wifi_init_base()
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(
+        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(
+        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
 }
 
-/* ---------------- START AP ---------------- */
+/* ---------------- AP MODE ---------------- */
 
 void start_ap()
 {
-    esp_netif_create_default_wifi_ap();
+    netif = esp_netif_create_default_wifi_ap(); // safe first call only
 
     wifi_config_t ap_config = {
         .ap = {
@@ -122,35 +89,17 @@ void start_ap()
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "AP MODE: %s", WIFI_AP_SSID);
+    ESP_LOGI(TAG, "AP MODE READY");
 }
 
-/* ---------------- START STA ---------------- */
-
-void start_sta(char *ssid, char *pass)
-{
-    esp_netif_create_default_wifi_sta();
-
-    wifi_config_t sta_config = {0};
-
-    strcpy((char *)sta_config.sta.ssid, ssid);
-    strcpy((char *)sta_config.sta.password, pass);
-
-    sta_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-}
-
-/* ---------------- WEB SERVER ---------------- */
+/* ---------------- WEB ---------------- */
 
 esp_err_t root_handler(httpd_req_t *req)
 {
     const char *html =
         "<h1>ESP BOX</h1>"
-        "<a href='/on'>LED ON</a><br>"
-        "<a href='/off'>LED OFF</a>";
+        "<a href='/on'>ON</a><br>"
+        "<a href='/off'>OFF</a>";
 
     httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
@@ -159,14 +108,14 @@ esp_err_t root_handler(httpd_req_t *req)
 esp_err_t on_handler(httpd_req_t *req)
 {
     gpio_set_level(LED_GPIO, 1);
-    httpd_resp_sendstr(req, "LED ON");
+    httpd_resp_sendstr(req, "ON");
     return ESP_OK;
 }
 
 esp_err_t off_handler(httpd_req_t *req)
 {
     gpio_set_level(LED_GPIO, 0);
-    httpd_resp_sendstr(req, "LED OFF");
+    httpd_resp_sendstr(req, "OFF");
     return ESP_OK;
 }
 
@@ -184,8 +133,6 @@ void start_webserver()
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &on);
         httpd_register_uri_handler(server, &off);
-
-        ESP_LOGI(TAG, "Web server started");
     }
 }
 
@@ -193,40 +140,16 @@ void start_webserver()
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "BOOT");
+    ESP_LOGI(TAG, "BOOT START");
 
     ESP_ERROR_CHECK(nvs_flash_init());
 
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
 
-    wifi_init_base();
+    wifi_init();
 
-    char ssid[32] = {0};
-    char pass[64] = {0};
-
-    if (load_wifi(ssid, pass)) {
-
-        ESP_LOGI(TAG, "Connecting to saved WiFi...");
-        start_sta(ssid, pass);
-
-        xEventGroupWaitBits(
-            wifi_event_group,
-            WIFI_CONNECTED_BIT,
-            pdFALSE,
-            pdTRUE,
-            pdMS_TO_TICKS(10000)
-        );
-
-        if (!(xEventGroupGetBits(wifi_event_group) & WIFI_CONNECTED_BIT)) {
-            ESP_LOGW(TAG, "WiFi failed → fallback AP");
-            start_ap();
-        }
-
-    } else {
-        ESP_LOGI(TAG, "No WiFi → AP mode");
-        start_ap();
-    }
+    start_ap();  // 🔥 ONLY AP for now (no STA yet)
 
     start_webserver();
 }
