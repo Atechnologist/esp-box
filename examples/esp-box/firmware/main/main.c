@@ -48,7 +48,7 @@ void start_ap()
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "AP MODE: %s", WIFI_AP_SSID);
+    ESP_LOGI(TAG, "AP MODE READY");
 }
 
 /* ---------------- ROOT PAGE ---------------- */
@@ -56,25 +56,30 @@ void start_ap()
 esp_err_t root_handler(httpd_req_t *req)
 {
     const char *html =
-    "<h2>ESP-BOX Setup</h2>"
-    "<button onclick='scan()'>Scan WiFi</button><br><br>"
-    "<div id='list'></div><br>"
+    "<h1>ESP-BOX V2</h1>"
+    "<p>If you see this → NEW firmware is running ✅</p>"
+
+    "<button onclick='scanWifi()'>Scan WiFi</button><br><br>"
+
+    "<div id='list'>No scan yet</div><br>"
+
     "SSID:<input id='ssid'><br>"
-    "PASS:<input id='pass' type='password'><br>"
-    "<button onclick='saveWifi()'>Save</button><br><br>"
+    "PASS:<input id='pass' type='password'><br><br>"
+
+    "<button onclick='saveWifi()'>SAVE WIFI</button><br><br>"
+
+    "<hr>"
+
     "<a href='/on'>LED ON</a><br>"
     "<a href='/off'>LED OFF</a>"
+
     "<script>"
 
-    "function scan(){"
-    "fetch('/scan').then(r=>r.json()).then(d=>{"
-    "let l='';"
-    "d.forEach(s=>{l+=`<div onclick=\"sel('${s}')\">${s}</div>`});"
-    "document.getElementById('list').innerHTML=l;"
+    "function scanWifi(){"
+    "fetch('/scan').then(r=>r.text()).then(t=>{"
+    "document.getElementById('list').innerHTML = t;"
     "});"
     "}"
-
-    "function sel(s){document.getElementById('ssid').value=s;}"
 
     "function saveWifi(){"
     "let s = document.getElementById('ssid').value;"
@@ -103,16 +108,14 @@ esp_err_t scan_handler(httpd_req_t *req)
     esp_wifi_scan_start(NULL, true);
     esp_wifi_scan_get_ap_records(&ap_count, ap_info);
 
-    char json[1024] = "[";
-    for (int i = 0; i < ap_count; i++) {
-        strcat(json, "\"");
-        strcat(json, (char*)ap_info[i].ssid);
-        strcat(json, "\"");
-        if (i < ap_count - 1) strcat(json, ",");
-    }
-    strcat(json, "]");
+    char result[1024] = "";
 
-    httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    for (int i = 0; i < ap_count; i++) {
+        strcat(result, ap_info[i].ssid);
+        strcat(result, "<br>");
+    }
+
+    httpd_resp_send(req, result, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -124,13 +127,13 @@ esp_err_t save_handler(httpd_req_t *req)
     int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
 
     if (len <= 0) {
-        httpd_resp_sendstr(req, "Error receiving data");
+        httpd_resp_sendstr(req, "ERROR");
         return ESP_FAIL;
     }
 
     buf[len] = '\0';
 
-    ESP_LOGI(TAG, "Received: %s", buf);
+    ESP_LOGI(TAG, "RAW: %s", buf);
 
     char ssid[32] = {0};
     char pass[64] = {0};
@@ -138,6 +141,7 @@ esp_err_t save_handler(httpd_req_t *req)
     sscanf(buf, "ssid=%31[^&]&pass=%63[^&]", ssid, pass);
 
     ESP_LOGI(TAG, "SSID: %s", ssid);
+    ESP_LOGI(TAG, "PASS: %s", pass);
 
     nvs_handle_t nvs;
     nvs_open("wifi", NVS_READWRITE, &nvs);
@@ -199,7 +203,7 @@ void start_webserver()
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "BOOT");
+    ESP_LOGI(TAG, "BOOT V2");
 
     ESP_ERROR_CHECK(nvs_flash_init());
 
@@ -209,7 +213,7 @@ void app_main(void)
     wifi_init();
     start_ap();
 
-    vTaskDelay(pdMS_TO_TICKS(2000));  // important stability delay
+    vTaskDelay(pdMS_TO_TICKS(2000)); // stabilize
 
     start_webserver();
 }
