@@ -51,7 +51,7 @@ void start_ap()
     ESP_LOGI(TAG, "AP MODE: %s", WIFI_AP_SSID);
 }
 
-/* ---------------- HANDLERS ---------------- */
+/* ---------------- ROOT PAGE ---------------- */
 
 esp_err_t root_handler(httpd_req_t *req)
 {
@@ -60,23 +60,40 @@ esp_err_t root_handler(httpd_req_t *req)
     "<button onclick='scan()'>Scan WiFi</button><br><br>"
     "<div id='list'></div><br>"
     "SSID:<input id='ssid'><br>"
-    "PASS:<input id='pass'><br>"
-    "<button onclick='save()'>Save</button><br><br>"
+    "PASS:<input id='pass' type='password'><br>"
+    "<button onclick='saveWifi()'>Save</button><br><br>"
     "<a href='/on'>LED ON</a><br>"
     "<a href='/off'>LED OFF</a>"
     "<script>"
-    "function scan(){fetch('/scan').then(r=>r.json()).then(d=>{"
-    "let l=''; d.forEach(s=>{l+=`<div onclick=\"sel('${s}')\">${s}</div>`});"
-    "document.getElementById('list').innerHTML=l;});}"
+
+    "function scan(){"
+    "fetch('/scan').then(r=>r.json()).then(d=>{"
+    "let l='';"
+    "d.forEach(s=>{l+=`<div onclick=\"sel('${s}')\">${s}</div>`});"
+    "document.getElementById('list').innerHTML=l;"
+    "});"
+    "}"
+
     "function sel(s){document.getElementById('ssid').value=s;}"
-    "function save(){fetch('/save',{method:'POST',body:`ssid=${ssid.value}&pass=${pass.value}`});}"
+
+    "function saveWifi(){"
+    "let s = document.getElementById('ssid').value;"
+    "let p = document.getElementById('pass').value;"
+
+    "fetch('/save',{"
+    "method:'POST',"
+    "headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+    "body:'ssid='+encodeURIComponent(s)+'&pass='+encodeURIComponent(p)"
+    "}).then(r=>r.text()).then(t=>alert(t));"
+    "}"
+
     "</script>";
 
     httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
-/* ---------- WIFI SCAN ---------- */
+/* ---------------- WIFI SCAN ---------------- */
 
 esp_err_t scan_handler(httpd_req_t *req)
 {
@@ -99,21 +116,28 @@ esp_err_t scan_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ---------- SAVE WIFI ---------- */
+/* ---------------- SAVE WIFI ---------------- */
 
 esp_err_t save_handler(httpd_req_t *req)
 {
     char buf[128] = {0};
     int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
 
-    if (len <= 0) return ESP_FAIL;
+    if (len <= 0) {
+        httpd_resp_sendstr(req, "Error receiving data");
+        return ESP_FAIL;
+    }
+
+    buf[len] = '\0';
+
+    ESP_LOGI(TAG, "Received: %s", buf);
 
     char ssid[32] = {0};
     char pass[64] = {0};
 
-    sscanf(buf, "ssid=%31[^&]&pass=%63s", ssid, pass);
+    sscanf(buf, "ssid=%31[^&]&pass=%63[^&]", ssid, pass);
 
-    ESP_LOGI(TAG, "Saving SSID: %s", ssid);
+    ESP_LOGI(TAG, "SSID: %s", ssid);
 
     nvs_handle_t nvs;
     nvs_open("wifi", NVS_READWRITE, &nvs);
@@ -130,7 +154,7 @@ esp_err_t save_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ---------- LED ---------- */
+/* ---------------- LED ---------------- */
 
 esp_err_t on_handler(httpd_req_t *req)
 {
@@ -155,35 +179,11 @@ void start_webserver()
 
     if (httpd_start(&server, &config) == ESP_OK) {
 
-        httpd_uri_t root = {
-            .uri = "/",
-            .method = HTTP_GET,
-            .handler = root_handler
-        };
-
-        httpd_uri_t scan = {
-            .uri = "/scan",
-            .method = HTTP_GET,
-            .handler = scan_handler
-        };
-
-        httpd_uri_t save = {
-            .uri = "/save",
-            .method = HTTP_POST,
-            .handler = save_handler
-        };
-
-        httpd_uri_t on = {
-            .uri = "/on",
-            .method = HTTP_GET,
-            .handler = on_handler
-        };
-
-        httpd_uri_t off = {
-            .uri = "/off",
-            .method = HTTP_GET,
-            .handler = off_handler
-        };
+        httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = root_handler };
+        httpd_uri_t scan = { .uri = "/scan", .method = HTTP_GET, .handler = scan_handler };
+        httpd_uri_t save = { .uri = "/save", .method = HTTP_POST, .handler = save_handler };
+        httpd_uri_t on   = { .uri = "/on", .method = HTTP_GET, .handler = on_handler };
+        httpd_uri_t off  = { .uri = "/off", .method = HTTP_GET, .handler = off_handler };
 
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &scan);
@@ -208,5 +208,8 @@ void app_main(void)
 
     wifi_init();
     start_ap();
+
+    vTaskDelay(pdMS_TO_TICKS(2000));  // important stability delay
+
     start_webserver();
 }
