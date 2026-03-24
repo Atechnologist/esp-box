@@ -57,7 +57,7 @@ esp_err_t root_handler(httpd_req_t *req)
 {
     const char *html =
     "<h1>ESP-BOX V2</h1>"
-    "<p>If you see this → NEW firmware is running ✅</p>"
+    "<p>New firmware loaded ✅</p>"
 
     "<button onclick='scanWifi()'>Scan WiFi</button><br><br>"
 
@@ -111,7 +111,7 @@ esp_err_t scan_handler(httpd_req_t *req)
     char result[1024] = "";
 
     for (int i = 0; i < ap_count; i++) {
-        strcat(result, ap_info[i].ssid);
+        strcat(result, (char*)ap_info[i].ssid);   // FIXED
         strcat(result, "<br>");
     }
 
@@ -213,7 +213,7 @@ void app_main(void)
     wifi_init();
     start_ap();
 
-    vTaskDelay(pdMS_TO_TICKS(2000)); // stabilize
+    vTaskDelay(pdMS_TO_TICKS(2000)); // stability delay
 
     start_webserver();
 }
