@@ -98,7 +98,8 @@ static esp_err_t save_handler(httpd_req_t *req)
 {
     char buf[128];
 
-    int len = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
+    int to_read = req->content_len < (sizeof(buf) - 1) ? req->content_len : (sizeof(buf) - 1);
+    int len = httpd_req_recv(req, buf, to_read);
     if (len <= 0) return ESP_FAIL;
 
     buf[len] = 0;
@@ -198,7 +199,7 @@ static void wifi_init(void)
         nvs_close(nvs);
     }
 
-    /* Delay before scan (important) */
+    /* Delay before scan */
     vTaskDelay(pdMS_TO_TICKS(2000));
     wifi_scan();
 }
