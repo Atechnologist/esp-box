@@ -1,3 +1,2 @@
 dependencies:
-  lvgl/lvgl: "*"
-  espressif/esp_lvgl_port: "*"
+  espressif/wifi_provisioning: "*"
