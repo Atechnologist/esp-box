@@ -7,7 +7,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     container:
       image: espressif/idf:release-v5.1
 
@@ -18,18 +17,18 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - name: Build firmware
-        shell: bash
+      - name: Clean project (VERY IMPORTANT)
         run: |
           cd examples/esp-box/firmware
-          
-          # Clean problematic components
-          rm -rf managed_components
           rm -rf build
-          
+          rm -rf managed_components
+          rm -f dependencies.lock
+
+      - name: Build firmware
+        run: |
+          cd examples/esp-box/firmware
           . $IDF_PATH/export.sh
-          
-          idf.py set-target esp32s3
+          idf.py fullclean
           idf.py build
 
       - name: Upload firmware
