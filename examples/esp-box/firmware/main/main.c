@@ -6,7 +6,6 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
-#include "esp_mac.h"
 
 static const char *TAG = "ESPBOX";
 
@@ -20,25 +19,10 @@ static const char *html_form =
 "<input type=\"submit\" value=\"Save\">"
 "</form></body></html>";
 
-/* ================= WIFI EVENT HANDLER ================= */
-static void wifi_event_handler(void* arg, esp_event_base_t event_base,
-                              int32_t event_id, void* event_data)
-{
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "Connecting to WiFi...");
-        esp_wifi_connect();
-    }
-    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGI(TAG, "Failed to connect. Retrying...");
-        esp_wifi_connect();
-    }
-    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
-    }
-}
+/* ================= SERVER ================= */
+static httpd_handle_t server = NULL;
 
-/* ================= HTTP HANDLERS ================= */
+/* ================= HANDLERS ================= */
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     httpd_resp_send(req, html_form, HTTPD_RESP_USE_STRLEN);
@@ -55,7 +39,7 @@ static esp_err_t save_post_handler(httpd_req_t *req)
     char ssid[32] = {0};
     char pass[64] = {0};
 
-    /* SAFE parsing */
+    /* Safe parsing */
     char *s_ptr = strstr(buf, "s=");
     char *p_ptr = strstr(buf, "p=");
 
@@ -72,7 +56,7 @@ static esp_err_t save_post_handler(httpd_req_t *req)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_connect());
 
-    httpd_resp_sendstr(req, "Saved! Connecting... Check serial logs for IP.");
+    httpd_resp_sendstr(req, "Saved! Now connect to your WiFi and open the new IP.");
 
     return ESP_OK;
 }
@@ -80,25 +64,59 @@ static esp_err_t save_post_handler(httpd_req_t *req)
 /* ================= WEB SERVER ================= */
 static void start_webserver(void)
 {
+    if (server != NULL) {
+        httpd_stop(server);
+        server = NULL;
+    }
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    httpd_handle_t server = NULL;
+    config.uri_match_fn = httpd_uri_match_wildcard;
 
-    httpd_start(&server, &config);
+    if (httpd_start(&server, &config) == ESP_OK) {
 
-    httpd_uri_t root = {
-        .uri = "/",
-        .method = HTTP_GET,
-        .handler = root_get_handler
-    };
+        httpd_uri_t root = {
+            .uri = "/",
+            .method = HTTP_GET,
+            .handler = root_get_handler,
+            .user_ctx = NULL
+        };
 
-    httpd_uri_t save = {
-        .uri = "/save",
-        .method = HTTP_POST,
-        .handler = save_post_handler
-    };
+        httpd_uri_t save = {
+            .uri = "/save",
+            .method = HTTP_POST,
+            .handler = save_post_handler,
+            .user_ctx = NULL
+        };
 
-    httpd_register_uri_handler(server, &root);
-    httpd_register_uri_handler(server, &save);
+        httpd_register_uri_handler(server, &root);
+        httpd_register_uri_handler(server, &save);
+
+        ESP_LOGI(TAG, "Web server started");
+    } else {
+        ESP_LOGE(TAG, "Failed to start web server");
+    }
+}
+
+/* ================= WIFI EVENTS ================= */
+static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+                              int32_t event_id, void* event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        ESP_LOGI(TAG, "Connecting to WiFi...");
+        esp_wifi_connect();
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGI(TAG, "Retrying connection...");
+        esp_wifi_connect();
+    }
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+
+        ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
+
+        /* 🔥 Start web server ONLY after connection */
+        start_webserver();
+    }
 }
 
 /* ================= WIFI INIT ================= */
@@ -134,7 +152,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* Register WiFi events */
+    /* Register events */
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT,
         ESP_EVENT_ANY_ID,
@@ -152,7 +170,9 @@ void app_main(void)
     ));
 
     wifi_init();
+
+    /* Start web server for AP access */
     start_webserver();
 
-    ESP_LOGI(TAG, "Open browser: http://192.168.4.1");
+    ESP_LOGI(TAG, "Connect to ESP-BOX and open http://192.168.4.1");
 }
