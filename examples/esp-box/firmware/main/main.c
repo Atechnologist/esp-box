@@ -29,6 +29,12 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t favicon_handler(httpd_req_t *req)
+{
+    httpd_resp_send(req, "", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 static esp_err_t save_post_handler(httpd_req_t *req)
 {
     char buf[256];
@@ -70,26 +76,37 @@ static void start_webserver(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.uri_match_fn = httpd_uri_match_wildcard;
+
+    // 🔥 FIXES for browser compatibility
+    config.stack_size = 8192;
+    config.max_uri_handlers = 10;
+    config.max_resp_headers = 10;
+    config.max_open_sockets = 4;
+    config.lru_purge_enable = true;
 
     if (httpd_start(&server, &config) == ESP_OK) {
 
         httpd_uri_t root = {
             .uri = "/",
             .method = HTTP_GET,
-            .handler = root_get_handler,
-            .user_ctx = NULL
+            .handler = root_get_handler
         };
 
         httpd_uri_t save = {
             .uri = "/save",
             .method = HTTP_POST,
-            .handler = save_post_handler,
-            .user_ctx = NULL
+            .handler = save_post_handler
+        };
+
+        httpd_uri_t favicon = {
+            .uri = "/favicon.ico",
+            .method = HTTP_GET,
+            .handler = favicon_handler
         };
 
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &save);
+        httpd_register_uri_handler(server, &favicon);
 
         ESP_LOGI(TAG, "Web server started");
     } else {
@@ -114,7 +131,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 
         ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
-        /* 🔥 Start web server ONLY after connection */
+        // Start server for STA network
         start_webserver();
     }
 }
@@ -171,7 +188,7 @@ void app_main(void)
 
     wifi_init();
 
-    /* Start web server for AP access */
+    // Start server for AP access
     start_webserver();
 
     ESP_LOGI(TAG, "Connect to ESP-BOX and open http://192.168.4.1");
