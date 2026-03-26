@@ -8,19 +8,17 @@
 #include "esp_http_server.h"
 
 static const char *TAG = "ESPBOX";
+static httpd_handle_t server = NULL;
 
 /* ================= HTML ================= */
 static const char *html_form =
 "<!DOCTYPE html><html><body>"
 "<h2>ESP-BOX WiFi Setup</h2>"
-"<form action=\"/save\" method=\"post\">"
+"<form action=\"/save\" method=\"get\">"
 "SSID:<br><input name=\"s\"><br>"
 "Password:<br><input name=\"p\" type=\"password\"><br><br>"
 "<input type=\"submit\" value=\"Save\">"
 "</form></body></html>";
-
-/* ================= SERVER ================= */
-static httpd_handle_t server = NULL;
 
 /* ================= HANDLERS ================= */
 static esp_err_t root_get_handler(httpd_req_t *req)
@@ -35,34 +33,30 @@ static esp_err_t favicon_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t save_post_handler(httpd_req_t *req)
+/* 🔥 GET handler instead of POST */
+static esp_err_t save_get_handler(httpd_req_t *req)
 {
-    char buf[256];
-    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
-    if (len <= 0) return ESP_FAIL;
-    buf[len] = 0;
-
+    char query[128];
     char ssid[32] = {0};
     char pass[64] = {0};
 
-    /* Safe parsing */
-    char *s_ptr = strstr(buf, "s=");
-    char *p_ptr = strstr(buf, "p=");
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
 
-    if (s_ptr) sscanf(s_ptr + 2, "%31[^&]", ssid);
-    if (p_ptr) sscanf(p_ptr + 2, "%63[^&]", pass);
+        httpd_query_key_value(query, "s", ssid, sizeof(ssid));
+        httpd_query_key_value(query, "p", pass, sizeof(pass));
 
-    ESP_LOGI(TAG, "SSID: %s", ssid);
-    ESP_LOGI(TAG, "PASS: %s", pass);
+        ESP_LOGI(TAG, "SSID: %s", ssid);
+        ESP_LOGI(TAG, "PASS: %s", pass);
 
-    wifi_config_t wifi_config = {0};
-    strcpy((char *)wifi_config.sta.ssid, ssid);
-    strcpy((char *)wifi_config.sta.password, pass);
+        wifi_config_t wifi_config = {0};
+        strcpy((char *)wifi_config.sta.ssid, ssid);
+        strcpy((char *)wifi_config.sta.password, pass);
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_connect());
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        ESP_ERROR_CHECK(esp_wifi_connect());
+    }
 
-    httpd_resp_sendstr(req, "Saved! Now connect to your WiFi and open the new IP.");
+    httpd_resp_sendstr(req, "Saved! Connect to your WiFi and open new IP.");
 
     return ESP_OK;
 }
@@ -77,10 +71,8 @@ static void start_webserver(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
-    // 🔥 FIXES for browser compatibility
     config.stack_size = 8192;
     config.max_uri_handlers = 10;
-    config.max_resp_headers = 10;
     config.max_open_sockets = 4;
     config.lru_purge_enable = true;
 
@@ -94,8 +86,8 @@ static void start_webserver(void)
 
         httpd_uri_t save = {
             .uri = "/save",
-            .method = HTTP_POST,
-            .handler = save_post_handler
+            .method = HTTP_GET,   // 🔥 IMPORTANT
+            .handler = save_get_handler
         };
 
         httpd_uri_t favicon = {
@@ -109,8 +101,6 @@ static void start_webserver(void)
         httpd_register_uri_handler(server, &favicon);
 
         ESP_LOGI(TAG, "Web server started");
-    } else {
-        ESP_LOGE(TAG, "Failed to start web server");
     }
 }
 
@@ -119,11 +109,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "Connecting to WiFi...");
         esp_wifi_connect();
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGI(TAG, "Retrying connection...");
+        ESP_LOGI(TAG, "Retrying...");
         esp_wifi_connect();
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
@@ -131,8 +120,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 
         ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
-        // Start server for STA network
-        start_webserver();
+        start_webserver(); // start for STA
     }
 }
 
@@ -169,27 +157,16 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* Register events */
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_EVENT,
-        ESP_EVENT_ANY_ID,
-        &wifi_event_handler,
-        NULL,
-        NULL
-    ));
+        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        IP_EVENT,
-        IP_EVENT_STA_GOT_IP,
-        &wifi_event_handler,
-        NULL,
-        NULL
-    ));
+        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 
     wifi_init();
 
-    // Start server for AP access
+    // Start AP server
     start_webserver();
 
-    ESP_LOGI(TAG, "Connect to ESP-BOX and open http://192.168.4.1");
+    ESP_LOGI(TAG, "Open http://192.168.4.1");
 }
