@@ -33,7 +33,6 @@ static esp_err_t favicon_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* 🔥 GET handler instead of POST */
 static esp_err_t save_get_handler(httpd_req_t *req)
 {
     char query[128];
@@ -52,11 +51,19 @@ static esp_err_t save_get_handler(httpd_req_t *req)
         strcpy((char *)wifi_config.sta.ssid, ssid);
         strcpy((char *)wifi_config.sta.password, pass);
 
+        // 🔥 CRITICAL FIX
+        esp_wifi_disconnect();
+
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
         ESP_ERROR_CHECK(esp_wifi_connect());
     }
 
-    httpd_resp_sendstr(req, "Saved! Connect to your WiFi and open new IP.");
+    httpd_resp_sendstr(req,
+        "<html><body>"
+        "<h3>Saved!</h3>"
+        "Device is connecting...<br>"
+        "Reconnect to your WiFi and open the new IP."
+        "</body></html>");
 
     return ESP_OK;
 }
@@ -86,7 +93,7 @@ static void start_webserver(void)
 
         httpd_uri_t save = {
             .uri = "/save",
-            .method = HTTP_GET,   // 🔥 IMPORTANT
+            .method = HTTP_GET,
             .handler = save_get_handler
         };
 
@@ -101,6 +108,8 @@ static void start_webserver(void)
         httpd_register_uri_handler(server, &favicon);
 
         ESP_LOGI(TAG, "Web server started");
+    } else {
+        ESP_LOGE(TAG, "Failed to start web server");
     }
 }
 
@@ -112,7 +121,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         esp_wifi_connect();
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGI(TAG, "Retrying...");
+        ESP_LOGI(TAG, "Retrying connection...");
         esp_wifi_connect();
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
@@ -120,7 +129,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 
         ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
-        start_webserver(); // start for STA
+        start_webserver(); // start server on STA network
     }
 }
 
@@ -165,8 +174,8 @@ void app_main(void)
 
     wifi_init();
 
-    // Start AP server
+    // Start server for AP mode
     start_webserver();
 
-    ESP_LOGI(TAG, "Open http://192.168.4.1");
+    ESP_LOGI(TAG, "Connect to ESP-BOX and open http://192.168.4.1");
 }
