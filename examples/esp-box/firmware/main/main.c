@@ -64,7 +64,7 @@ static const char *html_form =
 "<input type=\"submit\" value=\"Save\">"
 "</form></body></html>";
 
-/* ================= WEB HANDLERS ================= */
+/* ================= WEB ================= */
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     httpd_resp_send(req, html_form, HTTPD_RESP_USE_STRLEN);
@@ -84,6 +84,7 @@ static esp_err_t save_get_handler(httpd_req_t *req)
     char pass[64] = {0};
 
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+
         httpd_query_key_value(query, "s", ssid, sizeof(ssid));
         httpd_query_key_value(query, "p", pass, sizeof(pass));
 
@@ -96,9 +97,22 @@ static esp_err_t save_get_handler(httpd_req_t *req)
         strcpy((char *)wifi_config.sta.ssid, ssid);
         strcpy((char *)wifi_config.sta.password, pass);
 
-        esp_wifi_disconnect();
-        esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-        esp_wifi_connect();
+        wifi_ap_record_t ap;
+
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            if (strcmp((char*)ap.ssid, ssid) == 0) {
+                ESP_LOGI(TAG, "Already connected → skip");
+            } else {
+                ESP_LOGI(TAG, "Switching WiFi...");
+                esp_wifi_disconnect();
+                esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+                esp_wifi_connect();
+            }
+        } else {
+            ESP_LOGI(TAG, "Connecting...");
+            esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+            esp_wifi_connect();
+        }
     }
 
     httpd_resp_sendstr(req,
@@ -109,7 +123,6 @@ static esp_err_t save_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ================= WEB SERVER ================= */
 static void start_webserver(void)
 {
     if (server) {
@@ -158,7 +171,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI("MQTT", "Connected");
-
             esp_mqtt_client_subscribe(mqtt_client, "espbox/control", 0);
             esp_mqtt_client_publish(mqtt_client, "espbox/status", "ESP-BOX ONLINE", 0, 1, 0);
             break;
@@ -180,6 +192,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 
 static void mqtt_start(void)
 {
+    if (mqtt_client) return;
+
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = MQTT_BROKER,
     };
@@ -200,6 +214,7 @@ static void wifi_connect_sta(const char *ssid, const char *pass)
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
+    esp_wifi_connect();  // ✅ ONLY HERE
 }
 
 static void wifi_start_ap(void)
@@ -218,19 +233,16 @@ static void wifi_start_ap(void)
     esp_wifi_set_config(WIFI_IF_AP, &ap_config);
     esp_wifi_start();
 
-    ESP_LOGI(TAG, "AP Mode: Connect to ESP-BOX (192.168.4.1)");
+    ESP_LOGI(TAG, "AP Mode → 192.168.4.1");
 }
 
 /* ================= EVENTS ================= */
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    }
-
-    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGI(TAG, "Retrying WiFi...");
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGI(TAG, "Disconnected → reconnecting...");
+        vTaskDelay(pdMS_TO_TICKS(2000));
         esp_wifi_connect();
     }
 
@@ -239,8 +251,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 
         ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
-        start_webserver();   // serve on new IP
-        mqtt_start();        // 🔥 start MQTT
+        start_webserver();
+        mqtt_start();
     }
 }
 
@@ -270,7 +282,7 @@ void app_main(void)
         ESP_LOGI(TAG, "Loaded WiFi: %s", ssid);
         wifi_connect_sta(ssid, pass);
     } else {
-        ESP_LOGI(TAG, "No WiFi saved → AP mode");
+        ESP_LOGI(TAG, "No WiFi → AP mode");
         wifi_start_ap();
         start_webserver();
     }
