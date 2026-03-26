@@ -7,9 +7,14 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
+#include "mqtt_client.h"
 
 static const char *TAG = "ESPBOX";
 static httpd_handle_t server = NULL;
+
+/* ================= MQTT ================= */
+#define MQTT_BROKER "mqtt://broker.hivemq.com"
+static esp_mqtt_client_handle_t mqtt_client = NULL;
 
 /* ================= NVS ================= */
 #define NVS_NAMESPACE "wifi"
@@ -17,26 +22,23 @@ static httpd_handle_t server = NULL;
 static void save_wifi_credentials(const char *ssid, const char *pass)
 {
     nvs_handle_t nvs;
-    nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
-
-    nvs_set_str(nvs, "ssid", ssid);
-    nvs_set_str(nvs, "pass", pass);
-
-    nvs_commit(nvs);
-    nvs_close(nvs);
-
-    ESP_LOGI(TAG, "WiFi credentials saved to NVS");
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_str(nvs, "ssid", ssid);
+        nvs_set_str(nvs, "pass", pass);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+        ESP_LOGI(TAG, "WiFi saved");
+    }
 }
 
 static bool load_wifi_credentials(char *ssid, char *pass)
 {
     nvs_handle_t nvs;
+    size_t ssid_len = 32;
+    size_t pass_len = 64;
 
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK)
         return false;
-
-    size_t ssid_len = 32;
-    size_t pass_len = 64;
 
     if (nvs_get_str(nvs, "ssid", ssid, &ssid_len) != ESP_OK) {
         nvs_close(nvs);
@@ -62,10 +64,16 @@ static const char *html_form =
 "<input type=\"submit\" value=\"Save\">"
 "</form></body></html>";
 
-/* ================= HANDLERS ================= */
+/* ================= WEB HANDLERS ================= */
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     httpd_resp_send(req, html_form, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t favicon_handler(httpd_req_t *req)
+{
+    httpd_resp_send(req, "", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -76,14 +84,12 @@ static esp_err_t save_get_handler(httpd_req_t *req)
     char pass[64] = {0};
 
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-
         httpd_query_key_value(query, "s", ssid, sizeof(ssid));
         httpd_query_key_value(query, "p", pass, sizeof(pass));
 
         ESP_LOGI(TAG, "SSID: %s", ssid);
         ESP_LOGI(TAG, "PASS: %s", pass);
 
-        // ✅ SAVE TO NVS
         save_wifi_credentials(ssid, pass);
 
         wifi_config_t wifi_config = {0};
@@ -91,14 +97,13 @@ static esp_err_t save_get_handler(httpd_req_t *req)
         strcpy((char *)wifi_config.sta.password, pass);
 
         esp_wifi_disconnect();
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-        ESP_ERROR_CHECK(esp_wifi_connect());
+        esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+        esp_wifi_connect();
     }
 
     httpd_resp_sendstr(req,
-        "<html><body>"
-        "<h3>Saved!</h3>"
-        "Device will auto-connect next boot.<br>"
+        "<html><body><h3>Saved!</h3>"
+        "Reconnect to your WiFi and use new IP.<br>"
         "</body></html>");
 
     return ESP_OK;
@@ -107,7 +112,7 @@ static esp_err_t save_get_handler(httpd_req_t *req)
 /* ================= WEB SERVER ================= */
 static void start_webserver(void)
 {
-    if (server != NULL) {
+    if (server) {
         httpd_stop(server);
         server = NULL;
     }
@@ -129,11 +134,59 @@ static void start_webserver(void)
             .handler = save_get_handler
         };
 
+        httpd_uri_t favicon = {
+            .uri = "/favicon.ico",
+            .method = HTTP_GET,
+            .handler = favicon_handler
+        };
+
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &save);
+        httpd_register_uri_handler(server, &favicon);
 
         ESP_LOGI(TAG, "Web server started");
     }
+}
+
+/* ================= MQTT ================= */
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
+                               int32_t event_id, void *event_data)
+{
+    esp_mqtt_event_handle_t event = event_data;
+
+    switch (event->event_id) {
+
+        case MQTT_EVENT_CONNECTED:
+            ESP_LOGI("MQTT", "Connected");
+
+            esp_mqtt_client_subscribe(mqtt_client, "espbox/control", 0);
+            esp_mqtt_client_publish(mqtt_client, "espbox/status", "ESP-BOX ONLINE", 0, 1, 0);
+            break;
+
+        case MQTT_EVENT_DATA:
+            ESP_LOGI("MQTT", "Received: %.*s", event->data_len, event->data);
+
+            if (strncmp(event->data, "ON", event->data_len) == 0) {
+                ESP_LOGI("MQTT", "Command ON");
+            } else if (strncmp(event->data, "OFF", event->data_len) == 0) {
+                ESP_LOGI("MQTT", "Command OFF");
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void mqtt_start(void)
+{
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .broker.address.uri = MQTT_BROKER,
+    };
+
+    mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
+    esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(mqtt_client);
 }
 
 /* ================= WIFI ================= */
@@ -144,9 +197,9 @@ static void wifi_connect_sta(const char *ssid, const char *pass)
     strcpy((char *)wifi_config.sta.ssid, ssid);
     strcpy((char *)wifi_config.sta.password, pass);
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    esp_wifi_start();
 }
 
 static void wifi_start_ap(void)
@@ -161,9 +214,9 @@ static void wifi_start_ap(void)
         },
     };
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_set_mode(WIFI_MODE_AP);
+    esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    esp_wifi_start();
 
     ESP_LOGI(TAG, "AP Mode: Connect to ESP-BOX (192.168.4.1)");
 }
@@ -172,10 +225,22 @@ static void wifi_start_ap(void)
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data)
 {
-    if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    }
+
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGI(TAG, "Retrying WiFi...");
+        esp_wifi_connect();
+    }
+
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
 
         ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
+
+        start_webserver();   // serve on new IP
+        mqtt_start();        // 🔥 start MQTT
     }
 }
 
@@ -190,6 +255,9 @@ void app_main(void)
     esp_netif_create_default_wifi_ap();
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
+        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -198,12 +266,11 @@ void app_main(void)
     char ssid[32] = {0};
     char pass[64] = {0};
 
-    // 🔥 LOAD FROM NVS
     if (load_wifi_credentials(ssid, pass)) {
-        ESP_LOGI(TAG, "Found saved WiFi: %s", ssid);
+        ESP_LOGI(TAG, "Loaded WiFi: %s", ssid);
         wifi_connect_sta(ssid, pass);
     } else {
-        ESP_LOGI(TAG, "No saved WiFi, starting AP...");
+        ESP_LOGI(TAG, "No WiFi saved → AP mode");
         wifi_start_ap();
         start_webserver();
     }
