@@ -12,6 +12,9 @@
 static const char *TAG = "ESPBOX";
 static httpd_handle_t server = NULL;
 
+/* ================= STATE ================= */
+static bool wifi_connected = false;
+
 /* ================= MQTT ================= */
 #define MQTT_BROKER "mqtt://broker.hivemq.com"
 static esp_mqtt_client_handle_t mqtt_client = NULL;
@@ -19,6 +22,7 @@ static esp_mqtt_client_handle_t mqtt_client = NULL;
 /* ================= NVS ================= */
 #define NVS_NAMESPACE "wifi"
 
+/* ================= NVS SAVE ================= */
 static void save_wifi_credentials(const char *ssid, const char *pass)
 {
     nvs_handle_t nvs;
@@ -31,6 +35,7 @@ static void save_wifi_credentials(const char *ssid, const char *pass)
     }
 }
 
+/* ================= NVS LOAD ================= */
 static bool load_wifi_credentials(char *ssid, char *pass)
 {
     nvs_handle_t nvs;
@@ -92,37 +97,20 @@ static esp_err_t save_get_handler(httpd_req_t *req)
         ESP_LOGI(TAG, "PASS: %s", pass);
 
         save_wifi_credentials(ssid, pass);
-
-        wifi_config_t wifi_config = {0};
-        strcpy((char *)wifi_config.sta.ssid, ssid);
-        strcpy((char *)wifi_config.sta.password, pass);
-
-        wifi_ap_record_t ap;
-
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-            if (strcmp((char*)ap.ssid, ssid) == 0) {
-                ESP_LOGI(TAG, "Already connected → skip");
-            } else {
-                ESP_LOGI(TAG, "Switching WiFi...");
-                esp_wifi_disconnect();
-                esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-                esp_wifi_connect();
-            }
-        } else {
-            ESP_LOGI(TAG, "Connecting...");
-            esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-            esp_wifi_connect();
-        }
     }
 
     httpd_resp_sendstr(req,
         "<html><body><h3>Saved!</h3>"
-        "Reconnect to your WiFi and use new IP.<br>"
+        "Device will reboot and connect.<br>"
         "</body></html>");
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();   // 🔥 safest way
 
     return ESP_OK;
 }
 
+/* ================= WEB SERVER ================= */
 static void start_webserver(void)
 {
     if (server) {
@@ -177,12 +165,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 
         case MQTT_EVENT_DATA:
             ESP_LOGI("MQTT", "Received: %.*s", event->data_len, event->data);
-
-            if (strncmp(event->data, "ON", event->data_len) == 0) {
-                ESP_LOGI("MQTT", "Command ON");
-            } else if (strncmp(event->data, "OFF", event->data_len) == 0) {
-                ESP_LOGI("MQTT", "Command OFF");
-            }
             break;
 
         default:
@@ -211,10 +193,16 @@ static void wifi_connect_sta(const char *ssid, const char *pass)
     strcpy((char *)wifi_config.sta.ssid, ssid);
     strcpy((char *)wifi_config.sta.password, pass);
 
+    ESP_LOGI(TAG, "Starting WiFi...");
+
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
-    esp_wifi_connect();  // ✅ ONLY HERE
+
+    if (!wifi_connected) {
+        ESP_LOGI(TAG, "Connecting...");
+        esp_wifi_connect();   // 🔥 ONLY HERE
+    }
 }
 
 static void wifi_start_ap(void)
@@ -241,13 +229,20 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+
+        wifi_connected = false;
+
         ESP_LOGI(TAG, "Disconnected → reconnecting...");
+
         vTaskDelay(pdMS_TO_TICKS(2000));
         esp_wifi_connect();
     }
 
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+
+        wifi_connected = true;
 
         ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
