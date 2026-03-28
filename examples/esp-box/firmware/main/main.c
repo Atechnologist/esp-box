@@ -23,6 +23,8 @@ static const char *TAG = "ESPBOX";
 
 /* ================= STATE ================= */
 static bool wifi_connected = false;
+static int retry_count = 0;
+
 static httpd_handle_t server = NULL;
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 
@@ -41,7 +43,7 @@ static void save_wifi(const char *ssid, const char *pass)
         nvs_set_str(nvs, "pass", pass);
         nvs_commit(nvs);
         nvs_close(nvs);
-        ESP_LOGI(TAG, "WiFi saved");
+        ESP_LOGI(TAG, "WiFi saved: %s", ssid);
     }
 }
 
@@ -60,7 +62,7 @@ static bool load_wifi(char *ssid, char *pass)
     }
 
     nvs_close(nvs);
-    return true;
+    return strlen(ssid) > 0;
 }
 
 /* ================= WEB ================= */
@@ -87,23 +89,16 @@ static esp_err_t save_handler(httpd_req_t *req)
         httpd_query_key_value(query, "s", ssid, sizeof(ssid));
         httpd_query_key_value(query, "p", pass, sizeof(pass));
 
-        save_wifi(ssid, pass);
+        ESP_LOGI(TAG, "Saved SSID='%s' PASS='%s'", ssid, pass);
+
+        if (strlen(ssid) > 0) {
+            save_wifi(ssid, pass);
+        }
     }
 
     httpd_resp_sendstr(req, "Saved. Rebooting...");
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
-
-    return ESP_OK;
-}
-
-static esp_err_t status_handler(httpd_req_t *req)
-{
-    char resp[128];
-    sprintf(resp, "{\"wifi\":%s}", wifi_connected ? "true" : "false");
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, resp);
 
     return ESP_OK;
 }
@@ -124,13 +119,8 @@ static void start_web(void)
             .uri = "/save", .method = HTTP_GET, .handler = save_handler
         };
 
-        httpd_uri_t status = {
-            .uri = "/status", .method = HTTP_GET, .handler = status_handler
-        };
-
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &save);
-        httpd_register_uri_handler(server, &status);
     }
 }
 
@@ -163,8 +153,6 @@ static void handle_command(const char *data, int len)
     }
 
     if (strcmp(cmd->valuestring, "reboot") == 0) {
-        esp_mqtt_client_publish(mqtt_client, topic_status, "REBOOTING", 0, 1, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
     }
 
@@ -225,12 +213,17 @@ static void mqtt_start(void)
 
 static void wifi_connect(const char *ssid, const char *pass)
 {
+    ESP_LOGI(TAG, "Connecting to SSID: %s", ssid);
+
     wifi_config_t cfg = {0};
 
     strncpy((char*)cfg.sta.ssid, ssid, sizeof(cfg.sta.ssid));
     strncpy((char*)cfg.sta.password, pass, sizeof(cfg.sta.password));
 
+    cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+
     esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);
     esp_wifi_set_config(WIFI_IF_STA, &cfg);
     esp_wifi_start();
     esp_wifi_connect();
@@ -251,19 +244,54 @@ static void wifi_ap(void)
     esp_wifi_set_config(WIFI_IF_AP, &ap);
     esp_wifi_start();
 
-    ESP_LOGI(TAG, "AP mode: 192.168.4.1");
+    ESP_LOGW(TAG, "Started AP mode: 192.168.4.1");
 }
 
 static void wifi_events(void *arg, esp_event_base_t base,
                         int32_t id, void *data)
 {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        wifi_connected = false;
-        esp_wifi_connect();
+    if (base == WIFI_EVENT) {
+
+        switch (id) {
+
+        case WIFI_EVENT_STA_START:
+            ESP_LOGI(TAG, "WiFi started");
+            break;
+
+        case WIFI_EVENT_STA_CONNECTED:
+            ESP_LOGI(TAG, "Connected to AP");
+            retry_count = 0;
+            break;
+
+        case WIFI_EVENT_STA_DISCONNECTED: {
+            wifi_event_sta_disconnected_t *event = data;
+
+            ESP_LOGW(TAG, "Disconnected, reason: %d", event->reason);
+
+            wifi_connected = false;
+            retry_count++;
+
+            if (retry_count > 10) {
+                ESP_LOGE(TAG, "Failed to connect → switching to AP");
+                wifi_ap();
+                start_web();
+            } else {
+                esp_wifi_connect();
+            }
+            break;
+        }
+
+        default:
+            break;
+        }
     }
 
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = data;
+
         wifi_connected = true;
+
+        ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
         start_web();
         mqtt_start();
@@ -301,8 +329,10 @@ void app_main(void)
     char ssid[32] = {0}, pass[64] = {0};
 
     if (load_wifi(ssid, pass)) {
+        ESP_LOGI(TAG, "Loaded WiFi: %s", ssid);
         wifi_connect(ssid, pass);
     } else {
+        ESP_LOGW(TAG, "No WiFi → starting AP");
         wifi_ap();
         start_web();
     }
