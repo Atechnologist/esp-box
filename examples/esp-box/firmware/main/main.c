@@ -326,6 +326,7 @@ void app_main(void)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
+    voice_init();
 
     gpio_reset_pin(RELAY_GPIO);
     gpio_set_direction(RELAY_GPIO, GPIO_MODE_OUTPUT);
