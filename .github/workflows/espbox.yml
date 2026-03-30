@@ -17,6 +17,17 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
+      # 🔥 STEP 1: Download ESP-SR model
+      - name: Download ESP-SR model
+        run: |
+          cd examples/esp-box/firmware/main
+          mkdir -p model
+          
+          # Download official ESP-SR model (example)
+          wget -O model/model.bin \
+          https://dl.espressif.com/public/esp-sr/models/esp32s3/wn9_hilexin_zh_en/model.bin
+
+      # 🔥 STEP 2: Build firmware
       - name: Build firmware
         run: |
           cd examples/esp-box/firmware
@@ -24,8 +35,8 @@ jobs:
           idf.py set-target esp32s3
           idf.py fullclean
           idf.py build
-          idf.py spiffs_create_partition_image model model
 
+      # 🔥 STEP 3: Upload artifacts
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
@@ -34,4 +45,3 @@ jobs:
             examples/esp-box/firmware/build/*.bin
             examples/esp-box/firmware/build/bootloader/*.bin
             examples/esp-box/firmware/build/partition_table/*.bin
-            examples/esp-box/firmware/build/model.bin
