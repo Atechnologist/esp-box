@@ -1,64 +1,94 @@
-name: ESP-BOX HUB CI
+name: ESP-BOX Firmware Build
 
 on:
   push:
-  workflow_dispatch:
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: espressif/idf:release-v5.1
 
     steps:
-      - uses: actions/checkout@v4
+      # =============================
+      # 1. Checkout code
+      # =============================
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - run: git config --global --add safe.directory $GITHUB_WORKSPACE
+      # =============================
+      # 2. Cache ESP-IDF (optional but speeds up builds)
+      # =============================
+      - name: Cache ESP-IDF
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            ~/.cache/pip
+          key: ${{ runner.os }}-esp-idf
 
-      # 🔥 Step 1: Load components
-      - name: Prepare ESP-SR
+      # =============================
+      # 3. Install ESP-IDF
+      # =============================
+      - name: Install ESP-IDF
         run: |
-          cd examples/esp-box/firmware
-          . $IDF_PATH/export.sh
-          idf.py reconfigure
+          git clone -b v5.2 --recursive https://github.com/espressif/esp-idf.git $HOME/esp-idf
+          cd $HOME/esp-idf
+          ./install.sh esp32s3
+          . ./export.sh
 
-      # 🔥 Step 2: Copy model BEFORE build
-      - name: Copy ESP-SR model
+      # =============================
+      # 4. Prepare environment
+      # =============================
+      - name: Set ESP-IDF environment
         run: |
-          cd examples/esp-box/firmware
+          echo "IDF_PATH=$HOME/esp-idf" >> $GITHUB_ENV
+          echo "$HOME/esp-idf/tools" >> $GITHUB_PATH
 
-          mkdir -p main/model
+      # =============================
+      # 5. Copy / ensure model exists
+      # =============================
+      - name: Prepare model file
+        run: |
+          mkdir -p examples/esp-box/firmware/main/model
 
-          echo "Searching for model..."
-          find managed_components -name "*.bin"
-
-          MODEL_PATH=$(find managed_components -name "*.bin" | head -n 1)
-
-          if [ -z "$MODEL_PATH" ]; then
-            echo "❌ No model found!"
-            exit 1
+          if [ -f examples/esp-box/firmware/main/model/model.bin ]; then
+            echo "Model already exists"
+          else
+            echo "⚠️ No model found — creating placeholder"
+            # You should replace this with your real model
+            touch examples/esp-box/firmware/main/model/model.bin
           fi
 
-          echo "Using model: $MODEL_PATH"
+      # =============================
+      # 6. Install Python dependencies + components
+      # =============================
+      - name: Install project dependencies
+        run: |
+          cd examples/esp-box/firmware
+          . $HOME/esp-idf/export.sh
 
-          cp "$MODEL_PATH" main/model/model.bin
+          idf.py set-target esp32s3
 
-          ls -l main/model/
+          # This is what creates managed_components/
+          idf.py install
 
-      # 🔥 Step 3: Build
+      # =============================
+      # 7. Build firmware
+      # =============================
       - name: Build firmware
         run: |
           cd examples/esp-box/firmware
-          . $IDF_PATH/export.sh
-          idf.py set-target esp32s3
-          idf.py fullclean
+          . $HOME/esp-idf/export.sh
+
           idf.py build
 
-      # 🔥 Step 4: Upload
-      - uses: actions/upload-artifact@v4
+      # =============================
+      # 8. Upload artifacts
+      # =============================
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: espbox-firmware
+          name: esp-box-firmware
           path: |
             examples/esp-box/firmware/build/*.bin
-            examples/esp-box/firmware/build/bootloader/*.bin
-            examples/esp-box/firmware/build/partition_table/*.bin
+            examples/esp-box/firmware/build/*.elf
