@@ -17,14 +17,6 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - name: Clean project
-        run: |
-          cd examples/esp-box/firmware
-          rm -rf build
-          rm -rf managed_components
-          rm -f dependencies.lock
-          rm -f sdkconfig
-
       - name: Build firmware
         run: |
           cd examples/esp-box/firmware
@@ -32,6 +24,7 @@ jobs:
           idf.py set-target esp32s3
           idf.py fullclean
           idf.py build
+          idf.py spiffs_create_partition_image model model
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
@@ -41,3 +34,4 @@ jobs:
             examples/esp-box/firmware/build/*.bin
             examples/esp-box/firmware/build/bootloader/*.bin
             examples/esp-box/firmware/build/partition_table/*.bin
+            examples/esp-box/firmware/build/model.bin
