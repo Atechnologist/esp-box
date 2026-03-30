@@ -15,7 +15,6 @@
 #include "mqtt_client.h"
 #include "cJSON.h"
 #include "driver/gpio.h"
-#include "voice.h"
 
 /* ================= CONFIG ================= */
 #define MQTT_BROKER "mqtt://broker.hivemq.com"
@@ -39,7 +38,6 @@ static esp_mqtt_client_handle_t mqtt_client = NULL;
 static char device_id[32];
 static char topic_cmd[64];
 static char topic_state[64];
-static char topic_status[64];
 
 /* ================= RELAY ================= */
 static void relay_set(bool on)
@@ -51,14 +49,9 @@ static void relay_set(bool on)
     ESP_LOGI(TAG, "Relay: %s", on ? "ON" : "OFF");
 
     if (mqtt_client) {
-        cJSON *root = cJSON_CreateObject();
-        cJSON_AddBoolToObject(root, "relay", relay_state);
-
-        char *msg = cJSON_PrintUnformatted(root);
+        char msg[32];
+        sprintf(msg, "{\"relay\":%s}", relay_state ? "true":"false");
         esp_mqtt_client_publish(mqtt_client, topic_state, msg, 0, 1, 0);
-
-        cJSON_Delete(root);
-        free(msg);
     }
 }
 
@@ -75,49 +68,13 @@ void voice_command_handler(const char *cmd)
     }
 }
 
-/* ================= NVS ================= */
-static void save_wifi(const char *ssid, const char *pass)
-{
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
-        nvs_set_str(nvs, "ssid", ssid);
-        nvs_set_str(nvs, "pass", pass);
-        nvs_commit(nvs);
-        nvs_close(nvs);
-    }
-}
-
-static bool load_wifi(char *ssid, char *pass)
-{
-    nvs_handle_t nvs;
-    size_t ssid_len = 32, pass_len = 64;
-
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK)
-        return false;
-
-    if (nvs_get_str(nvs, "ssid", ssid, &ssid_len) != ESP_OK ||
-        nvs_get_str(nvs, "pass", pass, &pass_len) != ESP_OK) {
-        nvs_close(nvs);
-        return false;
-    }
-
-    nvs_close(nvs);
-    return strlen(ssid) > 0;
-}
-
 /* ================= WEB ================= */
 static const char *html =
 "<!DOCTYPE html><html><body>"
 "<h2>ESP-BOX HUB</h2>"
-"<form action=\"/save\">"
-"SSID:<br><input name=\"s\"><br>"
-"PASS:<br><input name=\"p\" type=\"password\"><br><br>"
-"<input type=\"submit\" value=\"Save\">"
-"</form><br>"
 "<h3>Relay: <span id='state'>...</span></h3>"
 "<button onclick=\"fetch('/relay?state=1')\">ON</button>"
 "<button onclick=\"fetch('/relay?state=0')\">OFF</button>"
-
 "<script>"
 "setInterval(async ()=>{"
 "let r=await fetch('/status');"
@@ -125,7 +82,6 @@ static const char *html =
 "document.getElementById('state').innerText=j.relay?'ON':'OFF';"
 "},1000);"
 "</script>"
-
 "</body></html>";
 
 static esp_err_t root_handler(httpd_req_t *req)
@@ -136,30 +92,11 @@ static esp_err_t root_handler(httpd_req_t *req)
 
 static esp_err_t status_handler(httpd_req_t *req)
 {
-    char resp[128];
-    sprintf(resp, "{\"relay\":%s}", relay_state ? "true" : "false");
+    char resp[64];
+    sprintf(resp, "{\"relay\":%s}", relay_state ? "true":"false");
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
-    return ESP_OK;
-}
-
-static esp_err_t save_handler(httpd_req_t *req)
-{
-    char query[128], ssid[32]={0}, pass[64]={0};
-
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        httpd_query_key_value(query, "s", ssid, sizeof(ssid));
-        httpd_query_key_value(query, "p", pass, sizeof(pass));
-
-        if (strlen(ssid) > 0) {
-            save_wifi(ssid, pass);
-        }
-    }
-
-    httpd_resp_sendstr(req, "Saved. Rebooting...");
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    esp_restart();
     return ESP_OK;
 }
 
@@ -185,46 +122,20 @@ static void start_web(void)
     if (httpd_start(&server, &config) == ESP_OK) {
 
         httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
-        httpd_uri_t save = {.uri="/save", .method=HTTP_GET, .handler=save_handler};
         httpd_uri_t relay = {.uri="/relay", .method=HTTP_GET, .handler=relay_handler};
         httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_handler};
 
         httpd_register_uri_handler(server, &root);
-        httpd_register_uri_handler(server, &save);
         httpd_register_uri_handler(server, &relay);
         httpd_register_uri_handler(server, &status);
     }
 }
 
 /* ================= MQTT ================= */
-
-static void mqtt_publish_state(void)
-{
-    if (!mqtt_client) return;
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "relay", relay_state);
-
-    char *msg = cJSON_PrintUnformatted(root);
-    esp_mqtt_client_publish(mqtt_client, topic_state, msg, 0, 1, 0);
-
-    cJSON_Delete(root);
-    free(msg);
-}
-
 static void handle_command(const char *data, int len)
 {
-    cJSON *root = cJSON_ParseWithLength(data, len);
-    if (!root) return;
-
-    cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
-    cJSON *value = cJSON_GetObjectItem(root, "value");
-
-    if (cmd && strcmp(cmd->valuestring, "relay") == 0 && cJSON_IsBool(value)) {
-        relay_set(cJSON_IsTrue(value));
-    }
-
-    cJSON_Delete(root);
+    if (strstr(data, "on")) relay_set(true);
+    if (strstr(data, "off")) relay_set(false);
 }
 
 static void mqtt_event(void *args, esp_event_base_t base,
@@ -234,7 +145,6 @@ static void mqtt_event(void *args, esp_event_base_t base,
 
     if (event_id == MQTT_EVENT_CONNECTED) {
         esp_mqtt_client_subscribe(mqtt_client, topic_cmd, 0);
-        mqtt_publish_state();
     }
 
     if (event_id == MQTT_EVENT_DATA) {
@@ -244,8 +154,6 @@ static void mqtt_event(void *args, esp_event_base_t base,
 
 static void mqtt_start(void)
 {
-    if (mqtt_client) return;
-
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = MQTT_BROKER,
     };
@@ -256,16 +164,14 @@ static void mqtt_start(void)
 }
 
 /* ================= WIFI ================= */
-
 static void wifi_connect(const char *ssid, const char *pass)
 {
     wifi_config_t cfg = {0};
 
-    strncpy((char*)cfg.sta.ssid, ssid, sizeof(cfg.sta.ssid));
-    strncpy((char*)cfg.sta.password, pass, sizeof(cfg.sta.password));
+    strcpy((char*)cfg.sta.ssid, ssid);
+    strcpy((char*)cfg.sta.password, pass);
 
     esp_wifi_set_mode(WIFI_MODE_STA);
-    esp_wifi_set_storage(WIFI_STORAGE_RAM);
     esp_wifi_set_config(WIFI_IF_STA, &cfg);
     esp_wifi_start();
     esp_wifi_connect();
@@ -276,7 +182,6 @@ static void wifi_ap(void)
     wifi_config_t ap = {
         .ap = {
             .ssid = "ESP-BOX",
-            .ssid_len = 7,
             .authmode = WIFI_AUTH_OPEN,
             .max_connection = 4
         }
@@ -285,8 +190,6 @@ static void wifi_ap(void)
     esp_wifi_set_mode(WIFI_MODE_AP);
     esp_wifi_set_config(WIFI_IF_AP, &ap);
     esp_wifi_start();
-
-    ESP_LOGW(TAG, "AP mode: 192.168.4.1");
 }
 
 static void wifi_events(void *arg, esp_event_base_t base,
@@ -294,7 +197,6 @@ static void wifi_events(void *arg, esp_event_base_t base,
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         retry_count++;
-
         if (retry_count > 10) {
             wifi_ap();
             start_web();
@@ -311,7 +213,6 @@ static void wifi_events(void *arg, esp_event_base_t base,
 }
 
 /* ================= MAIN ================= */
-
 void app_main(void)
 {
     nvs_flash_init();
@@ -326,7 +227,6 @@ void app_main(void)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
-    voice_init();
 
     gpio_reset_pin(RELAY_GPIO);
     gpio_set_direction(RELAY_GPIO, GPIO_MODE_OUTPUT);
@@ -338,14 +238,9 @@ void app_main(void)
 
     sprintf(topic_cmd, "espbox/%s/cmd", device_id);
     sprintf(topic_state, "espbox/%s/state", device_id);
-    sprintf(topic_status, "espbox/%s/status", device_id);
 
-    char ssid[32]={0}, pass[64]={0};
+    wifi_ap();       // start in AP mode
+    start_web();
 
-    if (load_wifi(ssid, pass)) {
-        wifi_connect(ssid, pass);
-    } else {
-        wifi_ap();
-        start_web();
-    }
+    // Voice init will be added later
 }
