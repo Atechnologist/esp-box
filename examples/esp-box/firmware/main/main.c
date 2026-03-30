@@ -14,16 +14,19 @@
 #include "esp_http_server.h"
 #include "mqtt_client.h"
 #include "cJSON.h"
+#include "driver/gpio.h"
 
 /* ================= CONFIG ================= */
 #define MQTT_BROKER "mqtt://broker.hivemq.com"
 #define NVS_NAMESPACE "wifi"
+#define RELAY_GPIO 2   // Change if needed
 
 static const char *TAG = "ESPBOX";
 
 /* ================= STATE ================= */
 static bool wifi_connected = false;
 static int retry_count = 0;
+static bool relay_state = false;
 
 static httpd_handle_t server = NULL;
 static esp_mqtt_client_handle_t mqtt_client = NULL;
@@ -73,7 +76,11 @@ static const char *html =
 "SSID:<br><input name=\"s\"><br>"
 "PASS:<br><input name=\"p\" type=\"password\"><br><br>"
 "<input type=\"submit\" value=\"Save\">"
-"</form></body></html>";
+"</form><br>"
+"<h3>Relay Control</h3>"
+"<button onclick=\"fetch('/relay?state=1')\">ON</button>"
+"<button onclick=\"fetch('/relay?state=0')\">OFF</button>"
+"</body></html>";
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
@@ -103,6 +110,22 @@ static esp_err_t save_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Relay via Web */
+static void relay_set(bool on);
+
+static esp_err_t relay_handler(httpd_req_t *req)
+{
+    char query[32], val[8];
+
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "state", val, sizeof(val));
+        relay_set(strcmp(val, "1") == 0);
+    }
+
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
+
 static void start_web(void)
 {
     if (server) return;
@@ -119,8 +142,13 @@ static void start_web(void)
             .uri = "/save", .method = HTTP_GET, .handler = save_handler
         };
 
+        httpd_uri_t relay = {
+            .uri = "/relay", .method = HTTP_GET, .handler = relay_handler
+        };
+
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &save);
+        httpd_register_uri_handler(server, &relay);
     }
 }
 
@@ -131,6 +159,7 @@ static void mqtt_publish_state(void)
     cJSON *root = cJSON_CreateObject();
 
     cJSON_AddBoolToObject(root, "wifi", wifi_connected);
+    cJSON_AddBoolToObject(root, "relay", relay_state);
     cJSON_AddStringToObject(root, "id", device_id);
 
     char *msg = cJSON_PrintUnformatted(root);
@@ -141,18 +170,36 @@ static void mqtt_publish_state(void)
     free(msg);
 }
 
+static void relay_set(bool on)
+{
+    relay_state = on;
+
+    // Active LOW relay
+    gpio_set_level(RELAY_GPIO, on ? 0 : 1);
+
+    ESP_LOGI(TAG, "Relay: %s", on ? "ON" : "OFF");
+
+    mqtt_publish_state();
+}
+
 static void handle_command(const char *data, int len)
 {
     cJSON *root = cJSON_ParseWithLength(data, len);
     if (!root) return;
 
     cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
+    cJSON *value = cJSON_GetObjectItem(root, "value");
+
     if (!cmd || !cJSON_IsString(cmd)) {
         cJSON_Delete(root);
         return;
     }
 
-    if (strcmp(cmd->valuestring, "reboot") == 0) {
+    if (strcmp(cmd->valuestring, "relay") == 0 && cJSON_IsBool(value)) {
+        relay_set(cJSON_IsTrue(value));
+    }
+
+    else if (strcmp(cmd->valuestring, "reboot") == 0) {
         esp_restart();
     }
 
@@ -254,10 +301,6 @@ static void wifi_events(void *arg, esp_event_base_t base,
 
         switch (id) {
 
-        case WIFI_EVENT_STA_START:
-            ESP_LOGI(TAG, "WiFi started");
-            break;
-
         case WIFI_EVENT_STA_CONNECTED:
             ESP_LOGI(TAG, "Connected to AP");
             retry_count = 0;
@@ -272,7 +315,7 @@ static void wifi_events(void *arg, esp_event_base_t base,
             retry_count++;
 
             if (retry_count > 10) {
-                ESP_LOGE(TAG, "Failed to connect → switching to AP");
+                ESP_LOGE(TAG, "Failed → switching to AP");
                 wifi_ap();
                 start_web();
             } else {
@@ -287,11 +330,9 @@ static void wifi_events(void *arg, esp_event_base_t base,
     }
 
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = data;
-
         wifi_connected = true;
 
-        ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "GOT IP");
 
         start_web();
         mqtt_start();
@@ -316,6 +357,11 @@ void app_main(void)
     esp_wifi_init(&cfg);
     esp_wifi_set_ps(WIFI_PS_NONE);
 
+    /* Relay init */
+    gpio_reset_pin(RELAY_GPIO);
+    gpio_set_direction(RELAY_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(RELAY_GPIO, 1); // OFF
+
     /* Device ID */
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -329,10 +375,8 @@ void app_main(void)
     char ssid[32] = {0}, pass[64] = {0};
 
     if (load_wifi(ssid, pass)) {
-        ESP_LOGI(TAG, "Loaded WiFi: %s", ssid);
         wifi_connect(ssid, pass);
     } else {
-        ESP_LOGW(TAG, "No WiFi → starting AP");
         wifi_ap();
         start_web();
     }
