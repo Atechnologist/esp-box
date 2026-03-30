@@ -10,13 +10,13 @@ jobs:
 
     steps:
       # =============================
-      # 1. Checkout code
+      # 1. Checkout repository
       # =============================
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # =============================
-      # 2. Cache ESP-IDF (optional but speeds up builds)
+      # 2. Cache ESP-IDF + Python deps
       # =============================
       - name: Cache ESP-IDF
         uses: actions/cache@v4
@@ -34,46 +34,58 @@ jobs:
           git clone -b v5.2 --recursive https://github.com/espressif/esp-idf.git $HOME/esp-idf
           cd $HOME/esp-idf
           ./install.sh esp32s3
-          . ./export.sh
 
       # =============================
-      # 4. Prepare environment
+      # 4. Export ESP-IDF environment
       # =============================
       - name: Set ESP-IDF environment
         run: |
           echo "IDF_PATH=$HOME/esp-idf" >> $GITHUB_ENV
-          echo "$HOME/esp-idf/tools" >> $GITHUB_PATH
 
       # =============================
-      # 5. Copy / ensure model exists
+      # 5. Prepare model file (safe fallback)
       # =============================
-      - name: Prepare model file
+      - name: Prepare voice model
         run: |
           mkdir -p examples/esp-box/firmware/main/model
 
-          if [ -f examples/esp-box/firmware/main/model/model.bin ]; then
-            echo "Model already exists"
+          if [ -f model.bin ]; then
+            echo "Copying provided model.bin"
+            cp model.bin examples/esp-box/firmware/main/model/model.bin
           else
-            echo "⚠️ No model found — creating placeholder"
-            # You should replace this with your real model
+            echo "No model provided — creating placeholder"
             touch examples/esp-box/firmware/main/model/model.bin
           fi
 
       # =============================
-      # 6. Install Python dependencies + components
+      # 6. Configure project + install deps
       # =============================
-      - name: Install project dependencies
+      - name: Install dependencies and configure
         run: |
           cd examples/esp-box/firmware
           . $HOME/esp-idf/export.sh
 
+          # Set target
           idf.py set-target esp32s3
 
-          # This is what creates managed_components/
+          # Install managed components (creates managed_components/)
           idf.py install
 
+          # Force partition table usage
+          idf.py -D PARTITION_TABLE_CUSTOM_FILENAME=partitions.csv reconfigure
+
       # =============================
-      # 7. Build firmware
+      # 7. Clean build (important for CI stability)
+      # =============================
+      - name: Clean build
+        run: |
+          cd examples/esp-box/firmware
+          . $HOME/esp-idf/export.sh
+
+          idf.py fullclean
+
+      # =============================
+      # 8. Build firmware
       # =============================
       - name: Build firmware
         run: |
@@ -83,12 +95,13 @@ jobs:
           idf.py build
 
       # =============================
-      # 8. Upload artifacts
+      # 9. Upload artifacts
       # =============================
-      - name: Upload build artifacts
+      - name: Upload firmware binaries
         uses: actions/upload-artifact@v4
         with:
           name: esp-box-firmware
           path: |
             examples/esp-box/firmware/build/*.bin
             examples/esp-box/firmware/build/*.elf
+            examples/esp-box/firmware/build/*.map
