@@ -19,7 +19,7 @@
 /* ================= CONFIG ================= */
 #define MQTT_BROKER "mqtt://broker.hivemq.com"
 #define NVS_NAMESPACE "wifi"
-#define RELAY_GPIO 2   // Change if needed
+#define RELAY_GPIO 41   // Change if needed
 
 static const char *TAG = "ESPBOX";
 
