@@ -11,23 +11,25 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Fix git safe directory
-        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+      - run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      # 🔥 STEP 1: Download ESP-SR model
-      - name: Download ESP-SR model
+      # 🔥 STEP 1: Load components + models
+      - name: Prepare ESP-SR
         run: |
-          cd examples/esp-box/firmware/main
-          mkdir -p model
-          
-          # Download official ESP-SR model (example)
-          wget -O model/model.bin \
-          https://dl.espressif.com/public/esp-sr/models/esp32s3/wn9_hilexin_zh_en/model.bin
+          cd examples/esp-box/firmware
+          . $IDF_PATH/export.sh
+          idf.py reconfigure
 
-      # 🔥 STEP 2: Build firmware
+      # 🔥 STEP 2: Copy model locally
+      - name: Copy model
+        run: |
+          cd examples/esp-box/firmware
+          mkdir -p main/model
+          cp -r managed_components/espressif__esp-sr/model/* main/model/
+
+      # 🔥 STEP 3: Build
       - name: Build firmware
         run: |
           cd examples/esp-box/firmware
@@ -36,9 +38,8 @@ jobs:
           idf.py fullclean
           idf.py build
 
-      # 🔥 STEP 3: Upload artifacts
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
+      # 🔥 STEP 4: Upload
+      - uses: actions/upload-artifact@v4
         with:
           name: espbox-firmware
           path: |
