@@ -58,26 +58,27 @@ jobs:
           fi
 
       # =============================
-      # 6. Configure project
+      # 6. Configure project + dependencies
       # =============================
       - name: Configure project
         run: |
           cd examples/esp-box/firmware
           . $HOME/esp-idf/export.sh
 
+          # Set target
           idf.py set-target esp32s3
 
-          # Force flash size (CRITICAL FIX)
+          # Force flash size (CRITICAL)
           export ESPTOOLPY_FLASHSIZE=16MB
 
-          # Install dependencies (creates managed_components/)
+          # Install managed components
           idf.py install
 
           # Apply partition table
           idf.py -D PARTITION_TABLE_CUSTOM_FILENAME=partitions.csv reconfigure
 
       # =============================
-      # 7. Apply SDK config defaults (flash size fix)
+      # 7. Apply sdkconfig defaults
       # =============================
       - name: Apply sdkconfig defaults
         run: |
@@ -87,7 +88,7 @@ jobs:
           echo 'CONFIG_ESPTOOLPY_FLASHSIZE="16MB"' >> sdkconfig.defaults
 
       # =============================
-      # 8. Clean build
+      # 8. Clean build (important)
       # =============================
       - name: Clean build
         run: |
@@ -99,7 +100,7 @@ jobs:
           idf.py fullclean
 
       # =============================
-      # 9. Build firmware
+      # 9. Build firmware (FINAL FIX HERE)
       # =============================
       - name: Build firmware
         run: |
@@ -109,6 +110,12 @@ jobs:
           export IDF_TARGET=esp32s3
           export ESPTOOLPY_FLASHSIZE=16MB
 
+          idf.py set-target esp32s3
+
+          # Reconfigure with correct flash size BEFORE build
+          idf.py -D ESPTOOLPY_FLASHSIZE=16MB reconfigure
+
+          # Build
           idf.py build
 
       # =============================
