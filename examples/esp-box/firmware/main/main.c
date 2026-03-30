@@ -15,6 +15,7 @@
 #include "mqtt_client.h"
 #include "cJSON.h"
 #include "driver/gpio.h"
+#include "voice.h"
 
 /* ================= CONFIG ================= */
 #define MQTT_BROKER "mqtt://broker.hivemq.com"
