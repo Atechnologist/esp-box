@@ -15,21 +15,37 @@ jobs:
 
       - run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      # 🔥 STEP 1: Load components + models
+      # 🔥 Step 1: Load components
       - name: Prepare ESP-SR
         run: |
           cd examples/esp-box/firmware
           . $IDF_PATH/export.sh
           idf.py reconfigure
 
-      # 🔥 STEP 2: Copy model locally
-      - name: Copy model
+      # 🔥 Step 2: Copy model BEFORE build
+      - name: Copy ESP-SR model
         run: |
           cd examples/esp-box/firmware
-          mkdir -p main/model
-          cp -r managed_components/espressif__esp-sr/model/* main/model/
 
-      # 🔥 STEP 3: Build
+          mkdir -p main/model
+
+          echo "Searching for model..."
+          find managed_components -name "*.bin"
+
+          MODEL_PATH=$(find managed_components -name "*.bin" | head -n 1)
+
+          if [ -z "$MODEL_PATH" ]; then
+            echo "❌ No model found!"
+            exit 1
+          fi
+
+          echo "Using model: $MODEL_PATH"
+
+          cp "$MODEL_PATH" main/model/model.bin
+
+          ls -l main/model/
+
+      # 🔥 Step 3: Build
       - name: Build firmware
         run: |
           cd examples/esp-box/firmware
@@ -38,7 +54,7 @@ jobs:
           idf.py fullclean
           idf.py build
 
-      # 🔥 STEP 4: Upload
+      # 🔥 Step 4: Upload
       - uses: actions/upload-artifact@v4
         with:
           name: espbox-firmware
