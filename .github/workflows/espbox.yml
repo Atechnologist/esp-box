@@ -1,12 +1,17 @@
-name: ESP-BOX Firmware Build
+name: ESP-BOX HUB CI
 
 on:
   push:
+    branches: [ main ]
   pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # ✅ USE STABLE ESP-IDF ENV (THIS FIXES YOUR ISSUE)
+    container:
+      image: espressif/idf:v5.1
 
     steps:
       # =============================
@@ -16,36 +21,15 @@ jobs:
         uses: actions/checkout@v4
 
       # =============================
-      # 2. Cache ESP-IDF
+      # 2. Set target
       # =============================
-      - name: Cache ESP-IDF
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.espressif
-            ~/.cache/pip
-          key: ${{ runner.os }}-esp-idf
+      - name: Set target
+        run: echo "IDF_TARGET=esp32s3" >> $GITHUB_ENV
 
       # =============================
-      # 3. Install ESP-IDF
+      # 3. Prepare model (SAFE)
       # =============================
-      - name: Install ESP-IDF
-        run: |
-          git clone -b v5.2 --recursive https://github.com/espressif/esp-idf.git $HOME/esp-idf
-          cd $HOME/esp-idf
-          ./install.sh esp32s3
-
-      # =============================
-      # 4. Export environment
-      # =============================
-      - name: Set ESP-IDF environment
-        run: |
-          echo "IDF_PATH=$HOME/esp-idf" >> $GITHUB_ENV
-
-      # =============================
-      # 5. Prepare model (safe)
-      # =============================
-      - name: Prepare model
+      - name: Prepare voice model
         run: |
           mkdir -p examples/esp-box/firmware/main/model
 
@@ -53,61 +37,38 @@ jobs:
             echo "Using provided model.bin"
             cp model.bin examples/esp-box/firmware/main/model/model.bin
           else
-            echo "No model → creating placeholder"
+            echo "No model → placeholder"
             touch examples/esp-box/firmware/main/model/model.bin
           fi
 
       # =============================
-      # 6. FULL CLEAN (critical fix)
+      # 4. Clean build (CRITICAL)
       # =============================
-      - name: Clean config + build cache
+      - name: Clean project
         run: |
           cd examples/esp-box/firmware
 
           rm -rf build
           rm -f sdkconfig
-          rm -f sdkconfig.old
+          rm -rf managed_components
 
       # =============================
-      # 7. Configure project
-      # =============================
-      - name: Configure project
-        run: |
-          cd examples/esp-box/firmware
-          . $HOME/esp-idf/export.sh
-
-          export IDF_TARGET=esp32s3
-          export ESPTOOLPY_FLASHSIZE=16MB
-
-          idf.py set-target esp32s3
-
-          # Install dependencies (creates managed_components)
-          idf.py install
-
-          # Force flash size at config stage
-          idf.py -D ESPTOOLPY_FLASHSIZE=16MB reconfigure
-
-      # =============================
-      # 8. Build firmware
+      # 5. Build firmware (SIMPLE + STABLE)
       # =============================
       - name: Build firmware
         run: |
           cd examples/esp-box/firmware
-          . $HOME/esp-idf/export.sh
 
-          export IDF_TARGET=esp32s3
-          export ESPTOOLPY_FLASHSIZE=16MB
-
+          idf.py set-target esp32s3
           idf.py build
 
       # =============================
-      # 9. Upload artifacts
+      # 6. Upload artifacts
       # =============================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp-box-firmware
+          name: espbox-firmware
           path: |
             examples/esp-box/firmware/build/*.bin
             examples/esp-box/firmware/build/*.elf
-            examples/esp-box/firmware/build/*.map
