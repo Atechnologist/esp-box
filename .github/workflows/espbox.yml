@@ -10,13 +10,13 @@ jobs:
 
     steps:
       # =============================
-      # 1. Checkout repository
+      # 1. Checkout
       # =============================
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # =============================
-      # 2. Cache ESP-IDF + pip
+      # 2. Cache ESP-IDF
       # =============================
       - name: Cache ESP-IDF
         uses: actions/cache@v4
@@ -43,9 +43,9 @@ jobs:
           echo "IDF_PATH=$HOME/esp-idf" >> $GITHUB_ENV
 
       # =============================
-      # 5. Prepare model (safe fallback)
+      # 5. Prepare model (safe)
       # =============================
-      - name: Prepare voice model
+      - name: Prepare model
         run: |
           mkdir -p examples/esp-box/firmware/main/model
 
@@ -53,56 +53,25 @@ jobs:
             echo "Using provided model.bin"
             cp model.bin examples/esp-box/firmware/main/model/model.bin
           else
-            echo "No model provided — creating placeholder"
+            echo "No model → creating placeholder"
             touch examples/esp-box/firmware/main/model/model.bin
           fi
 
       # =============================
-      # 6. Configure project + dependencies
+      # 6. FULL CLEAN (critical fix)
+      # =============================
+      - name: Clean config + build cache
+        run: |
+          cd examples/esp-box/firmware
+
+          rm -rf build
+          rm -f sdkconfig
+          rm -f sdkconfig.old
+
+      # =============================
+      # 7. Configure project
       # =============================
       - name: Configure project
-        run: |
-          cd examples/esp-box/firmware
-          . $HOME/esp-idf/export.sh
-
-          # Set target
-          idf.py set-target esp32s3
-
-          # Force flash size (CRITICAL)
-          export ESPTOOLPY_FLASHSIZE=16MB
-
-          # Install managed components
-          idf.py install
-
-          # Apply partition table
-          idf.py -D PARTITION_TABLE_CUSTOM_FILENAME=partitions.csv reconfigure
-
-      # =============================
-      # 7. Apply sdkconfig defaults
-      # =============================
-      - name: Apply sdkconfig defaults
-        run: |
-          cd examples/esp-box/firmware
-
-          echo 'CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y' >> sdkconfig.defaults
-          echo 'CONFIG_ESPTOOLPY_FLASHSIZE="16MB"' >> sdkconfig.defaults
-
-      # =============================
-      # 8. Clean build (important)
-      # =============================
-      - name: Clean build
-        run: |
-          cd examples/esp-box/firmware
-          . $HOME/esp-idf/export.sh
-
-          export ESPTOOLPY_FLASHSIZE=16MB
-
-          idf.py fullclean
-
-      # =============================
-      # 9. Build firmware (FINAL FIX HERE)
-      # =============================
-      - name: Build firmware
         run: |
           cd examples/esp-box/firmware
           . $HOME/esp-idf/export.sh
@@ -112,16 +81,29 @@ jobs:
 
           idf.py set-target esp32s3
 
-          # Reconfigure with correct flash size BEFORE build
+          # Install dependencies (creates managed_components)
+          idf.py install
+
+          # Force flash size at config stage
           idf.py -D ESPTOOLPY_FLASHSIZE=16MB reconfigure
 
-          # Build
+      # =============================
+      # 8. Build firmware
+      # =============================
+      - name: Build firmware
+        run: |
+          cd examples/esp-box/firmware
+          . $HOME/esp-idf/export.sh
+
+          export IDF_TARGET=esp32s3
+          export ESPTOOLPY_FLASHSIZE=16MB
+
           idf.py build
 
       # =============================
-      # 10. Upload artifacts
+      # 9. Upload artifacts
       # =============================
-      - name: Upload firmware binaries
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: esp-box-firmware
