@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Clean Build
+name: ESP32-S3-BOX Factory FULL Build
 
 on:
   workflow_dispatch:
@@ -16,19 +16,30 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build Factory Demo
+      - name: Build Factory Demo (FULL)
         run: |
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
 
+          # 🔥 CLEAN EVERYTHING
+          rm -rf build
+          rm -rf managed_components
+          rm -f sdkconfig
+
+          # Set correct target
           idf.py set-target esp32s3
 
+          # Use correct config
           cp sdkconfig.ci.box sdkconfig
 
-          idf.py fullclean
+          # 🔥 FORCE DEPENDENCY INSTALL
+          idf.py reconfigure
+
+          # Build full project (with ESP-SR, BSP, UI)
           idf.py build
 
+          # Merge firmware
           cd build
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
@@ -39,5 +50,5 @@ jobs:
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: factory-demo-clean
+          name: factory-demo-full
           path: examples/factory_demo/build/factory_demo_box.bin
