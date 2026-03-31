@@ -1,0 +1,43 @@
+name: ESP32-S3-BOX Factory Clean Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.1
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build Factory Demo
+        run: |
+          . $IDF_PATH/export.sh
+
+          cd examples/factory_demo
+
+          idf.py set-target esp32s3
+
+          cp sdkconfig.ci.box sdkconfig
+
+          idf.py fullclean
+          idf.py build
+
+          cd build
+          esptool.py --chip esp32s3 merge_bin \
+            -o factory_demo_box.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
+
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-demo-clean
+          path: examples/factory_demo/build/factory_demo_box.bin
