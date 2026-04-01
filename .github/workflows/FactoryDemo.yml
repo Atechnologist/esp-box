@@ -14,7 +14,7 @@ jobs:
 
     steps:
       # ---------------------------
-      # Checkout
+      # Checkout repository
       # ---------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -30,19 +30,22 @@ jobs:
           git config --global --add safe.directory '*'
 
       # ---------------------------
-      # Ensure tools available
+      # Install Python + pip + esptool
       # ---------------------------
-      - name: Verify Python & Pip
+      - name: Setup Python Tools
         run: |
-          python3 --version
-          python3 -m ensurepip --upgrade || true
-          python3 -m pip install --upgrade pip esptool
+          set -e
+          apt-get update
+          apt-get install -y python3-pip python3-setuptools python3-wheel
+          python3 -m pip install --upgrade pip
+          python3 -m pip install esptool
 
       # ---------------------------
-      # Init submodules explicitly
+      # Init submodules (ESP-SR etc.)
       # ---------------------------
       - name: Init Submodules
         run: |
+          git config --global --add safe.directory '*'
           git submodule update --init --recursive
 
       # ---------------------------
@@ -58,20 +61,20 @@ jobs:
 
           cd examples/factory_demo
 
-          # Set target
+          # Set target chip
           idf.py set-target esp32s3
 
-          # Use CI config if available
+          # Use CI config if present
           if [ -f sdkconfig.ci.box ]; then
             cp sdkconfig.ci.box sdkconfig
           fi
 
-          # Clean + build
+          # Clean and build
           idf.py fullclean
           idf.py build
 
       # ---------------------------
-      # Validate build artifacts
+      # Validate build outputs
       # ---------------------------
       - name: Check Build Outputs
         run: |
@@ -80,21 +83,20 @@ jobs:
 
           echo "🔍 Checking required files..."
 
-          for f in \
-            bootloader/bootloader.bin \
-            partition_table/partition-table.bin \
-            ota_data_initial.bin \
-            storage.bin; do
+          REQUIRED_FILES=(
+            "bootloader/bootloader.bin"
+            "partition_table/partition-table.bin"
+            "ota_data_initial.bin"
+          )
+
+          for f in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "$f" ]; then
               echo "❌ Missing $f"
               exit 1
             fi
           done
 
-          # srmodels may exist depending on config
-          if [ ! -d "srmodels" ]; then
-            echo "⚠️ srmodels folder missing (may be normal depending on config)"
-          fi
+          echo "⚠️ srmodels/storage may vary depending on config"
 
       # ---------------------------
       # Merge firmware
@@ -109,7 +111,7 @@ jobs:
           APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | grep -v factory_demo_box.bin | head -n1)
 
           if [ -z "$APP_BIN" ]; then
-            echo "❌ Main app binary not found"
+            echo "❌ Main application binary not found"
             exit 1
           fi
 
@@ -123,7 +125,7 @@ jobs:
             0x20000 $APP_BIN
 
       # ---------------------------
-      # Upload artifact
+      # Upload firmware artifact
       # ---------------------------
       - name: Upload Firmware Artifact
         uses: actions/upload-artifact@v4
