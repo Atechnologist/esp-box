@@ -41,7 +41,7 @@ jobs:
           python3 -m pip install esptool
 
       # ---------------------------
-      # Init submodules (ESP-SR etc.)
+      # Init submodules
       # ---------------------------
       - name: Init Submodules
         run: |
@@ -56,30 +56,26 @@ jobs:
         run: |
           set -e
 
-          # Load ESP-IDF environment
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
 
-          # Set target chip
           idf.py set-target esp32s3
 
-          # Use CI config if present
           if [ -f sdkconfig.ci.box ]; then
             cp sdkconfig.ci.box sdkconfig
           fi
 
-          # Clean and build
           idf.py fullclean
           idf.py build
 
       # ---------------------------
-      # Validate build outputs
+      # Check build outputs (BASH FIX)
       # ---------------------------
       - name: Check Build Outputs
+        shell: bash
         run: |
           set -e
-          cd examples/factory_demo/build
 
           echo "🔍 Checking required files..."
 
@@ -89,6 +85,8 @@ jobs:
             "ota_data_initial.bin"
           )
 
+          cd examples/factory_demo/build
+
           for f in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "$f" ]; then
               echo "❌ Missing $f"
@@ -96,14 +94,16 @@ jobs:
             fi
           done
 
-          echo "⚠️ srmodels/storage may vary depending on config"
+          echo "⚠️ Optional components (srmodels/storage) depend on config"
 
       # ---------------------------
       # Merge firmware
       # ---------------------------
       - name: Merge Firmware
+        shell: bash
         run: |
           set -e
+
           cd examples/factory_demo/build
 
           echo "📦 Merging firmware..."
