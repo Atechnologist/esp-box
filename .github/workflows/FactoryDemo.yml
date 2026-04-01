@@ -11,17 +11,11 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # =============================
-      # 1. Checkout
-      # =============================
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # =============================
-      # 2. Build Factory Demo
-      # =============================
       - name: Build Factory Demo
         run: |
           set -e
@@ -35,38 +29,35 @@ jobs:
           idf.py fullclean
           idf.py build
 
-      # =============================
-      # 3. Merge Firmware (STRICT)
-      # =============================
       - name: Merge Firmware
         run: |
+          set -e
           cd examples/factory_demo/build
 
-          pip install --upgrade esptool
+          echo "Checking required files..."
 
-          # Validate required files (critical)
           for f in \
             bootloader/bootloader.bin \
             partition_table/partition-table.bin \
             ota_data_initial.bin \
             storage.bin \
-            srmodels/srmodels.bin; do
-
+            srmodels/srmodels.bin
+          do
             if [ ! -f "$f" ]; then
-              echo "❌ Missing $f"
+              echo "Missing $f"
               exit 1
             fi
           done
 
-          # Get app binary
-          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | grep -v factory_demo_box.bin | head -n1)
+          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | head -n1)
 
           if [ -z "$APP_BIN" ]; then
-            echo "❌ App binary not found"
+            echo "App binary not found"
             exit 1
           fi
 
-          # Merge
+          echo "Merging firmware..."
+
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
             --flash_mode dio \
@@ -74,13 +65,10 @@ jobs:
             0x0 bootloader/bootloader.bin \
             0x8000 partition_table/partition-table.bin \
             0x16000 ota_data_initial.bin \
-            0x20000 $APP_BIN \
+            0x20000 "$APP_BIN" \
             0x43a000 storage.bin \
             0x6c4000 srmodels/srmodels.bin
 
-      # =============================
-      # 4. Upload
-      # =============================
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
