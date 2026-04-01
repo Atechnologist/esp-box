@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (FULL + FIXED)
+name: ESP32-S3-BOX Factory Demo (FULL FINAL)
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
           submodules: recursive
 
       # =============================
-      # 2. Build Factory Demo
+      # 2. Build Factory Demo + SR
       # =============================
       - name: Build Factory Demo
         run: |
@@ -37,19 +37,29 @@ jobs:
           # Set target
           idf.py set-target esp32s3
 
-          # Load correct config
+          # Load config
           cp sdkconfig.ci.box sdkconfig
 
-          # Build project
+          # 🔥 FORCE dependency + SR setup
+          idf.py reconfigure
+
+          # Build
           idf.py build
 
-          # 🔥 Ensure storage partition exists
+          # 🔥 Ensure srmodels exist
+          if [ ! -f build/srmodels/srmodels.bin ]; then
+            echo "⚠ srmodels missing → forcing build"
+            idf.py srmodels || true
+          fi
+
+          if [ ! -f build/srmodels/srmodels.bin ]; then
+            echo "❌ srmodels still missing"
+            exit 1
+          fi
+
+          # 🔥 Ensure storage exists
           if [ ! -f build/storage.bin ]; then
-            echo "⚠ storage.bin missing → generating manually"
-
-            mkdir -p build/storage
-
-            # create empty placeholder (safe fallback)
+            echo "⚠ storage.bin missing → creating fallback"
             dd if=/dev/zero of=build/storage.bin bs=1K count=64
           fi
 
@@ -102,7 +112,7 @@ jobs:
           echo "✅ Firmware ready: factory_demo_box.bin"
 
       # =============================
-      # 4. Upload
+      # 4. Upload Artifact
       # =============================
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
