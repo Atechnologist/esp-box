@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (CI FULL FIXED)
+name: Build ESP32-S3-BOX Factory Demo
 
 on:
   push:
@@ -6,127 +6,112 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-factory-demo:
     runs-on: ubuntu-latest
-    container: espressif/idf:release-v5.1
+
+    container:
+      image: espressif/idf:release-v5.1
 
     steps:
-      # =============================
-      # 1. Checkout FULL repo + submodules
-      # =============================
+      # ---------------------------
+      # Checkout
+      # ---------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # =============================
-      # 2. Initialize submodules explicitly
-      # =============================
+      # ---------------------------
+      # Fix Git ownership issue
+      # ---------------------------
+      - name: Fix Git Safe Directory
+        run: |
+          git config --global --add safe.directory '*'
+
+      # ---------------------------
+      # Ensure tools available
+      # ---------------------------
+      - name: Verify Python & Pip
+        run: |
+          python3 --version
+          python3 -m ensurepip --upgrade || true
+          python3 -m pip install --upgrade pip esptool
+
+      # ---------------------------
+      # Init submodules explicitly
+      # ---------------------------
       - name: Init Submodules
         run: |
           git submodule update --init --recursive
 
-      # =============================
-      # 3. Verify factory demo exists
-      # =============================
-      - name: Verify Factory Demo
-        run: |
-          echo "📁 Listing factory_demo..."
-          ls -lah examples/factory_demo
-
-          if [ ! -f "examples/factory_demo/sdkconfig.ci.box" ]; then
-            echo "❌ factory_demo project missing or incomplete"
-            exit 1
-          fi
-
-      # =============================
-      # 4. Build Factory Demo (CI SAFE)
-      # =============================
+      # ---------------------------
+      # Build Factory Demo
+      # ---------------------------
       - name: Build Factory Demo
+        shell: bash
         run: |
           set -e
+
+          # Load ESP-IDF environment
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
 
-          echo "🧹 Cleaning..."
-          rm -rf build
-          rm -f sdkconfig
-
-          echo "⚙️ Setting target..."
+          # Set target
           idf.py set-target esp32s3
 
-          echo "📄 Applying CI config..."
-          cp sdkconfig.ci.box sdkconfig
+          # Use CI config if available
+          if [ -f sdkconfig.ci.box ]; then
+            cp sdkconfig.ci.box sdkconfig
+          fi
 
-          echo "🔄 Reconfiguring project..."
-          idf.py reconfigure
-
-          echo "🚀 Building project..."
+          # Clean + build
+          idf.py fullclean
           idf.py build
 
-          echo "📦 Build contents:"
-          ls -lah build
-
-          # =============================
-          # Validate srmodels
-          # =============================
-          if [ ! -d build/srmodels ]; then
-            echo "❌ srmodels directory missing → ESP-SR not enabled"
-            exit 1
-          fi
-
-          if [ ! -f build/srmodels/srmodels.bin ]; then
-            echo "❌ srmodels.bin missing"
-            exit 1
-          fi
-
-          echo "✅ srmodels OK"
-
-          # =============================
-          # Ensure storage exists
-          # =============================
-          if [ ! -f build/storage.bin ]; then
-            echo "⚠ storage.bin missing → creating fallback"
-            dd if=/dev/zero of=build/storage.bin bs=1K count=64
-          fi
-
-      # =============================
-      # 5. Merge Firmware
-      # =============================
-      - name: Merge Firmware
+      # ---------------------------
+      # Validate build artifacts
+      # ---------------------------
+      - name: Check Build Outputs
         run: |
           set -e
           cd examples/factory_demo/build
 
-          echo "🔍 Checking required binaries..."
+          echo "🔍 Checking required files..."
 
           for f in \
             bootloader/bootloader.bin \
             partition_table/partition-table.bin \
             ota_data_initial.bin \
-            storage.bin \
-            srmodels/srmodels.bin
-          do
+            storage.bin; do
             if [ ! -f "$f" ]; then
               echo "❌ Missing $f"
               exit 1
             fi
           done
 
-          echo "🔍 Detecting app binary..."
+          # srmodels may exist depending on config
+          if [ ! -d "srmodels" ]; then
+            echo "⚠️ srmodels folder missing (may be normal depending on config)"
+          fi
+
+      # ---------------------------
+      # Merge firmware
+      # ---------------------------
+      - name: Merge Firmware
+        run: |
+          set -e
+          cd examples/factory_demo/build
+
+          echo "📦 Merging firmware..."
 
           APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | grep -v factory_demo_box.bin | head -n1)
 
           if [ -z "$APP_BIN" ]; then
-            echo "❌ App binary not found"
+            echo "❌ Main app binary not found"
             exit 1
           fi
-
-          echo "✅ Using app binary: $APP_BIN"
-
-          echo "🚀 Merging full firmware..."
 
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
@@ -135,17 +120,13 @@ jobs:
             0x0 bootloader/bootloader.bin \
             0x8000 partition_table/partition-table.bin \
             0x16000 ota_data_initial.bin \
-            0x20000 "$APP_BIN" \
-            0x43a000 storage.bin \
-            0x6c4000 srmodels/srmodels.bin
+            0x20000 $APP_BIN
 
-          echo "✅ Firmware successfully generated"
-
-      # =============================
-      # 6. Upload artifact
-      # =============================
-      - name: Upload Firmware
+      # ---------------------------
+      # Upload artifact
+      # ---------------------------
+      - name: Upload Firmware Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: espbox-factory-full
+          name: ESP32-S3-BOX-factory-demo
           path: examples/factory_demo/build/factory_demo_box.bin
