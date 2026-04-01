@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (REAL FULL BUILD)
+name: ESP32-S3-BOX Factory Demo (CI FULL FIXED)
 
 on:
   push:
@@ -12,76 +12,95 @@ jobs:
 
     steps:
       # =============================
-      # 1. Checkout FULL repo
+      # 1. Checkout FULL repo + submodules
       # =============================
-      - name: Checkout FULL Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
       # =============================
-      # 2. Verify Factory Demo exists
+      # 2. Initialize submodules explicitly
       # =============================
-      - name: Verify factory demo
+      - name: Init Submodules
+        run: |
+          git submodule update --init --recursive
+
+      # =============================
+      # 3. Verify factory demo exists
+      # =============================
+      - name: Verify Factory Demo
         run: |
           echo "📁 Listing factory_demo..."
           ls -lah examples/factory_demo
 
           if [ ! -f "examples/factory_demo/sdkconfig.ci.box" ]; then
-            echo "❌ ERROR: factory_demo is missing or incomplete"
+            echo "❌ factory_demo project missing or incomplete"
             exit 1
           fi
 
       # =============================
-      # 3. Build REAL Factory Demo
+      # 4. Build Factory Demo (CI SAFE)
       # =============================
-      - name: Build Factory Demo (FULL)
+      - name: Build Factory Demo
         run: |
           set -e
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
 
-          echo "🚀 Building REAL factory demo..."
+          echo "🧹 Cleaning..."
+          rm -rf build
+          rm -f sdkconfig
 
+          echo "⚙️ Setting target..."
           idf.py set-target esp32s3
+
+          echo "📄 Applying CI config..."
           cp sdkconfig.ci.box sdkconfig
 
-          idf.py fullclean
+          echo "🔄 Reconfiguring project..."
+          idf.py reconfigure
+
+          echo "🚀 Building project..."
           idf.py build
 
-          echo "📦 Build output:"
+          echo "📦 Build contents:"
           ls -lah build
 
-          # 🔥 MUST EXIST (otherwise wrong build)
-          if [ ! -d "build/srmodels" ]; then
-            echo "❌ srmodels folder missing → WRONG BUILD"
+          # =============================
+          # Validate srmodels
+          # =============================
+          if [ ! -d build/srmodels ]; then
+            echo "❌ srmodels directory missing → ESP-SR not enabled"
             exit 1
           fi
 
-          if [ ! -f "build/srmodels/srmodels.bin" ]; then
-            echo "❌ srmodels.bin missing → voice NOT built"
+          if [ ! -f build/srmodels/srmodels.bin ]; then
+            echo "❌ srmodels.bin missing"
             exit 1
           fi
 
-          echo "✅ Voice models OK"
+          echo "✅ srmodels OK"
 
-          # storage (optional fallback)
-          if [ ! -f "build/storage.bin" ]; then
+          # =============================
+          # Ensure storage exists
+          # =============================
+          if [ ! -f build/storage.bin ]; then
             echo "⚠ storage.bin missing → creating fallback"
             dd if=/dev/zero of=build/storage.bin bs=1K count=64
           fi
 
       # =============================
-      # 4. Merge FULL firmware
+      # 5. Merge Firmware
       # =============================
       - name: Merge Firmware
         run: |
           set -e
           cd examples/factory_demo/build
 
-          echo "🔍 Checking required files..."
+          echo "🔍 Checking required binaries..."
 
           for f in \
             bootloader/bootloader.bin \
@@ -96,7 +115,7 @@ jobs:
             fi
           done
 
-          echo "🔍 Finding app binary..."
+          echo "🔍 Detecting app binary..."
 
           APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | grep -v factory_demo_box.bin | head -n1)
 
@@ -105,9 +124,9 @@ jobs:
             exit 1
           fi
 
-          echo "✅ App binary: $APP_BIN"
+          echo "✅ Using app binary: $APP_BIN"
 
-          echo "🚀 Merging FULL firmware..."
+          echo "🚀 Merging full firmware..."
 
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
@@ -120,10 +139,10 @@ jobs:
             0x43a000 storage.bin \
             0x6c4000 srmodels/srmodels.bin
 
-          echo "✅ FULL firmware ready"
+          echo "✅ Firmware successfully generated"
 
       # =============================
-      # 5. Upload
+      # 6. Upload artifact
       # =============================
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
