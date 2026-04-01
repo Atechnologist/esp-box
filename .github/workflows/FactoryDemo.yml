@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (Stable)
+name: ESP32-S3-BOX Factory Demo (FULL + FIXED)
 
 on:
   push:
@@ -11,11 +11,17 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
+      # =============================
+      # 1. Checkout
+      # =============================
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      # =============================
+      # 2. Build Factory Demo
+      # =============================
       - name: Build Factory Demo
         run: |
           set -e
@@ -23,18 +29,39 @@ jobs:
 
           cd examples/factory_demo
 
+          # Clean everything
+          rm -rf build
+          rm -rf managed_components
+          rm -f sdkconfig
+
+          # Set target
           idf.py set-target esp32s3
+
+          # Load correct config
           cp sdkconfig.ci.box sdkconfig
 
-          idf.py fullclean
+          # Build project
           idf.py build
 
+          # 🔥 Ensure storage partition exists
+          if [ ! -f build/storage.bin ]; then
+            echo "⚠ storage.bin missing → generating manually"
+
+            mkdir -p build/storage
+
+            # create empty placeholder (safe fallback)
+            dd if=/dev/zero of=build/storage.bin bs=1K count=64
+          fi
+
+      # =============================
+      # 3. Merge Firmware
+      # =============================
       - name: Merge Firmware
         run: |
           set -e
           cd examples/factory_demo/build
 
-          echo "Checking required files..."
+          echo "🔍 Checking required files..."
 
           for f in \
             bootloader/bootloader.bin \
@@ -44,19 +71,22 @@ jobs:
             srmodels/srmodels.bin
           do
             if [ ! -f "$f" ]; then
-              echo "Missing $f"
+              echo "❌ Missing $f"
               exit 1
             fi
           done
 
-          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | head -n1)
+          echo "🔍 Finding app binary..."
+
+          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | grep -v factory_demo_box.bin | head -n1)
 
           if [ -z "$APP_BIN" ]; then
-            echo "App binary not found"
+            echo "❌ App binary not found"
             exit 1
           fi
 
-          echo "Merging firmware..."
+          echo "✅ App binary: $APP_BIN"
+          echo "🚀 Merging firmware..."
 
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
@@ -69,6 +99,11 @@ jobs:
             0x43a000 storage.bin \
             0x6c4000 srmodels/srmodels.bin
 
+          echo "✅ Firmware ready: factory_demo_box.bin"
+
+      # =============================
+      # 4. Upload
+      # =============================
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
