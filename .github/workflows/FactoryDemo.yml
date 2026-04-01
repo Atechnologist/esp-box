@@ -1,4 +1,4 @@
-concurrency: name: Build ESP32-S3-BOX Factory Demo
+name: Build ESP32-S3-BOX Factory Demo
 
 on:
   workflow_dispatch:
