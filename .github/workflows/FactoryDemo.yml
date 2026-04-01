@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (FULL FINAL)
+name: ESP32-S3-BOX Factory Demo (REAL FULL BUILD)
 
 on:
   push:
@@ -12,59 +12,69 @@ jobs:
 
     steps:
       # =============================
-      # 1. Checkout
+      # 1. Checkout FULL repo
       # =============================
-      - name: Checkout Repository
+      - name: Checkout FULL Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       # =============================
-      # 2. Build Factory Demo + SR
+      # 2. Verify Factory Demo exists
       # =============================
-      - name: Build Factory Demo
+      - name: Verify factory demo
+        run: |
+          echo "📁 Listing factory_demo..."
+          ls -lah examples/factory_demo
+
+          if [ ! -f "examples/factory_demo/sdkconfig.ci.box" ]; then
+            echo "❌ ERROR: factory_demo is missing or incomplete"
+            exit 1
+          fi
+
+      # =============================
+      # 3. Build REAL Factory Demo
+      # =============================
+      - name: Build Factory Demo (FULL)
         run: |
           set -e
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
 
-          # Clean everything
-          rm -rf build
-          rm -rf managed_components
-          rm -f sdkconfig
+          echo "🚀 Building REAL factory demo..."
 
-          # Set target
           idf.py set-target esp32s3
-
-          # Load config
           cp sdkconfig.ci.box sdkconfig
 
-          # 🔥 FORCE dependency + SR setup
-          idf.py reconfigure
-
-          # Build
+          idf.py fullclean
           idf.py build
 
-          # 🔥 Ensure srmodels exist
-          if [ ! -f build/srmodels/srmodels.bin ]; then
-            echo "⚠ srmodels missing → forcing build"
-            idf.py srmodels || true
-          fi
+          echo "📦 Build output:"
+          ls -lah build
 
-          if [ ! -f build/srmodels/srmodels.bin ]; then
-            echo "❌ srmodels still missing"
+          # 🔥 MUST EXIST (otherwise wrong build)
+          if [ ! -d "build/srmodels" ]; then
+            echo "❌ srmodels folder missing → WRONG BUILD"
             exit 1
           fi
 
-          # 🔥 Ensure storage exists
-          if [ ! -f build/storage.bin ]; then
+          if [ ! -f "build/srmodels/srmodels.bin" ]; then
+            echo "❌ srmodels.bin missing → voice NOT built"
+            exit 1
+          fi
+
+          echo "✅ Voice models OK"
+
+          # storage (optional fallback)
+          if [ ! -f "build/storage.bin" ]; then
             echo "⚠ storage.bin missing → creating fallback"
             dd if=/dev/zero of=build/storage.bin bs=1K count=64
           fi
 
       # =============================
-      # 3. Merge Firmware
+      # 4. Merge FULL firmware
       # =============================
       - name: Merge Firmware
         run: |
@@ -96,7 +106,8 @@ jobs:
           fi
 
           echo "✅ App binary: $APP_BIN"
-          echo "🚀 Merging firmware..."
+
+          echo "🚀 Merging FULL firmware..."
 
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
@@ -109,10 +120,10 @@ jobs:
             0x43a000 storage.bin \
             0x6c4000 srmodels/srmodels.bin
 
-          echo "✅ Firmware ready: factory_demo_box.bin"
+          echo "✅ FULL firmware ready"
 
       # =============================
-      # 4. Upload Artifact
+      # 5. Upload
       # =============================
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
