@@ -14,7 +14,7 @@ jobs:
 
     steps:
       # ---------------------------
-      # Checkout repo + submodules
+      # Checkout repo
       # ---------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -30,6 +30,14 @@ jobs:
           git config --global --add safe.directory '*'
 
       # ---------------------------
+      # 🔥 CRITICAL FIX: remove registry dependencies
+      # ---------------------------
+      - name: Remove idf_component.yml (disable registry)
+        run: |
+          echo "🚫 Removing idf_component.yml to disable registry..."
+          find . -name "idf_component.yml" -delete
+
+      # ---------------------------
       # Build Factory Demo
       # ---------------------------
       - name: Build Factory Demo
@@ -41,20 +49,13 @@ jobs:
 
           cd examples/factory_demo
 
-          # Target
           idf.py set-target esp32s3
 
-          # Apply config
           cp sdkconfig.ci.box sdkconfig
 
-          # 🔥 CRITICAL FIX (disable registry)
-          echo "CONFIG_IDF_COMPONENT_MANAGER=n" >> sdkconfig
-
-          # Clean + build
           idf.py fullclean
           idf.py build
 
-          # Merge using correct layout
           cd build
 
           esptool.py --chip esp32s3 merge_bin \
