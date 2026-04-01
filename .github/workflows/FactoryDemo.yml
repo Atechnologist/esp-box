@@ -13,33 +13,24 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # ---------------------------
       # Checkout repo
-      # ---------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # ---------------------------
-      # Fix Git safe directory
-      # ---------------------------
+      # Fix git issue
       - name: Fix Git Safe Directory
-        run: |
-          git config --global --add safe.directory '*'
+        run: git config --global --add safe.directory '*'
 
-      # ---------------------------
-      # 🔥 CRITICAL FIX: remove registry dependencies
-      # ---------------------------
-      - name: Remove idf_component.yml (disable registry)
+      # 🔧 FIX dependencies (important)
+      - name: Patch broken dependencies
         run: |
-          echo "🚫 Removing idf_component.yml to disable registry..."
-          find . -name "idf_component.yml" -delete
+          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \;
+          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \;
 
-      # ---------------------------
-      # Build Factory Demo
-      # ---------------------------
+      # Build
       - name: Build Factory Demo
         shell: bash
         run: |
@@ -64,9 +55,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # ---------------------------
-      # Upload firmware
-      # ---------------------------
+      # Upload
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
