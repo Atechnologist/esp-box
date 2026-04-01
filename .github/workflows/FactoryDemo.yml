@@ -1,12 +1,12 @@
 name: Build ESP32-S3-BOX Factory Demo
 
 on:
+  workflow_dispatch:
   push:
     branches: [ master ]
-  workflow_dispatch:
 
 jobs:
-  build-factory-demo:
+  build:
     runs-on: ubuntu-latest
 
     container:
@@ -14,118 +14,55 @@ jobs:
 
     steps:
       # ---------------------------
-      # Checkout repository
+      # Checkout
       # ---------------------------
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
         with:
           submodules: recursive
-          fetch-depth: 0
 
       # ---------------------------
-      # Fix Git ownership issue
+      # Fix Git ownership
       # ---------------------------
       - name: Fix Git Safe Directory
         run: |
           git config --global --add safe.directory '*'
 
       # ---------------------------
-      # Install Python + pip + esptool
-      # ---------------------------
-      - name: Setup Python Tools
-        run: |
-          set -e
-          apt-get update
-          apt-get install -y python3-pip python3-setuptools python3-wheel
-          python3 -m pip install --upgrade pip
-          python3 -m pip install esptool
-
-      # ---------------------------
-      # Init submodules
-      # ---------------------------
-      - name: Init Submodules
-        run: |
-          git config --global --add safe.directory '*'
-          git submodule update --init --recursive
-
-      # ---------------------------
       # Build Factory Demo
       # ---------------------------
-      - name: Build Factory Demo
+      - name: Build Factory Demo for ESP32-S3-BOX
         shell: bash
         run: |
           set -e
 
+          # Load ESP-IDF environment
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
 
+          # Target
           idf.py set-target esp32s3
 
-          if [ -f sdkconfig.ci.box ]; then
-            cp sdkconfig.ci.box sdkconfig
-          fi
+          # Apply correct config
+          cp sdkconfig.ci.box sdkconfig
 
-          idf.py fullclean
-          idf.py build
+          # Clean + build
+          idf.py fullclean build
 
-      # ---------------------------
-      # Check build outputs (BASH FIX)
-      # ---------------------------
-      - name: Check Build Outputs
-        shell: bash
-        run: |
-          set -e
+          # Merge firmware using generated flash layout
+          cd build
 
-          echo "🔍 Checking required files..."
-
-          REQUIRED_FILES=(
-            "bootloader/bootloader.bin"
-            "partition_table/partition-table.bin"
-            "ota_data_initial.bin"
-          )
-
-          cd examples/factory_demo/build
-
-          for f in "${REQUIRED_FILES[@]}"; do
-            if [ ! -f "$f" ]; then
-              echo "❌ Missing $f"
-              exit 1
-            fi
-          done
-
-          echo "⚠️ Optional components (srmodels/storage) depend on config"
-
-      # ---------------------------
-      # Merge firmware
-      # ---------------------------
-      - name: Merge Firmware
-        shell: bash
-        run: |
-          set -e
-
-          cd examples/factory_demo/build
-
-          echo "📦 Merging firmware..."
-
-          APP_BIN=$(ls *.bin | grep -v bootloader | grep -v partition | grep -v factory_demo_box.bin | head -n1)
-
-          if [ -z "$APP_BIN" ]; then
-            echo "❌ Main application binary not found"
-            exit 1
-          fi
+          echo "📦 Merging firmware using flash_args..."
 
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
             --flash_mode dio \
             --flash_size 16MB \
-            0x0 bootloader/bootloader.bin \
-            0x8000 partition_table/partition-table.bin \
-            0x16000 ota_data_initial.bin \
-            0x20000 $APP_BIN
+            $(cat flash_args)
 
       # ---------------------------
-      # Upload firmware artifact
+      # Upload artifact
       # ---------------------------
       - name: Upload Firmware Artifact
         uses: actions/upload-artifact@v4
