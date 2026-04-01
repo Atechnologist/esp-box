@@ -1,4 +1,4 @@
-name: Build ESP32-S3-BOX Factory Demo
+concurrency: name: Build ESP32-S3-BOX Factory Demo
 
 on:
   workflow_dispatch:
@@ -14,15 +14,16 @@ jobs:
 
     steps:
       # ---------------------------
-      # Checkout
+      # Checkout repo + submodules
       # ---------------------------
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       # ---------------------------
-      # Fix Git ownership
+      # Fix Git safe directory
       # ---------------------------
       - name: Fix Git Safe Directory
         run: |
@@ -31,12 +32,11 @@ jobs:
       # ---------------------------
       # Build Factory Demo
       # ---------------------------
-      - name: Build Factory Demo for ESP32-S3-BOX
+      - name: Build Factory Demo
         shell: bash
         run: |
           set -e
 
-          # Load ESP-IDF environment
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
@@ -44,16 +44,18 @@ jobs:
           # Target
           idf.py set-target esp32s3
 
-          # Apply correct config
+          # Apply config
           cp sdkconfig.ci.box sdkconfig
 
+          # 🔥 CRITICAL FIX (disable registry)
+          echo "CONFIG_IDF_COMPONENT_MANAGER=n" >> sdkconfig
+
           # Clean + build
-          idf.py fullclean build
+          idf.py fullclean
+          idf.py build
 
-          # Merge firmware using generated flash layout
+          # Merge using correct layout
           cd build
-
-          echo "📦 Merging firmware using flash_args..."
 
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
@@ -62,9 +64,9 @@ jobs:
             $(cat flash_args)
 
       # ---------------------------
-      # Upload artifact
+      # Upload firmware
       # ---------------------------
-      - name: Upload Firmware Artifact
+      - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
           name: ESP32-S3-BOX-factory-demo
