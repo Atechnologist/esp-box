@@ -1,3 +1,0 @@
-- name: Debug files
-  run: |
-    ls examples/factory_demo/main/
