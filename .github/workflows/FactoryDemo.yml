@@ -9,25 +9,33 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # 1️⃣ Checkout OFFICIAL ESP-BOX (full working project)
-      - name: Checkout ESP-BOX Official
+      # 1️⃣ Checkout official ESP-BOX
+      - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
           repository: espressif/esp-box
           submodules: recursive
 
-      # 2️⃣ Fix Git safe directory (CI issue)
+      # 2️⃣ Fix git safe directory
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ Inject YOUR custom web server files
-      - name: Inject Web Server
+      # 3️⃣ Inject YOUR code (FORCED overwrite)
+      - name: Inject Custom Main + Web
         run: |
-          echo "Injecting custom web server..."
-          cp -r $GITHUB_WORKSPACE/custom/main/* examples/factory_demo/main/
+          set -e
+
+          echo "🔥 Removing original main..."
+          rm -rf examples/factory_demo/main/*
+
+          echo "📦 Copying custom files..."
+          cp -v $GITHUB_WORKSPACE/custom/main/* examples/factory_demo/main/
+
+          echo "📁 Final main content:"
+          ls -l examples/factory_demo/main/
 
       # 4️⃣ Build factory demo
-      - name: Build Factory Demo
+      - name: Build Firmware
         run: |
           set -e
 
@@ -35,18 +43,17 @@ jobs:
 
           cd examples/factory_demo
 
-          # Set target
           idf.py set-target esp32s3
 
-          # Use official config for ESP-BOX
           cp sdkconfig.ci.box sdkconfig
 
-          # Clean + build
           idf.py fullclean build
 
-      # 5️⃣ Merge firmware (FULL image)
+      # 5️⃣ Merge firmware
       - name: Merge Firmware
         run: |
+          set -e
+
           cd examples/factory_demo/build
 
           esptool.py --chip esp32s3 merge_bin \
@@ -55,7 +62,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 6️⃣ Upload firmware
+      # 6️⃣ Upload artifact
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
