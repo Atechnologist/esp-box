@@ -1,4 +1,4 @@
-name: Build ESP32-S3-BOX Factory Demo
+name: ESP32-S3-BOX Factory + Web
 
 on:
   workflow_dispatch:
@@ -9,17 +9,25 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout Official ESP-BOX
+      # 1️⃣ Checkout OFFICIAL ESP-BOX (full working project)
+      - name: Checkout ESP-BOX Official
         uses: actions/checkout@v4
         with:
           repository: espressif/esp-box
           submodules: recursive
 
+      # 2️⃣ Fix Git safe directory (CI issue)
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
+      # 3️⃣ Inject YOUR custom web server files
+      - name: Inject Web Server
+        run: |
+          echo "Injecting custom web server..."
+          cp -r $GITHUB_WORKSPACE/custom/main/* examples/factory_demo/main/
+
+      # 4️⃣ Build factory demo
       - name: Build Factory Demo
-        shell: bash
         run: |
           set -e
 
@@ -27,22 +35,29 @@ jobs:
 
           cd examples/factory_demo
 
+          # Set target
           idf.py set-target esp32s3
 
+          # Use official config for ESP-BOX
           cp sdkconfig.ci.box sdkconfig
 
+          # Clean + build
           idf.py fullclean build
 
-          cd build
+      # 5️⃣ Merge firmware (FULL image)
+      - name: Merge Firmware
+        run: |
+          cd examples/factory_demo/build
 
           esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_box.bin \
+            -o factory_demo_web.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
+      # 6️⃣ Upload firmware
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: factory-demo
-          path: examples/factory_demo/build/factory_demo_box.bin
+          name: ESP32-S3-BOX-Web
+          path: examples/factory_demo/build/factory_demo_web.bin
