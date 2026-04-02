@@ -1,6 +1,2 @@
-#ifndef WEB_SERVER_H
-#define WEB_SERVER_H
-
+#pragma once
 void start_webserver(void);
-
-#endif
