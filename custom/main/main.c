@@ -102,6 +102,7 @@ static void start_web_task(void *arg)
 
 void app_main(void)
 {
+    ESP_LOGI(TAG, "🚀 CUSTOM MAIN IS RUNNING 🚀");
     ESP_LOGI(TAG, "Compile time: %s %s", __DATE__, __TIME__);
 
     /* Initialize NVS */
