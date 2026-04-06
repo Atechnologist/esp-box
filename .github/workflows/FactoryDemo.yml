@@ -13,7 +13,7 @@ jobs:
       - name: Checkout YOUR repo
         uses: actions/checkout@v4
         with:
-          path: myrepo
+          path: esp-box
 
       # 2️⃣ Checkout ESP-BOX separately
       - name: Checkout ESP-BOX
@@ -36,7 +36,7 @@ jobs:
           rm -rf esp-box/examples/factory_demo/main/*
 
           echo "📦 Copying custom files..."
-          cp -v myrepo/custom/main/* esp-box/examples/factory_demo/main/
+          cp -v esp-box/custom/main/* esp-box/examples/factory_demo/main/
 
           echo "📁 Final main folder:"
           ls -l esp-box/examples/factory_demo/main/
