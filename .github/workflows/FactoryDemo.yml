@@ -11,37 +11,56 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # 1️⃣ Checkout YOUR repo (contains esp-box/custom/main)
+      # 1️⃣ Checkout your repo
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2️⃣ Fix git safe directory issue
+      # 2️⃣ Fix git safe directory
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ Inject your custom files into factory demo
+      # 3️⃣ DEBUG: show repo structure
+      - name: Debug Repo Structure
+        run: |
+          echo "===== ROOT ====="
+          ls -l
+          echo "===== FULL TREE ====="
+          ls -R
+
+      # 4️⃣ Inject custom files (AUTO DETECT PATH)
       - name: Inject Custom Code
         run: |
           set -e
 
-          echo "📂 Checking custom files..."
-          ls -l esp-box/custom/main/
+          echo "🔍 Detecting custom folder..."
+
+          if [ -d "custom/main" ]; then
+            SRC="custom/main"
+          elif [ -d "esp-box/custom/main" ]; then
+            SRC="esp-box/custom/main"
+          else
+            echo "❌ ERROR: custom/main folder NOT found"
+            exit 1
+          fi
+
+          echo "✅ Using source: $SRC"
+          ls -l $SRC
 
           echo "🔥 Removing original factory main..."
           rm -rf examples/factory_demo/main/*
 
           echo "📦 Copying custom files..."
-          cp -v esp-box/custom/main/* examples/factory_demo/main/
+          cp -v $SRC/* examples/factory_demo/main/
 
           echo "📁 Final main folder:"
           ls -l examples/factory_demo/main/
 
-          echo "🔍 Verifying custom main is present..."
+          echo "🔍 Verifying custom main..."
           grep -r "CUSTOM MAIN" examples/factory_demo/main/ || echo "❌ CUSTOM MAIN NOT FOUND"
 
-      # 4️⃣ Build firmware
+      # 5️⃣ Build firmware
       - name: Build Firmware
         run: |
           set -e
@@ -56,7 +75,7 @@ jobs:
 
           idf.py fullclean build
 
-      # 5️⃣ Merge final firmware
+      # 6️⃣ Merge firmware
       - name: Merge Firmware
         run: |
           set -e
@@ -69,7 +88,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 6️⃣ Upload firmware artifact
+      # 7️⃣ Upload artifact
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
