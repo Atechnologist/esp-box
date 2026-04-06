@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory + Web
+name: ESP32-S3-BOX Factory + Web (Stable)
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # 1️⃣ Checkout repo (with submodules)
+      # 1️⃣ Checkout repo
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
@@ -21,59 +21,35 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ Debug repo structure (IMPORTANT for path validation)
-      - name: Debug Repo Structure
-        run: |
-          echo "===== ROOT ====="
-          ls -l
-          echo "===== FULL TREE ====="
-          ls -R
+      # 3️⃣ FORCE disable component manager (KEY FIX)
+      - name: Disable Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=0" >> $GITHUB_ENV
 
-      # 4️⃣ Inject custom files (AUTO-DETECT PATH)
+      # 4️⃣ Inject your custom main
       - name: Inject Custom Code
         run: |
           set -e
-
-          echo "🔍 Detecting custom folder..."
 
           if [ -d "custom/main" ]; then
             SRC="custom/main"
           elif [ -d "esp-box/custom/main" ]; then
             SRC="esp-box/custom/main"
           else
-            echo "❌ ERROR: custom/main folder NOT found"
+            echo "❌ custom/main not found"
             exit 1
           fi
 
-          echo "✅ Using source: $SRC"
-          ls -l $SRC
-
-          echo "🔥 Removing original factory main..."
           rm -rf examples/factory_demo/main/*
-
-          echo "📦 Copying custom files..."
           cp -v $SRC/* examples/factory_demo/main/
 
-          echo "📁 Final main folder:"
-          ls -l examples/factory_demo/main/
-
-          echo "🔍 Verifying custom main..."
-          grep -r "CUSTOM MAIN" examples/factory_demo/main/ || echo "❌ CUSTOM MAIN NOT FOUND"
-
-      # 5️⃣ Prepare dependencies (CRITICAL FIX)
-      - name: Prepare ESP-IDF Dependencies
+      # 5️⃣ FIX missing BSP (CRITICAL)
+      - name: Ensure BSP is available
         run: |
           set -e
 
-          . $IDF_PATH/export.sh
-
-          cd examples/factory_demo
-
-          # Remove broken dependency lock
-          rm -f dependencies.lock
-
-          # Re-resolve dependencies correctly
-          idf.py reconfigure
+          # Clone esp-box BSP manually
+          mkdir -p components
+          git clone --depth=1 https://github.com/espressif/esp-box.git components/esp-box
 
       # 6️⃣ Build firmware
       - name: Build Firmware
@@ -85,7 +61,6 @@ jobs:
           cd examples/factory_demo
 
           idf.py set-target esp32s3
-
           cp sdkconfig.ci.box sdkconfig
 
           idf.py fullclean build
