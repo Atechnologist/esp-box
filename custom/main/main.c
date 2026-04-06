@@ -6,7 +6,6 @@
 
 #include <stdio.h>
 #include <math.h>
-
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -14,6 +13,7 @@
 #include "esp_check.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+
 #include "bsp_storage.h"
 #include "settings.h"
 #include "app_led.h"
@@ -27,44 +27,25 @@
 #include "bsp_board.h"
 #include "bsp/esp-bsp.h"
 
-/* 👉 ADD WEB SERVER HEADER */
+/* ✅ ADD THIS */
 #include "web_server.h"
 
 static const char *TAG = "main";
 
 file_iterator_instance_t *file_iterator;
 
-#define MEMORY_MONITOR 0
-
-#if MEMORY_MONITOR
-static void monitor_task(void *arg)
+/* ================= WEB SERVER TASK ================= */
+void start_web_task(void *arg)
 {
-    (void) arg;
+    ESP_LOGI("WEB", "Waiting before starting web server...");
+    vTaskDelay(pdMS_TO_TICKS(5000));  // wait for WiFi / RainMaker
 
-    while (true) {
-        ESP_LOGI(TAG, "System Info Trace");
-        printf("Current Free Memory\t%d\t\t%d\n",
-               heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
-               heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-        printf("Largest Free Block\t%d\t\t%d\n",
-               heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
-               heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-        printf("Min. Ever Free Size\t%d\t\t%d\n",
-               heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
-               heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
-
-        vTaskDelay(pdMS_TO_TICKS(5 * 1000));
-    }
+    ESP_LOGI("WEB", "Starting web server...");
+    start_webserver();
 
     vTaskDelete(NULL);
 }
-
-static void sys_monitor_start(void)
-{
-    BaseType_t ret_val = xTaskCreatePinnedToCore(monitor_task, "Monitor Task", 4 * 1024, NULL, configMAX_PRIORITIES - 3, NULL, 0);
-    ESP_ERROR_CHECK_WITHOUT_ABORT((pdPASS == ret_val) ? ESP_OK : ESP_FAIL);
-}
-#endif
+/* ================================================== */
 
 static esp_err_t audio_mute_function(AUDIO_PLAYER_MUTE_SETTING setting)
 {
@@ -86,20 +67,6 @@ static esp_err_t audio_mute_function(AUDIO_PLAYER_MUTE_SETTING setting)
     return ESP_OK;
 }
 
-/* 👉 WEB SERVER TASK */
-static void start_web_task(void *arg)
-{
-    ESP_LOGI(TAG, "Waiting before starting web server...");
-
-    // Wait for WiFi / RainMaker initialization
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
-    ESP_LOGI(TAG, "Starting web server...");
-    start_webserver();
-
-    vTaskDelete(NULL);
-}
-
 void app_main(void)
 {
     ESP_LOGI(TAG, "🚀 CUSTOM MAIN IS RUNNING 🚀");
@@ -115,13 +82,10 @@ void app_main(void)
 
     ESP_ERROR_CHECK(settings_read_parameter_from_nvs());
 
-#if !SR_RUN_TEST && MEMORY_MONITOR
-    sys_monitor_start();
-#endif
-
     bsp_spiffs_mount();
     bsp_i2c_init();
 
+    /* Display setup */
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BSP_LCD_H_RES * CONFIG_BSP_LCD_DRAW_BUF_HEIGHT,
@@ -130,20 +94,19 @@ void app_main(void)
             .buff_dma = true,
         }
     };
-
     cfg.lvgl_port_cfg.task_affinity = 1;
 
     bsp_display_start_with_config(&cfg);
     bsp_board_init();
 
     ESP_LOGI(TAG, "Display LVGL demo");
-
     sensor_task_state_event_init();
     ESP_ERROR_CHECK(ui_main_start());
 
     vTaskDelay(pdMS_TO_TICKS(500));
     bsp_display_backlight_on();
 
+    /* Audio setup */
     file_iterator = file_iterator_new("/spiffs/mp3");
     assert(file_iterator != NULL);
 
@@ -153,23 +116,24 @@ void app_main(void)
         .clk_set_fn = bsp_codec_set_fs,
         .priority = 5
     };
-
     ESP_ERROR_CHECK(audio_player_new(config));
 
+    /* LED setup */
     const board_res_desc_t *brd = bsp_board_get_description();
-
 #ifdef CONFIG_BSP_BOARD_ESP32_S3_BOX_3
     app_pwm_led_init(brd->PMOD2->row2[2], brd->PMOD2->row2[3], brd->PMOD2->row1[3]);
 #else
     app_pwm_led_init(brd->PMOD2->row1[1], brd->PMOD2->row1[2], brd->PMOD2->row1[3]);
 #endif
 
+    /* Speech recognition */
     ESP_LOGI(TAG, "speech recognition start");
-    vTaskDelay(pdMS_TO_TICKS(4 * 1000));
-
+    vTaskDelay(pdMS_TO_TICKS(4000));
     app_sr_start(false);
+
+    /* RainMaker */
     app_rmaker_start();
 
-    /* 👉 START WEB SERVER TASK */
+    /* ✅ START WEB SERVER (NON-BLOCKING) */
     xTaskCreate(start_web_task, "web_task", 4096, NULL, 5, NULL);
 }
