@@ -12,35 +12,40 @@ jobs:
     container: espressif/idf:release-v5.2
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Git Safe Directory
+      - name: Safe directory
         run: git config --global --add safe.directory '*'
 
-      # ✅ Initialize ESP-IDF environment
       - name: Export ESP-IDF
         run: |
           . $IDF_PATH/export.sh
-          idf.py --version
 
-      # ✅ Force component manager to update registry
-      - name: Update Component Registry
+      # ✅ CRITICAL: preload component registry
+      - name: Pre-fetch Components
         run: |
           . $IDF_PATH/export.sh
           idf.py update-components
 
-      # ✅ Install dependencies BEFORE CMake configure
+      # ✅ Install dependencies explicitly
       - name: Install Dependencies
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py install-dependencies
 
+      # ✅ FORCE dependency resolution BEFORE build
+      - name: Resolve Dependencies
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py reconfigure
+
       # ✅ Build
-      - name: Build Factory Demo
+      - name: Build
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -53,7 +58,7 @@ jobs:
           idf.py build
 
       # ✅ Merge firmware
-      - name: Merge Firmware
+      - name: Merge binaries
         run: |
           cd examples/factory_demo/build
 
@@ -64,8 +69,8 @@ jobs:
             $(cat flash_args)
 
       # ✅ Upload artifact
-      - name: Upload Firmware
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: esp-box-factory-firmware
+          name: esp-box-firmware
           path: examples/factory_demo/build/factory_demo.bin
