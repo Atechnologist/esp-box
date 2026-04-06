@@ -2,6 +2,8 @@ name: ESP32-S3-BOX Factory + Web
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ master ]
 
 jobs:
   build:
@@ -9,22 +11,22 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # 1️⃣ Checkout ESP-BOX (your fork or repo)
+      # 1️⃣ Checkout YOUR repo (contains esp-box/custom/main)
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2️⃣ Fix Git safe directory
+      # 2️⃣ Fix git safe directory issue
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ Inject your custom files (FROM esp-box/custom/main)
+      # 3️⃣ Inject your custom files into factory demo
       - name: Inject Custom Code
         run: |
           set -e
 
-          echo "📂 Checking custom folder..."
+          echo "📂 Checking custom files..."
           ls -l esp-box/custom/main/
 
           echo "🔥 Removing original factory main..."
@@ -36,7 +38,7 @@ jobs:
           echo "📁 Final main folder:"
           ls -l examples/factory_demo/main/
 
-          echo "🔍 Verifying custom marker..."
+          echo "🔍 Verifying custom main is present..."
           grep -r "CUSTOM MAIN" examples/factory_demo/main/ || echo "❌ CUSTOM MAIN NOT FOUND"
 
       # 4️⃣ Build firmware
@@ -54,7 +56,7 @@ jobs:
 
           idf.py fullclean build
 
-      # 5️⃣ Merge firmware
+      # 5️⃣ Merge final firmware
       - name: Merge Firmware
         run: |
           set -e
@@ -67,7 +69,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 6️⃣ Upload firmware
+      # 6️⃣ Upload firmware artifact
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
