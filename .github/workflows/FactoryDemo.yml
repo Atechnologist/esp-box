@@ -12,44 +12,47 @@ jobs:
     container: espressif/idf:release-v5.2
 
     steps:
-      # 1️⃣ Checkout repository (with submodules)
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2️⃣ Fix git safe directory
       - name: Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ Debug repo structure
-      - name: Debug Repo
-        run: ls -R
-
-      # 4️⃣ Build factory demo
-      - name: Build Factory Demo
+      # ✅ Initialize ESP-IDF environment
+      - name: Export ESP-IDF
         run: |
-          set -e
           . $IDF_PATH/export.sh
+          idf.py --version
 
+      # ✅ Force component manager to update registry
+      - name: Update Component Registry
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py update-components
+
+      # ✅ Install dependencies BEFORE CMake configure
+      - name: Install Dependencies
+        run: |
+          . $IDF_PATH/export.sh
           cd examples/factory_demo
-
-          # Set target
-          idf.py set-target esp32s3
-
-          # Use provided config
-          cp sdkconfig.ci.box sdkconfig
-
-          # 🔥 CRITICAL STEP: install missing components
           idf.py install-dependencies
 
-          # Clean build
-          idf.py fullclean
+      # ✅ Build
+      - name: Build Factory Demo
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
 
-          # Build project
+          idf.py set-target esp32s3
+
+          cp sdkconfig.ci.box sdkconfig
+
+          idf.py fullclean
           idf.py build
 
-      # 5️⃣ Merge binaries into single flashable file
+      # ✅ Merge firmware
       - name: Merge Firmware
         run: |
           cd examples/factory_demo/build
@@ -60,7 +63,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 6️⃣ Upload artifact
+      # ✅ Upload artifact
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
