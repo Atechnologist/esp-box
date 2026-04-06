@@ -9,46 +9,47 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # ✅ Use newer IDF that supports esp-box components
     container: espressif/idf:release-v5.2
 
     steps:
-      # 1️⃣ Checkout repo
+      # 1️⃣ Checkout repository (with submodules)
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2️⃣ Fix git safe directory issue
+      # 2️⃣ Fix git safe directory
       - name: Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ Debug structure
-      - name: Debug Files
+      # 3️⃣ Debug repo structure
+      - name: Debug Repo
         run: ls -R
 
-      # 4️⃣ Build Factory Demo
-      - name: Build
+      # 4️⃣ Build factory demo
+      - name: Build Factory Demo
         run: |
           set -e
           . $IDF_PATH/export.sh
 
-          # 🔥 Prevent dependency resolution issues
-          export IDF_COMPONENT_MANAGER=1
-          export IDF_COMPONENT_CHECK=1
-
           cd examples/factory_demo
 
+          # Set target
           idf.py set-target esp32s3
 
-          # Use official config
+          # Use provided config
           cp sdkconfig.ci.box sdkconfig
 
+          # 🔥 CRITICAL STEP: install missing components
+          idf.py install-dependencies
+
+          # Clean build
           idf.py fullclean
 
+          # Build project
           idf.py build
 
-      # 5️⃣ Merge binaries
+      # 5️⃣ Merge binaries into single flashable file
       - name: Merge Firmware
         run: |
           cd examples/factory_demo/build
