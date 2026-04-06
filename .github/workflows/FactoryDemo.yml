@@ -11,7 +11,7 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # 1️⃣ Checkout your repo
+      # 1️⃣ Checkout repo (with submodules)
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
@@ -21,11 +21,7 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ Disable component manager (CRITICAL FIX)
-      - name: Disable Component Manager
-        run: echo "IDF_COMPONENT_MANAGER=0" >> $GITHUB_ENV
-
-      # 4️⃣ Debug repo structure (helps if path wrong)
+      # 3️⃣ Debug repo structure (IMPORTANT for path validation)
       - name: Debug Repo Structure
         run: |
           echo "===== ROOT ====="
@@ -33,7 +29,7 @@ jobs:
           echo "===== FULL TREE ====="
           ls -R
 
-      # 5️⃣ Inject custom files (AUTO-DETECT PATH)
+      # 4️⃣ Inject custom files (AUTO-DETECT PATH)
       - name: Inject Custom Code
         run: |
           set -e
@@ -63,6 +59,21 @@ jobs:
 
           echo "🔍 Verifying custom main..."
           grep -r "CUSTOM MAIN" examples/factory_demo/main/ || echo "❌ CUSTOM MAIN NOT FOUND"
+
+      # 5️⃣ Prepare dependencies (CRITICAL FIX)
+      - name: Prepare ESP-IDF Dependencies
+        run: |
+          set -e
+
+          . $IDF_PATH/export.sh
+
+          cd examples/factory_demo
+
+          # Remove broken dependency lock
+          rm -f dependencies.lock
+
+          # Re-resolve dependencies correctly
+          idf.py reconfigure
 
       # 6️⃣ Build firmware
       - name: Build Firmware
