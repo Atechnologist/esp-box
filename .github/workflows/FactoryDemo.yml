@@ -21,7 +21,11 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ DEBUG: show repo structure
+      # 3️⃣ Disable component manager (CRITICAL FIX)
+      - name: Disable Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=0" >> $GITHUB_ENV
+
+      # 4️⃣ Debug repo structure (helps if path wrong)
       - name: Debug Repo Structure
         run: |
           echo "===== ROOT ====="
@@ -29,7 +33,7 @@ jobs:
           echo "===== FULL TREE ====="
           ls -R
 
-      # 4️⃣ Inject custom files (AUTO DETECT PATH)
+      # 5️⃣ Inject custom files (AUTO-DETECT PATH)
       - name: Inject Custom Code
         run: |
           set -e
@@ -60,7 +64,7 @@ jobs:
           echo "🔍 Verifying custom main..."
           grep -r "CUSTOM MAIN" examples/factory_demo/main/ || echo "❌ CUSTOM MAIN NOT FOUND"
 
-      # 5️⃣ Build firmware
+      # 6️⃣ Build firmware
       - name: Build Firmware
         run: |
           set -e
@@ -75,7 +79,7 @@ jobs:
 
           idf.py fullclean build
 
-      # 6️⃣ Merge firmware
+      # 7️⃣ Merge firmware
       - name: Merge Firmware
         run: |
           set -e
@@ -88,7 +92,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 7️⃣ Upload artifact
+      # 8️⃣ Upload firmware
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
