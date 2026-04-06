@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory + Web (Stable)
+name: ESP32-S3-BOX Factory Build (Custom Main)
 
 on:
   workflow_dispatch:
@@ -21,41 +21,15 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ FORCE disable component manager (KEY FIX)
-      - name: Disable Component Manager
-        run: echo "IDF_COMPONENT_MANAGER=0" >> $GITHUB_ENV
+      # 3️⃣ Debug structure (optional but useful)
+      - name: Debug Repo
+        run: |
+          ls -R
 
-      # 4️⃣ Inject your custom main
-      - name: Inject Custom Code
+      # 4️⃣ Build factory demo (NO file replacement)
+      - name: Build Factory Demo
         run: |
           set -e
-
-          if [ -d "custom/main" ]; then
-            SRC="custom/main"
-          elif [ -d "esp-box/custom/main" ]; then
-            SRC="esp-box/custom/main"
-          else
-            echo "❌ custom/main not found"
-            exit 1
-          fi
-
-          rm -rf examples/factory_demo/main/*
-          cp -v $SRC/* examples/factory_demo/main/
-
-      # 5️⃣ FIX missing BSP (CRITICAL)
-      - name: Ensure BSP is available
-        run: |
-          set -e
-
-          # Clone esp-box BSP manually
-          mkdir -p components
-          git clone --depth=1 https://github.com/espressif/esp-box.git components/esp-box
-
-      # 6️⃣ Build firmware
-      - name: Build Firmware
-        run: |
-          set -e
-
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
@@ -65,22 +39,20 @@ jobs:
 
           idf.py fullclean build
 
-      # 7️⃣ Merge firmware
+      # 5️⃣ Merge firmware
       - name: Merge Firmware
         run: |
-          set -e
-
           cd examples/factory_demo/build
 
           esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_web.bin \
+            -o factory_demo_custom.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 8️⃣ Upload firmware
+      # 6️⃣ Upload artifact
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-S3-BOX-Web
-          path: examples/factory_demo/build/factory_demo_web.bin
+          name: factory-demo-custom
+          path: examples/factory_demo/build/factory_demo_custom.bin
