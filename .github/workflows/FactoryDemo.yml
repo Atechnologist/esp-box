@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Build (Custom Main)
+name: Build ESP-BOX Factory Demo
 
 on:
   workflow_dispatch:
@@ -8,7 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: espressif/idf:release-v5.1
+
+    # ✅ Use newer IDF that supports esp-box components
+    container: espressif/idf:release-v5.2
 
     steps:
       # 1️⃣ Checkout repo
@@ -17,35 +19,42 @@ jobs:
         with:
           submodules: recursive
 
-      # 2️⃣ Fix git safe directory
-      - name: Fix Git Safe Directory
+      # 2️⃣ Fix git safe directory issue
+      - name: Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 3️⃣ Debug structure (optional but useful)
-      - name: Debug Repo
-        run: |
-          ls -R
+      # 3️⃣ Debug structure
+      - name: Debug Files
+        run: ls -R
 
-      # 4️⃣ Build factory demo (NO file replacement)
-      - name: Build Factory Demo
+      # 4️⃣ Build Factory Demo
+      - name: Build
         run: |
           set -e
           . $IDF_PATH/export.sh
 
+          # 🔥 Prevent dependency resolution issues
+          export IDF_COMPONENT_MANAGER=1
+          export IDF_COMPONENT_CHECK=1
+
           cd examples/factory_demo
 
           idf.py set-target esp32s3
+
+          # Use official config
           cp sdkconfig.ci.box sdkconfig
 
-          idf.py fullclean build
+          idf.py fullclean
 
-      # 5️⃣ Merge firmware
+          idf.py build
+
+      # 5️⃣ Merge binaries
       - name: Merge Firmware
         run: |
           cd examples/factory_demo/build
 
           esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_custom.bin \
+            -o factory_demo.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
@@ -54,5 +63,5 @@ jobs:
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: factory-demo-custom
-          path: examples/factory_demo/build/factory_demo_custom.bin
+          name: esp-box-factory-firmware
+          path: examples/factory_demo/build/factory_demo.bin
