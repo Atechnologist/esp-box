@@ -9,46 +9,44 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # 1️⃣ Checkout YOUR repo (contains custom/)
-      - name: Checkout YOUR repo
+      # 1️⃣ Checkout ESP-BOX (your fork or repo)
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          path: esp-box
-
-      # 2️⃣ Checkout ESP-BOX separately
-      - name: Checkout ESP-BOX
-        uses: actions/checkout@v4
-        with:
-          repository: espressif/esp-box
           submodules: recursive
-          path: esp-box
 
-      # 3️⃣ Fix git safe dir
+      # 2️⃣ Fix Git safe directory
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 4️⃣ Inject files (NOW PATH IS CORRECT)
+      # 3️⃣ Inject your custom files (FROM esp-box/custom/main)
       - name: Inject Custom Code
         run: |
           set -e
 
-          echo "🔥 Removing original main..."
-          rm -rf esp-box/examples/factory_demo/main/*
+          echo "📂 Checking custom folder..."
+          ls -l esp-box/custom/main/
+
+          echo "🔥 Removing original factory main..."
+          rm -rf examples/factory_demo/main/*
 
           echo "📦 Copying custom files..."
-          cp -v esp-box/custom/main/* esp-box/examples/factory_demo/main/
+          cp -v esp-box/custom/main/* examples/factory_demo/main/
 
           echo "📁 Final main folder:"
-          ls -l esp-box/examples/factory_demo/main/
+          ls -l examples/factory_demo/main/
 
-      # 5️⃣ Build
+          echo "🔍 Verifying custom marker..."
+          grep -r "CUSTOM MAIN" examples/factory_demo/main/ || echo "❌ CUSTOM MAIN NOT FOUND"
+
+      # 4️⃣ Build firmware
       - name: Build Firmware
         run: |
           set -e
 
           . $IDF_PATH/export.sh
 
-          cd esp-box/examples/factory_demo
+          cd examples/factory_demo
 
           idf.py set-target esp32s3
 
@@ -56,12 +54,12 @@ jobs:
 
           idf.py fullclean build
 
-      # 6️⃣ Merge firmware
+      # 5️⃣ Merge firmware
       - name: Merge Firmware
         run: |
           set -e
 
-          cd esp-box/examples/factory_demo/build
+          cd examples/factory_demo/build
 
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_web.bin \
@@ -69,9 +67,9 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 7️⃣ Upload
+      # 6️⃣ Upload firmware
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
           name: ESP32-S3-BOX-Web
-          path: esp-box/examples/factory_demo/build/factory_demo_web.bin
+          path: examples/factory_demo/build/factory_demo_web.bin
