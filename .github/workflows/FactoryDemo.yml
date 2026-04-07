@@ -25,81 +25,83 @@ jobs:
         run: |
           set -e
 
-          cat > examples/factory_demo/main/main.c << 'EOF'
-#include <stdio.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_log.h"
-#include "nvs_flash.h"
+          mkdir -p examples/factory_demo/main
 
-#include "web_server.h"
+          printf '%s\n' \
+'#include <stdio.h>' \
+'#include "freertos/FreeRTOS.h"' \
+'#include "freertos/task.h"' \
+'#include "esp_log.h"' \
+'#include "nvs_flash.h"' \
+'' \
+'#include "web_server.h"' \
+'' \
+'static const char *TAG = "main";' \
+'' \
+'void start_web_task(void *arg)' \
+'{' \
+'    vTaskDelay(pdMS_TO_TICKS(8000));' \
+'    ESP_LOGI(TAG, "Starting Web Server...");' \
+'    web_server_start();' \
+'    vTaskDelete(NULL);' \
+'}' \
+'' \
+'void app_main(void)' \
+'{' \
+'    ESP_ERROR_CHECK(nvs_flash_init());' \
+'    ESP_LOGI(TAG, "Factory demo + Web Server");' \
+'    xTaskCreate(start_web_task, "web_task", 4096, NULL, 5, NULL);' \
+'}' \
+> examples/factory_demo/main/main.c
 
-static const char *TAG = "main";
+          printf '%s\n' \
+'#include "web_server.h"' \
+'#include "esp_http_server.h"' \
+'#include "esp_log.h"' \
+'' \
+'static const char *TAG = "WEB";' \
+'' \
+'esp_err_t root_get_handler(httpd_req_t *req)' \
+'{' \
+'    const char resp[] = "<h1>ESP32-S3-BOX Web Control</h1>";' \
+'    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);' \
+'    return ESP_OK;' \
+'}' \
+'' \
+'void web_server_start(void)' \
+'{' \
+'    ESP_LOGI(TAG, "Initializing web server...");' \
+'' \
+'    httpd_config_t config = HTTPD_DEFAULT_CONFIG();' \
+'    httpd_handle_t server = NULL;' \
+'' \
+'    if (httpd_start(&server, &config) == ESP_OK) {' \
+'        httpd_uri_t uri = {' \
+'            .uri = "/", ' \
+'            .method = HTTP_GET,' \
+'            .handler = root_get_handler,' \
+'            .user_ctx = NULL' \
+'        };' \
+'' \
+'        httpd_register_uri_handler(server, &uri);' \
+'        ESP_LOGI(TAG, "Web server started");' \
+'    } else {' \
+'        ESP_LOGE(TAG, "Failed to start web server");' \
+'    }' \
+'}' \
+> examples/factory_demo/main/web_server.c
 
-void start_web_task(void *arg)
-{
-    vTaskDelay(pdMS_TO_TICKS(8000));
-    ESP_LOGI(TAG, "Starting Web Server...");
-    web_server_start();
-    vTaskDelete(NULL);
-}
+          printf '%s\n' \
+'#pragma once' \
+'void web_server_start(void);' \
+> examples/factory_demo/main/web_server.h
 
-void app_main(void)
-{
-    ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_LOGI(TAG, "Factory demo + Web Server");
-    xTaskCreate(start_web_task, "web_task", 4096, NULL, 5, NULL);
-}
-EOF
-
-          cat > examples/factory_demo/main/web_server.c << 'EOF'
-#include "web_server.h"
-#include "esp_http_server.h"
-#include "esp_log.h"
-
-static const char *TAG = "WEB";
-
-esp_err_t root_get_handler(httpd_req_t *req)
-{
-    const char resp[] = "<h1>ESP32-S3-BOX Web Control</h1>";
-    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-void web_server_start(void)
-{
-    ESP_LOGI(TAG, "Initializing web server...");
-
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    httpd_handle_t server = NULL;
-
-    if (httpd_start(&server, &config) == ESP_OK) {
-        httpd_uri_t uri = {
-            .uri = "/",
-            .method = HTTP_GET,
-            .handler = root_get_handler,
-            .user_ctx = NULL
-        };
-
-        httpd_register_uri_handler(server, &uri);
-        ESP_LOGI(TAG, "Web server started");
-    } else {
-        ESP_LOGE(TAG, "Failed to start web server");
-    }
-}
-EOF
-
-          cat > examples/factory_demo/main/web_server.h << 'EOF'
-#pragma once
-void web_server_start(void);
-EOF
-
-          cat > examples/factory_demo/main/CMakeLists.txt << 'EOF'
-idf_component_register(
-    SRCS "main.c" "web_server.c"
-    INCLUDE_DIRS "."
-)
-EOF
+          printf '%s\n' \
+'idf_component_register(' \
+'    SRCS "main.c" "web_server.c"' \
+'    INCLUDE_DIRS "."' \
+')' \
+> examples/factory_demo/main/CMakeLists.txt
 
           echo "=== FILE CHECK ==="
           ls -l examples/factory_demo/main/
