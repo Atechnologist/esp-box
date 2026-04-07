@@ -1,4 +1,4 @@
-name: Build ESP32-S3-BOX Factory Demo
+name: Build ESP32-S3-BOX Factory Demo + Web
 
 on:
   workflow_dispatch:
@@ -18,23 +18,44 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
+      # ✅ Inject your custom files here
+      - name: Inject Web Server Files
+        run: |
+          set -e
+
+          # Overwrite main.c
+          cat > examples/factory_demo/main/main.c << 'EOF'
+          // <<< PASTE YOUR FULL UPDATED main.c HERE >>>
+          EOF
+
+          # Add web_server.c
+          cat > examples/factory_demo/main/web_server.c << 'EOF'
+          // <<< PASTE YOUR web_server.c HERE >>>
+          EOF
+
+          # Add web_server.h
+          cat > examples/factory_demo/main/web_server.h << 'EOF'
+          // <<< PASTE YOUR web_server.h HERE >>>
+          EOF
+
+          # Update CMakeLists.txt
+          cat > examples/factory_demo/main/CMakeLists.txt << 'EOF'
+          idf_component_register(
+              SRCS "main.c" "web_server.c"
+              INCLUDE_DIRS "."
+          )
+          EOF
+
       - name: Build Factory Demo
         shell: bash
         run: |
           set -e
-
           . $IDF_PATH/export.sh
-
           cd examples/factory_demo
-
           idf.py set-target esp32s3
-
           cp sdkconfig.ci.box sdkconfig
-
           idf.py fullclean build
-
           cd build
-
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
             --flash_mode dio \
@@ -44,5 +65,5 @@ jobs:
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: factory-demo
+          name: factory-demo-web
           path: examples/factory_demo/build/factory_demo_box.bin
