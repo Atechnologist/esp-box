@@ -25,34 +25,12 @@ jobs:
       - name: Disable Component Manager
         run: echo IDF_COMPONENT_MANAGER=0 >> $GITHUB_ENV
 
-      # ✅ ONLY add files (DO NOT overwrite main)
-      - name: Inject Web Server Files
+      - name: Inject Custom Files
         run: |
           set -e
+          cp custom/main/main.c esp-box/examples/factory_demo/main/
           cp custom/main/web_server.c esp-box/examples/factory_demo/main/
           cp custom/main/web_server.h esp-box/examples/factory_demo/main/
-
-      # ✅ Patch original main.c safely
-      - name: Patch main.c
-        run: |
-          set -e
-
-          FILE=esp-box/examples/factory_demo/main/main.c
-
-          # Add include
-          sed -i '/ui_sensor_monitor.h/a #include "web_server.h"' $FILE
-
-          # Add task function at top
-          sed -i '1i \
-void start_web_task(void *arg) {\n\
-    vTaskDelay(pdMS_TO_TICKS(8000));\n\
-    web_server_start();\n\
-    vTaskDelete(NULL);\n\
-}\n' $FILE
-
-          # Start web server after RainMaker
-          sed -i '/app_rmaker_start();/a \
-    xTaskCreate(start_web_task, "web_task", 4096, NULL, 5, NULL);' $FILE
 
       - name: Build
         run: |
@@ -68,7 +46,8 @@ void start_web_task(void *arg) {\n\
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
-          - name: Upload Firmware
+
+      - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
           name: factory-demo-web
