@@ -6,6 +6,8 @@
 
 #include "bsp_board.h"
 #include "app_rmaker.h"
+
+// ✅ FORCE include FIRST
 #include "web_server.h"
 
 static const char *TAG = "main";
@@ -14,7 +16,7 @@ void start_web_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(8000));
     ESP_LOGI(TAG, "Starting Web Server...");
-    web_server_start();
+    web_server_start();   // now properly declared
     vTaskDelete(NULL);
 }
 
