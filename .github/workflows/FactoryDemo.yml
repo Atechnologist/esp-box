@@ -22,13 +22,18 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      - name: Prepare Files
+      - name: Prepare Custom Files
         shell: bash
         run: |
           set -e
           cp custom/main/main.c esp-box/examples/factory_demo/main/main.c
           cp custom/main/web_server.c esp-box/examples/factory_demo/main/web_server.c
           cp custom/main/web_server.h esp-box/examples/factory_demo/main/web_server.h
+
+      - name: Fix CMakeLists
+        shell: bash
+        run: |
+          sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' esp-box/examples/factory_demo/main/CMakeLists.txt
 
       - name: Build Firmware
         shell: bash
