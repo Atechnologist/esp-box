@@ -43,7 +43,9 @@ jobs:
           cd esp-box/examples/factory_demo
           idf.py set-target esp32s3
           cp sdkconfig.ci.box sdkconfig
-          idf.py fullclean build
+          idf.py fullclean
+          rm -rf build
+          idf.py build
           cd build
           esptool.py --chip esp32s3 merge_bin -o factory_demo_box.bin --flash_mode dio --flash_size 16MB $(cat flash_args)
 
