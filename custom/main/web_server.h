@@ -1,2 +1,11 @@
 #pragma once
-void start_webserver(void);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void web_server_start(void);
+
+#ifdef __cplusplus
+}
+#endif
