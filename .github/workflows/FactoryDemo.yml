@@ -22,17 +22,44 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      - name: Disable Component Manager
-        run: echo IDF_COMPONENT_MANAGER=0 >> $GITHUB_ENV
+      # ✅ FORCE BASH (CRITICAL FIX)
+      - name: Setup ESP-IDF
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
 
-      - name: Inject Custom Files
+      # ✅ ONLY copy web files (safe)
+      - name: Inject Web Files
+        shell: bash
         run: |
           set -e
-          cp custom/main/main.c esp-box/examples/factory_demo/main/
           cp custom/main/web_server.c esp-box/examples/factory_demo/main/
           cp custom/main/web_server.h esp-box/examples/factory_demo/main/
 
+      # ✅ Patch WITHOUT breaking structure
+      - name: Patch main.c safely
+        shell: bash
+        run: |
+          FILE=esp-box/examples/factory_demo/main/main.c
+
+          # Add include
+          grep -q web_server.h $FILE || sed -i '/ui_sensor_monitor.h/a #include "web_server.h"' $FILE
+
+          # Add function (only if not exists)
+          grep -q start_web_task $FILE || sed -i '1i \
+void start_web_task(void *arg) {\
+    vTaskDelay(pdMS_TO_TICKS(8000));\
+    web_server_start();\
+    vTaskDelete(NULL);\
+}\
+' $FILE
+
+          # Start task (only if not exists)
+          grep -q web_task $FILE || sed -i '/app_rmaker_start();/a \
+    xTaskCreate(start_web_task, "web_task", 4096, NULL, 5, NULL);' $FILE
+
       - name: Build
+        shell: bash
         run: |
           set -e
           . $IDF_PATH/export.sh
