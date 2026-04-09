@@ -1,66 +1,60 @@
-name: ESP32-S3-BOX Web + RainMaker (Stable)
+name: ESP-IDF Custom Build (ESP-BOX-S3)
 
 on:
-  workflow_dispatch:
+  push:
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout YOUR repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Checkout ESP-BOX
-        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          repository: espressif/esp-box
-          path: esp-box
-          submodules: recursive
+          python-version: '3.11'
 
-      - name: Fix Git Safe Directory
-        run: git config --global --add safe.directory '*'
-
-      # ✅ Copy ONLY our custom files
-      - name: Inject Custom Files
-        shell: bash
+      - name: Install system dependencies
         run: |
-          set -e
-          cp custom/main/main.c esp-box/examples/factory_demo/main/main.c
-          cp custom/main/web_server.c esp-box/examples/factory_demo/main/web_server.c
-          cp custom/main/web_server.h esp-box/examples/factory_demo/main/web_server.h
+          sudo apt-get update
+          sudo apt-get install -y git wget flex bison gperf cmake ninja-build ccache libffi-dev libssl-dev dfu-util
 
-      # ✅ Ensure web_server.c is compiled
-      - name: Fix CMakeLists
-        shell: bash
+      - name: Clone ESP-IDF
         run: |
-          FILE=esp-box/examples/factory_demo/main/CMakeLists.txt
-          grep -q web_server.c $FILE || sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
+          git clone -b v5.2.2 --recursive https://github.com/espressif/esp-idf.git $HOME/esp-idf
 
-      # ✅ Disable SR (prevents crash)
-      - name: Disable Speech Recognition
-        shell: bash
+      - name: Install ESP-IDF tools
         run: |
-          sed -i 's/CONFIG_SR_ENABLED=y/CONFIG_SR_ENABLED=n/' esp-box/examples/factory_demo/sdkconfig.ci.box || true
+          cd $HOME/esp-idf
+          ./install.sh
 
-      # ✅ Build clean
-      - name: Build Firmware
-        shell: bash
+      - name: Export ESP-IDF
         run: |
-          set -e
-          . $IDF_PATH/export.sh
-          cd esp-box/examples/factory_demo
+          echo "IDF_PATH=$HOME/esp-idf" >> $GITHUB_ENV
+
+      - name: Prepare dependencies (esp-box, esp-sr, rainmaker)
+        run: |
+          . $HOME/esp-idf/export.sh
+          idf.py reconfigure
+
+      - name: Set target ESP32-S3
+        run: |
+          . $HOME/esp-idf/export.sh
           idf.py set-target esp32s3
-          cp sdkconfig.ci.box sdkconfig
-          idf.py fullclean
-          rm -rf build
-          idf.py build
-          cd build
-          esptool.py --chip esp32s3 merge_bin -o factory_demo_box.bin --flash_mode dio --flash_size 16MB $(cat flash_args)
 
-      - name: Upload Firmware
+      - name: Build firmware
+        run: |
+          . $HOME/esp-idf/export.sh
+          idf.py build
+
+      - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-web-stable
-          path: esp-box/examples/factory_demo/build/factory_demo_box.bin
+          name: esp-box-s3-firmware
+          path: |
+            build/*.bin
+            build/*.elf
+            build/*.map
