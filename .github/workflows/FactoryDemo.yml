@@ -1,4 +1,4 @@
-name: Build ESP32-S3-BOX Factory Demo + Web
+name: ESP32-S3-BOX Web + RainMaker (Stable)
 
 on:
   workflow_dispatch:
@@ -22,7 +22,8 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      - name: Prepare Custom Files
+      # ✅ Copy ONLY our custom files
+      - name: Inject Custom Files
         shell: bash
         run: |
           set -e
@@ -30,11 +31,20 @@ jobs:
           cp custom/main/web_server.c esp-box/examples/factory_demo/main/web_server.c
           cp custom/main/web_server.h esp-box/examples/factory_demo/main/web_server.h
 
+      # ✅ Ensure web_server.c is compiled
       - name: Fix CMakeLists
         shell: bash
         run: |
-          sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' esp-box/examples/factory_demo/main/CMakeLists.txt
+          FILE=esp-box/examples/factory_demo/main/CMakeLists.txt
+          grep -q web_server.c $FILE || sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
+      # ✅ Disable SR (prevents crash)
+      - name: Disable Speech Recognition
+        shell: bash
+        run: |
+          sed -i 's/CONFIG_SR_ENABLED=y/CONFIG_SR_ENABLED=n/' esp-box/examples/factory_demo/sdkconfig.ci.box || true
+
+      # ✅ Build clean
       - name: Build Firmware
         shell: bash
         run: |
@@ -52,5 +62,5 @@ jobs:
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: factory-demo-web
+          name: firmware-web-stable
           path: esp-box/examples/factory_demo/build/factory_demo_box.bin
