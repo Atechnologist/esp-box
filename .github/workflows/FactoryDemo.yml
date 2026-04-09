@@ -1,4 +1,4 @@
-name: ESP-BOX-S3 Full Build (with RainMaker)
+name: ESP-BOX-S3 Clean Build
 
 on:
   push:
@@ -9,25 +9,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ✅ Checkout your repo
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ✅ Python
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      # ✅ System deps
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            git wget flex bison gperf cmake ninja-build ccache \
+          sudo apt-get install -y git wget flex bison gperf cmake ninja-build ccache \
             libffi-dev libssl-dev dfu-util
 
-      # ✅ ESP-IDF
       - name: Clone ESP-IDF
         run: |
           git clone -b v5.2.2 --recursive https://github.com/espressif/esp-idf.git $HOME/esp-idf
@@ -41,42 +36,31 @@ jobs:
         run: |
           echo "IDF_PATH=$HOME/esp-idf" >> $GITHUB_ENV
 
-      # 🔥 CREATE components folder
-      - name: Prepare components folder
+      # 🔥 FULL CLEAN (THIS FIXES YOUR ERROR)
+      - name: HARD CLEAN BUILD ENV
+        shell: bash
         run: |
-          mkdir -p components
+          rm -rf build
+          rm -rf sdkconfig
+          rm -rf dependencies.lock
+          rm -rf managed_components
+          rm -rf .idf_build_get
+          rm -rf .cmake
+          rm -rf CMakeCache.txt
 
-      # 🔥 CLONE RAINMAKER (CRITICAL STEP)
-      - name: Clone RainMaker
-        run: |
-          git clone --recursive https://github.com/espressif/esp-rainmaker.git components/esp-rainmaker
-
-      # 🔥 OPTIONAL: lock to stable tag
-      # run: |
-      #   cd components/esp-rainmaker
-      #   git checkout v1.4.2
-
-      # ✅ Build
-      - name: Build project
+      - name: Configure ESP32-S3
         shell: bash
         run: |
           . $HOME/esp-idf/export.sh
-
-          # Clean previous broken configs
-          idf.py fullclean || true
-          rm -f sdkconfig
-          rm -f dependencies.lock
-
-          # Correct target
           idf.py set-target esp32s3
-
-          # Resolve dependencies
           idf.py reconfigure
 
-          # Build
+      - name: Build firmware
+        shell: bash
+        run: |
+          . $HOME/esp-idf/export.sh
           idf.py build
 
-      # ✅ Upload firmware
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
@@ -84,4 +68,3 @@ jobs:
           path: |
             build/*.bin
             build/*.elf
-            build/*.map
