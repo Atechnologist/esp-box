@@ -11,7 +11,7 @@
 // Your modules
 #include "wifi.h"
 #include "mqtt.h"
-#include "rmaker.h"
+//#include "rmaker.h"
 #include "ui.h"
 // #include "sr.h"   // 🔒 Disabled for stability (enable later)
 
@@ -72,7 +72,7 @@ void app_main(void)
 
     // ✅ 7. RAINMAKER
     ESP_LOGI(TAG, "[7] Starting RainMaker...");
-    rmaker_start();
+    //rmaker_start();
 
     // ✅ 8. SPEECH RECOGNITION (DISABLED FOR NOW)
     /*
