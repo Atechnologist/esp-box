@@ -1,4 +1,4 @@
-name: ESP-BOX-S3 Custom Build
+name: ESP-BOX-S3 Full Build (with RainMaker)
 
 on:
   push:
@@ -9,14 +9,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ✅ Checkout your repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ✅ Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      # ✅ System deps
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -24,6 +27,7 @@ jobs:
             git wget flex bison gperf cmake ninja-build ccache \
             libffi-dev libssl-dev dfu-util
 
+      # ✅ ESP-IDF
       - name: Clone ESP-IDF
         run: |
           git clone -b v5.2.2 --recursive https://github.com/espressif/esp-idf.git $HOME/esp-idf
@@ -33,29 +37,46 @@ jobs:
           cd $HOME/esp-idf
           ./install.sh
 
-      - name: Export ESP-IDF environment
+      - name: Export ESP-IDF
         run: |
           echo "IDF_PATH=$HOME/esp-idf" >> $GITHUB_ENV
 
-      - name: Build Project
+      # 🔥 CREATE components folder
+      - name: Prepare components folder
+        run: |
+          mkdir -p components
+
+      # 🔥 CLONE RAINMAKER (CRITICAL STEP)
+      - name: Clone RainMaker
+        run: |
+          git clone --recursive https://github.com/espressif/esp-rainmaker.git components/esp-rainmaker
+
+      # 🔥 OPTIONAL: lock to stable tag
+      # run: |
+      #   cd components/esp-rainmaker
+      #   git checkout v1.4.2
+
+      # ✅ Build
+      - name: Build project
         shell: bash
         run: |
           . $HOME/esp-idf/export.sh
 
-          # 🔥 Clean everything (prevents your previous errors)
+          # Clean previous broken configs
           idf.py fullclean || true
           rm -f sdkconfig
           rm -f dependencies.lock
 
-          # ✅ Set correct target
+          # Correct target
           idf.py set-target esp32s3
 
-          # ✅ Resolve dependencies cleanly
+          # Resolve dependencies
           idf.py reconfigure
 
-          # ✅ Build
+          # Build
           idf.py build
 
+      # ✅ Upload firmware
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
