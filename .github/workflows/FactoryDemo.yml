@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Stable Factory Build (Hard Isolated)
+name: ESP32-S3-BOX Stable Build (Fixed IDF)
 
 on:
   workflow_dispatch:
@@ -6,73 +6,55 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: espressif/idf:release-v5.1
+    container: espressif/idf:v4.4.6
 
     steps:
-      # ✅ 1. Checkout your repo (for custom files only)
       - name: Checkout user repo
         uses: actions/checkout@v4
 
-      # 🚀 2. CREATE CLEAN WORKSPACE (KEY FIX)
-      - name: Create clean workspace
+      - name: Clone ESP-BOX
         run: |
-          mkdir -p /tmp/work
-          cd /tmp/work
+          git clone --recursive https://github.com/espressif/esp-box.git /tmp/esp-box
 
-      # ✅ 3. Clone ESP-BOX INSIDE clean workspace
-      - name: Clone ESP-BOX clean
-        run: |
-          cd /tmp/work
-          git clone --recursive https://github.com/espressif/esp-box.git
-
-      # 🚀 4. Build in FULLY ISOLATED PATH
-      - name: Build firmware (true isolation)
+      - name: Build firmware
         shell: bash
         run: |
           set -e
           . $IDF_PATH/export.sh
 
-          cd /tmp/work/esp-box/examples/factory_demo
+          cd /tmp/esp-box/examples/factory_demo
 
-          # 🔥 Inject your custom files FROM original repo
+          # Inject custom files
           cp $GITHUB_WORKSPACE/custom/main/main.c main/main.c
           cp $GITHUB_WORKSPACE/custom/main/web_server.c main/web_server.c
           cp $GITHUB_WORKSPACE/custom/main/web_server.h main/web_server.h
 
-          # 🔥 Ensure web server compiled
+          # Fix CMake
           FILE=main/CMakeLists.txt
           grep -q web_server.c $FILE || \
             sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
-          # 🔥 Disable SR (prevents crash)
-          sed -i 's/CONFIG_SR_ENABLED=y/CONFIG_SR_ENABLED=n/' sdkconfig.ci.box || true
-
-          # 🔥 Use correct config
+          # Use stable config
           cp sdkconfig.ci.box sdkconfig
 
-          # 🔥 HARD CLEAN
-          rm -rf build sdkconfig.old
-
-          idf.py set-target esp32s3
+          # Clean build
+          rm -rf build
           idf.py fullclean || true
 
-          # 🚀 BUILD
+          idf.py set-target esp32s3
           idf.py build
 
-      # 📦 5. Merge firmware
       - name: Merge firmware
-        shell: bash
         run: |
-          cd /tmp/work/esp-box/examples/factory_demo/build
+          cd /tmp/esp-box/examples/factory_demo/build
           esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_box.bin \
+            -o firmware.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📤 6. Upload firmware
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-web-stable
-          path: /tmp/work/esp-box/examples/factory_demo/build/factory_demo_box.bin
+          name: firmware
+          path: /tmp/esp-box/examples/factory_demo/build/firmware.bin
