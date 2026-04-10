@@ -1,60 +1,66 @@
-name: ESP32-S3-BOX Stable Build (Fixed IDF)
+name: ESP32-S3-BOX Factory Demo (Stable + Custom)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ master ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: espressif/idf:v4.4.6
+    container: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout user repo
+      - name: Checkout Repository (ESP-BOX ROOT)
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Clone ESP-BOX
-        run: |
-          git clone --recursive https://github.com/espressif/esp-box.git /tmp/esp-box
-
-      - name: Build firmware
+      # 🔥 Inject custom files INTO factory demo
+      - name: Inject Custom Code
         shell: bash
         run: |
           set -e
-          . $IDF_PATH/export.sh
 
-          cd /tmp/esp-box/examples/factory_demo
+          cp custom/main/main.c examples/factory_demo/main/main.c
+          cp custom/main/web_server.c examples/factory_demo/main/web_server.c
+          cp custom/main/web_server.h examples/factory_demo/main/web_server.h
 
-          # Inject custom files
-          cp $GITHUB_WORKSPACE/custom/main/main.c main/main.c
-          cp $GITHUB_WORKSPACE/custom/main/web_server.c main/web_server.c
-          cp $GITHUB_WORKSPACE/custom/main/web_server.h main/web_server.h
-
-          # Fix CMake
-          FILE=main/CMakeLists.txt
+      # 🔥 Ensure compilation
+      - name: Fix CMakeLists
+        shell: bash
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
           grep -q web_server.c $FILE || \
             sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
-          # Use stable config
-          cp sdkconfig.ci.box sdkconfig
+      # 🚀 Build
+      - name: Build Factory Demo
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
 
-          # Clean build
-          rm -rf build
-          idf.py fullclean || true
+          cd examples/factory_demo
 
           idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+
+          idf.py fullclean
           idf.py build
 
-      - name: Merge firmware
+      # 📦 Merge firmware
+      - name: Merge Firmware
         run: |
-          cd /tmp/esp-box/examples/factory_demo/build
+          cd examples/factory_demo/build
           esptool.py --chip esp32s3 merge_bin \
-            -o firmware.bin \
+            -o factory_demo_box.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-      - name: Upload firmware
+      # 📤 Upload
+      - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: /tmp/esp-box/examples/factory_demo/build/firmware.bin
+          path: examples/factory_demo/build/factory_demo_box.bin
