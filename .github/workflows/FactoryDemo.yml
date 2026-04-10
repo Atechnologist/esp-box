@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (FORCED BOX S3 - FINAL FIX)
+name: ESP32-S3-BOX Factory Demo (FINAL - BOX S3 FIXED)
 
 on:
   workflow_dispatch:
@@ -11,20 +11,20 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # ✅ Checkout your repo
+      # ✅ 1. Checkout your repo (custom files only)
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 🔐 Fix Git
+      # 🔐 2. Fix Git safe directory
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 📦 Clone ESP-BOX
+      # 📦 3. Clone official ESP-BOX
       - name: Clone ESP-BOX
         run: |
           git clone --recursive https://github.com/espressif/esp-box.git esp-box
 
-      # 🚀 Build
+      # 🚀 4. Build firmware
       - name: Build Firmware
         run: |
           set -e
@@ -32,35 +32,41 @@ jobs:
 
           cd esp-box/examples/factory_demo
 
-          # ================================
-          # 🔥 FORCE BOARD AT SOURCE LEVEL
-          # ================================
-          sed -i 's/default BSP_BOARD_ESP32_S3_BOX_3/default BSP_BOARD_ESP32_S3_BOX/' Kconfig.projbuild
+          # =====================================
+          # 🔥 FORCE CORRECT BOARD (REAL FIX)
+          # =====================================
+          sed -i 's/default BSP_BOARD_ESP32_S3_BOX_3/default BSP_BOARD_ESP32_S3_BOX/' main/Kconfig.projbuild
 
-          # ================================
-          # Inject custom files
-          # ================================
+          # =====================================
+          # ✅ Inject custom files
+          # =====================================
           cp $GITHUB_WORKSPACE/custom/main/web_server.c main/web_server.c
           cp $GITHUB_WORKSPACE/custom/main/web_server.h main/web_server.h
 
-          # Extend CMake safely
+          # =====================================
+          # ✅ Extend CMakeLists safely
+          # =====================================
           FILE=main/CMakeLists.txt
           grep -q web_server.c $FILE || \
             sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
-          # Use config
+          # =====================================
+          # ✅ Use stable config
+          # =====================================
           cp sdkconfig.ci.box sdkconfig
 
           # 🔥 HARD FORCE BOARD AGAIN
           echo "CONFIG_BSP_BOARD_ESP32_S3_BOX=y" >> sdkconfig
           sed -i '/ESP32_S3_BOX_3/d' sdkconfig
 
-          # Build
+          # =====================================
+          # 🚀 Build
+          # =====================================
           idf.py set-target esp32s3
           idf.py fullclean || true
           idf.py build
 
-      # 📦 Merge firmware
+      # 📦 5. Merge firmware (FIXED ENV)
       - name: Merge Firmware
         run: |
           set -e
@@ -74,7 +80,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📤 Upload
+      # 📤 6. Upload firmware
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
