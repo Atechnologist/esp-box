@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (Stable Custom Build)
+name: ESP32-S3-BOX Factory Demo (Final Stable Build)
 
 on:
   workflow_dispatch:
@@ -11,20 +11,20 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # ✅ 1. Checkout your repo (ONLY custom files)
+      # ✅ 1. Checkout your repo (only custom files)
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 🔐 2. Fix git safe directory issue
+      # 🔐 2. Fix Git safe directory issue
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 📦 3. Clone official ESP-BOX (clean source every build)
+      # 📦 3. Clone official ESP-BOX
       - name: Clone ESP-BOX
         run: |
           git clone --recursive https://github.com/espressif/esp-box.git esp-box
 
-      # 🚀 4. Build system
+      # 🚀 4. Build firmware
       - name: Build Firmware
         run: |
           set -e
@@ -32,35 +32,29 @@ jobs:
 
           cd esp-box/examples/factory_demo
 
-          # ================================
-          # ✅ ONLY inject your custom files
-          # ================================
+          # ✅ Inject ONLY your custom files
           cp $GITHUB_WORKSPACE/custom/main/web_server.c main/web_server.c
           cp $GITHUB_WORKSPACE/custom/main/web_server.h main/web_server.h
 
-          # =========================================
-          # ✅ Safely extend CMakeLists (NO overwrite)
-          # =========================================
+          # ✅ Safely extend CMakeLists (DO NOT overwrite)
           FILE=main/CMakeLists.txt
-
           grep -q web_server.c $FILE || \
             sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
-          # ================================
           # ✅ Use official stable config
-          # ================================
           cp sdkconfig.ci.box sdkconfig
 
-          # ================================
-          # ✅ Build ESP-IDF project
-          # ================================
+          # ✅ Build
           idf.py set-target esp32s3
           idf.py fullclean || true
           idf.py build
 
-      # 📦 5. Merge firmware (FIXED esptool)
+      # 📦 5. Merge firmware (FIXED ENV + ESPTOOL)
       - name: Merge Firmware
         run: |
+          set -e
+          . $IDF_PATH/export.sh
+
           cd esp-box/examples/factory_demo/build
 
           python -m esptool --chip esp32s3 merge_bin \
