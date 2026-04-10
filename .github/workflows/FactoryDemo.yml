@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (Final Stable Build)
+name: ESP32-S3-BOX Factory Demo (Final Stable - BOX S3)
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 📦 3. Clone official ESP-BOX
+      # 📦 3. Clone clean ESP-BOX source
       - name: Clone ESP-BOX
         run: |
           git clone --recursive https://github.com/espressif/esp-box.git esp-box
@@ -32,24 +32,38 @@ jobs:
 
           cd esp-box/examples/factory_demo
 
-          # ✅ Inject ONLY your custom files
+          # ================================
+          # ✅ Inject your custom files
+          # ================================
           cp $GITHUB_WORKSPACE/custom/main/web_server.c main/web_server.c
           cp $GITHUB_WORKSPACE/custom/main/web_server.h main/web_server.h
 
-          # ✅ Safely extend CMakeLists (DO NOT overwrite)
+          # ================================
+          # ✅ Safely extend CMakeLists
+          # ================================
           FILE=main/CMakeLists.txt
           grep -q web_server.c $FILE || \
             sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
-          # ✅ Use official stable config
+          # ================================
+          # ✅ Use official config
+          # ================================
           cp sdkconfig.ci.box sdkconfig
 
+          # ================================
+          # 🔥 FORCE ESP32-S3-BOX (NOT BOX-3)
+          # ================================
+          sed -i 's/CONFIG_BSP_BOARD_ESP32_S3_BOX_3=y/# CONFIG_BSP_BOARD_ESP32_S3_BOX_3 is not set/' sdkconfig || true
+          sed -i 's/# CONFIG_BSP_BOARD_ESP32_S3_BOX=y/CONFIG_BSP_BOARD_ESP32_S3_BOX=y/' sdkconfig || true
+
+          # ================================
           # ✅ Build
+          # ================================
           idf.py set-target esp32s3
           idf.py fullclean || true
           idf.py build
 
-      # 📦 5. Merge firmware (FIXED ENV + ESPTOOL)
+      # 📦 5. Merge firmware (fixed environment)
       - name: Merge Firmware
         run: |
           set -e
