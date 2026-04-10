@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Clean Build (Official + Custom)
+name: ESP32-S3-BOX Clean Build (Stable Fix)
 
 on:
   workflow_dispatch:
@@ -11,20 +11,16 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # ✅ Checkout your repo
       - name: Checkout user repo
         uses: actions/checkout@v4
 
-      # 🔥 Clone official ESP-BOX
       - name: Clone ESP-BOX
         run: |
           git clone --recursive https://github.com/espressif/esp-box.git esp-box
 
-      # 🔐 Fix git safe directory
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 🚀 Build firmware
       - name: Build firmware
         run: |
           set -e
@@ -32,30 +28,23 @@ jobs:
 
           cd esp-box/examples/factory_demo
 
-          # Inject your files
-          cp $GITHUB_WORKSPACE/custom/main/main.c main/main.c
+          # ✅ ONLY add your files (DO NOT replace main.c)
           cp $GITHUB_WORKSPACE/custom/main/web_server.c main/web_server.c
           cp $GITHUB_WORKSPACE/custom/main/web_server.h main/web_server.h
 
-          # ✅ FIX CMakeLists (YAML-safe)
-          cat <<EOF > main/CMakeLists.txt
-          idf_component_register(
-          SRCS "main.c" "web_server.c"
-          INCLUDE_DIRS "."
-          )
-          EOF
+          # ✅ Modify CMakeLists SAFELY (append instead of overwrite)
+          FILE=main/CMakeLists.txt
+          grep -q web_server.c $FILE || \
+            sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
-          # Use config
+          # ✅ Use stable config
           cp sdkconfig.ci.box sdkconfig
 
-          # Clean build
           idf.py set-target esp32s3
           idf.py fullclean || true
 
-          # Build
           idf.py build
 
-      # 📦 Merge firmware
       - name: Merge firmware
         run: |
           cd esp-box/examples/factory_demo/build
@@ -65,7 +54,6 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📤 Upload
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
