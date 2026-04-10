@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Stable Factory Build
+name: ESP32-S3-BOX Stable Factory Build (Isolated)
 
 on:
   workflow_dispatch:
@@ -9,84 +9,72 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # ✅ 1. Your repo
+      # ✅ 1. Checkout your repo
       - name: Checkout user repo
         uses: actions/checkout@v4
 
-      # ✅ 2. Official ESP-BOX (REQUIRED)
-      - name: Checkout ESP-BOX official
+      # ✅ 2. Checkout official ESP-BOX
+      - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
           repository: espressif/esp-box
           path: esp-box
           submodules: recursive
 
-      # ✅ 3. Git safety fix
+      # ✅ 3. Fix Git safe directory
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 🔥 4. Inject ONLY your app logic
-      - name: Inject Custom Code
-        shell: bash
-        run: |
-          set -e
-
-          cp custom/main/main.c \
-            esp-box/examples/factory_demo/main/main.c
-
-          cp custom/main/web_server.c \
-            esp-box/examples/factory_demo/main/web_server.c
-
-          cp custom/main/web_server.h \
-            esp-box/examples/factory_demo/main/web_server.h
-
-      # 🔥 5. Ensure web server is compiled
-      - name: Fix CMake
-        shell: bash
-        run: |
-          FILE=esp-box/examples/factory_demo/main/CMakeLists.txt
-          grep -q web_server.c $FILE || \
-          sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
-
-      # 🔥 6. Disable SR safely
-      - name: Disable Speech Recognition
-        shell: bash
-        run: |
-          sed -i 's/CONFIG_SR_ENABLED=y/CONFIG_SR_ENABLED=n/' \
-          esp-box/examples/factory_demo/sdkconfig.ci.box || true
-
-      # 🚀 7. Build
-      - name: Build firmware
+      # 🚀 4. BUILD IN ISOLATED ENV (CRITICAL FIX)
+      - name: Build firmware (isolated clean)
         shell: bash
         run: |
           set -e
           . $IDF_PATH/export.sh
 
-          cd esp-box/examples/factory_demo
+          # 🔥 Copy factory_demo OUTSIDE repo (prevents conflicts)
+          cp -r esp-box/examples/factory_demo /tmp/factory_demo
 
-          idf.py set-target esp32s3
+          cd /tmp/factory_demo
 
+          # 🔥 Inject your custom files
+          cp $GITHUB_WORKSPACE/custom/main/main.c main/main.c
+          cp $GITHUB_WORKSPACE/custom/main/web_server.c main/web_server.c
+          cp $GITHUB_WORKSPACE/custom/main/web_server.h main/web_server.h
+
+          # 🔥 Ensure web_server is compiled
+          FILE=main/CMakeLists.txt
+          grep -q web_server.c $FILE || \
+            sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
+
+          # 🔥 Disable Speech Recognition (prevents crash)
+          sed -i 's/CONFIG_SR_ENABLED=y/CONFIG_SR_ENABLED=n/' sdkconfig.ci.box || true
+
+          # 🔥 Use stable config
           cp sdkconfig.ci.box sdkconfig
 
+          # 🔥 Clean build environment
+          idf.py set-target esp32s3
           idf.py fullclean || true
           rm -rf build
 
+          # 🚀 Build
           idf.py build
 
-      # 📦 8. Merge firmware
+      # 📦 5. Merge firmware
       - name: Merge firmware
         shell: bash
         run: |
-          cd esp-box/examples/factory_demo/build
+          cd /tmp/factory_demo/build
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📤 9. Upload
+      # 📤 6. Upload firmware
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: firmware-web-stable
-          path: esp-box/examples/factory_demo/build/factory_demo_box.bin
+          path: /tmp/factory_demo/build/factory_demo_box.bin
