@@ -11,44 +11,32 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout Repository (ESP-BOX ROOT)
+      - name: Checkout ESP-BOX repo
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 🔥 Inject custom files INTO factory demo
       - name: Inject Custom Code
-        shell: bash
         run: |
-          set -e
-
           cp custom/main/main.c examples/factory_demo/main/main.c
           cp custom/main/web_server.c examples/factory_demo/main/web_server.c
           cp custom/main/web_server.h examples/factory_demo/main/web_server.h
 
-      # 🔥 Ensure compilation
       - name: Fix CMakeLists
-        shell: bash
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
           grep -q web_server.c $FILE || \
             sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
-      # 🚀 Build
-      - name: Build Factory Demo
-        shell: bash
+      - name: Build
         run: |
           . $IDF_PATH/export.sh
-
           cd examples/factory_demo
-
           idf.py set-target esp32s3
           cp sdkconfig.ci.box sdkconfig
-
           idf.py fullclean
           idf.py build
 
-      # 📦 Merge firmware
       - name: Merge Firmware
         run: |
           cd examples/factory_demo/build
@@ -58,7 +46,6 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📤 Upload
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
