@@ -1,7 +1,9 @@
-name: ESP32-S3-BOX Factory Demo (Correct Final)
+name: ESP32-S3-BOX Factory Demo (Auto Components)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ master ]
 
 jobs:
   build:
@@ -9,55 +11,67 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-      # ✅ 1. Checkout YOUR repo (only for custom files)
+      # ✅ 1. Checkout YOUR repo (no components needed here)
       - name: Checkout user repo
         uses: actions/checkout@v4
 
-      # 🔥 2. Clone REAL ESP-BOX (THIS FIXES YOUR ERROR)
-      - name: Clone official ESP-BOX
+      # 🔥 2. Clone official ESP-BOX (source of components)
+      - name: Clone ESP-BOX source
         run: |
-          git clone --recursive https://github.com/espressif/esp-box.git /tmp/esp-box
+          git clone --depth=1 https://github.com/espressif/esp-box.git temp-esp-box
 
-      # 🚀 3. Build
-      - name: Build firmware
-        shell: bash
+      # 🔥 3. Copy REQUIRED folders into your repo
+      - name: Copy ESP-BOX core folders
         run: |
-          set -e
-          . $IDF_PATH/export.sh
+          cp -r temp-esp-box/components .
+          cp -r temp-esp-box/tools . || true
+          cp -r temp-esp-box/docs . || true
 
-          cd /tmp/esp-box/examples/factory_demo
+      # 🔥 4. Verify components exist (debug safety)
+      - name: Verify components
+        run: |
+          ls -la components || (echo "components missing!" && exit 1)
 
-          # Inject your custom files
-          cp $GITHUB_WORKSPACE/custom/main/main.c main/main.c
-          cp $GITHUB_WORKSPACE/custom/main/web_server.c main/web_server.c
-          cp $GITHUB_WORKSPACE/custom/main/web_server.h main/web_server.h
+      # 🔥 5. Inject your custom code
+      - name: Inject Custom Code
+        run: |
+          cp custom/main/main.c examples/factory_demo/main/main.c
+          cp custom/main/web_server.c examples/factory_demo/main/web_server.c
+          cp custom/main/web_server.h examples/factory_demo/main/web_server.h
 
-          # Ensure web_server compiled
-          FILE=main/CMakeLists.txt
+      # 🔥 6. Ensure web_server is compiled
+      - name: Fix CMakeLists
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
           grep -q web_server.c $FILE || \
             sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
-          # Use correct config
-          cp sdkconfig.ci.box sdkconfig
+      # 🚀 7. Build
+      - name: Build firmware
+        run: |
+          . $IDF_PATH/export.sh
+
+          cd examples/factory_demo
 
           idf.py set-target esp32s3
-          idf.py fullclean || true
+          cp sdkconfig.ci.box sdkconfig
 
+          idf.py fullclean
           idf.py build
 
-      # 📦 Merge firmware
+      # 📦 8. Merge firmware
       - name: Merge firmware
         run: |
-          cd /tmp/esp-box/examples/factory_demo/build
+          cd examples/factory_demo/build
           esptool.py --chip esp32s3 merge_bin \
-            -o firmware.bin \
+            -o factory_demo_box.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📤 Upload
+      # 📤 9. Upload
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: /tmp/esp-box/examples/factory_demo/build/firmware.bin
+          path: examples/factory_demo/build/factory_demo_box.bin
