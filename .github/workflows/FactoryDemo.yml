@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (Stable WiFi Web Build)
+name: ESP32-S3-BOX Factory Demo Stable Build
 
 on:
   workflow_dispatch:
@@ -13,18 +13,18 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # 📥 Checkout
+      # 📥 Checkout full repo (with submodules)
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # 🔧 Git safe directory fix
+      # 🔧 Fix Git safe directory
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 🔐 Inject WiFi credentials (NO HARDCODE)
+      # 🔐 Inject WiFi credentials (safe, no BSP impact)
       - name: Inject WiFi credentials
         run: |
           mkdir -p examples/factory_demo/main
@@ -34,24 +34,17 @@ jobs:
           #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
           EOF
 
-      # 🧹 CLEAN BSP CONFLICTS (IMPORTANT FIX)
-      - name: Remove broken BSP dependencies
-        shell: bash
+      # 🧹 SAFE CLEAN (NO YAML editing!)
+      - name: Safe project cleanup
         run: |
           . $IDF_PATH/export.sh
 
-          # Remove ONLY known problematic drivers
-          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \;
-          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \;
-          find . -name "idf_component.yml" -exec sed -i '/esp-box-lite/d' {} \;
-
-          # IMPORTANT: do NOT use add-dependency for BSP
-          echo "Using factory_demo BSP from sdkconfig only"
-
+          # ONLY remove build artifacts (SAFE)
           rm -rf managed_components
+          rm -rf build
 
-      # 🛠 BUILD STEP
-      - name: Build Factory Demo
+      # 🛠 Build factory demo
+      - name: Build Firmware
         shell: bash
         run: |
           set -e
@@ -61,22 +54,20 @@ jobs:
 
           idf.py set-target esp32s3
 
-          # Use correct BOX-S3 config (critical)
+          # Use official working config for ESP32-S3-BOX
           cp sdkconfig.ci.box sdkconfig
 
-          # Clean rebuild (avoid cached dependency bugs)
+          # Clean rebuild (safe)
           idf.py fullclean
-          rm -rf managed_components
           idf.py reconfigure
 
-          # Optional HTTP server tuning
+          # Enable HTTP server buffer tuning (safe add)
           echo "CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024" >> sdkconfig
 
           idf.py build
 
-      # 📦 Merge firmware
-      - name: Merge Firmware
-        shell: bash
+      # 📦 Merge binaries
+      - name: Merge firmware
         run: |
           cd examples/factory_demo/build
 
