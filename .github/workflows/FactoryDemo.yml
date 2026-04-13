@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (FINAL STABLE CLEAN)
+name: ESP32-S3-BOX Factory Demo (HARD RESET FIX)
 
 on:
   workflow_dispatch:
@@ -13,34 +13,46 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # 📥 Checkout clean repo
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # 🔧 Git safety
       - name: Git safe directory
         run: git config --global --add safe.directory '*'
 
-      # 🚨 CRITICAL FIX: RESTORE BSP YAML (THIS FIXES YOUR ERROR)
-      - name: Restore BSP YAML integrity
+      # 🚨 HARD FIX: ALWAYS DESTROY BROKEN CMakeLists FIRST
+      - name: Force clean CMakeLists (CRITICAL FIX)
         run: |
-          echo "Restoring BSP manifest..."
-          git checkout -- components/bsp/idf_component.yml || true
+          set -e
 
-          echo "Checking BSP YAML:"
-          cat components/bsp/idf_component.yml || true
+          FILE="examples/factory_demo/main/CMakeLists.txt"
 
-      # 🧹 CLEAN ONLY BUILD OUTPUT (NEVER TOUCH COMPONENTS)
-      - name: Clean build artifacts
+          echo "Checking file: $FILE"
+
+          rm -f "$FILE"
+
+          mkdir -p examples/factory_demo/main
+
+          cat > "$FILE" <<'EOF'
+idf_component_register(
+    SRCS "app_main.c"
+    INCLUDE_DIRS "."
+)
+EOF
+
+          echo "CMakeLists content:"
+          cat "$FILE"
+
+      # 🧹 Clean build artifacts only
+      - name: Clean build
         run: |
           rm -rf build
           rm -rf managed_components
 
-      # 🔐 Inject WiFi safely (ONLY USER APP AREA)
-      - name: Inject WiFi config
+      # 🔐 WiFi injection ONLY
+      - name: Inject WiFi
         run: |
           mkdir -p examples/factory_demo/main
           cat <<EOF > examples/factory_demo/main/wifi_config.h
@@ -49,8 +61,8 @@ jobs:
           #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
           EOF
 
-      # 🛠 Build firmware
-      - name: Build ESP32-S3-BOX firmware
+      # 🛠 Build
+      - name: Build firmware
         shell: bash
         run: |
           set -e
@@ -60,15 +72,14 @@ jobs:
 
           idf.py set-target esp32s3
 
-          # IMPORTANT: use official BOX config
           cp sdkconfig.ci.box sdkconfig
 
           idf.py fullclean
           idf.py reconfigure
           idf.py build
 
-      # 📦 Merge binaries
-      - name: Merge firmware
+      # 📦 Merge firmware
+      - name: Merge binary
         run: |
           cd examples/factory_demo/build
 
@@ -78,7 +89,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📤 Upload artifact
+      # 📤 Upload
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
