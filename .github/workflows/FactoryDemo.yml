@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (FINAL STABLE RESET)
+name: ESP32-S3-BOX Factory Demo (Clean Build)
 
 on:
   workflow_dispatch:
@@ -13,47 +13,38 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # 📥 Checkout clean source
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # 🔧 Git safety
       - name: Git safe directory
         run: git config --global --add safe.directory '*'
 
-      # ❌ DO NOT modify ANY BSP / YAML / component files
-
-      # 🧹 Clean build state only
-      - name: Clean build state
+      - name: Clean build
         run: |
           rm -rf build
           rm -rf managed_components
 
-      # 🔥 FORCE FIX BROKEN CMakeLists EVERY RUN (CRITICAL)
-      - name: Fix CMakeLists corruption
+      # 🔥 FIX CMakeLists (CORRECT YAML FORMAT)
+      - name: Fix CMakeLists
         run: |
-          set -e
-
           FILE="examples/factory_demo/main/CMakeLists.txt"
 
           mkdir -p examples/factory_demo/main
 
           cat > "$FILE" <<'EOF'
-idf_component_register(
-    SRCS "app_main.c"
-    INCLUDE_DIRS "."
-)
-EOF
+          idf_component_register(
+          SRCS "app_main.c"
+          INCLUDE_DIRS "."
+          )
+          EOF
 
           echo "CMakeLists fixed:"
           cat "$FILE"
 
-      # 🛠 Build firmware (NO BSP MODIFICATIONS)
       - name: Build firmware
-        shell: bash
         run: |
           set -e
           . $IDF_PATH/export.sh
@@ -62,15 +53,12 @@ EOF
 
           idf.py set-target esp32s3
 
-          # Use official config ONLY
           cp sdkconfig.ci.box sdkconfig
 
           idf.py fullclean
           idf.py reconfigure
-
           idf.py build
 
-      # 📦 Merge binaries
       - name: Merge firmware
         run: |
           cd examples/factory_demo/build
@@ -81,7 +69,6 @@ EOF
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📤 Upload artifact
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
