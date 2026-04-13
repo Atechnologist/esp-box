@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (Clean Build)
+name: ESP32-S3-BOX Factory Demo (FINAL STABLE NO AHT20)
 
 on:
   workflow_dispatch:
@@ -13,38 +13,50 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout
+      # 📥 Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
+      # 🔧 Git safety
       - name: Git safe directory
         run: git config --global --add safe.directory '*'
 
-      - name: Clean build
+      # 🧹 CLEAN BUILD ONLY
+      - name: Clean environment
         run: |
           rm -rf build
           rm -rf managed_components
 
-      # 🔥 FIX CMakeLists (CORRECT YAML FORMAT)
-      - name: Fix CMakeLists
+      # 🚨 HARD FIX: REMOVE esp-box-3 + AHT20 FROM COMPONENT GRAPH
+      - name: Force remove problematic dependency chain
         run: |
-          FILE="examples/factory_demo/main/CMakeLists.txt"
+          set -e
 
+          echo "Disabling esp-box-3 dependency chain..."
+
+          # Remove esp-box-3 usage from all component manifests safely
+          find . -name "idf_component.yml" -exec sed -i '/esp-box-3/d' {} \;
+          find . -name "idf_component.yml" -exec sed -i '/aht20/d' {} \;
+
+          # Remove dependency lock so ESP-IDF re-solves cleanly
+          find . -name "dependencies.lock" -delete
+
+      # 🔐 WiFi injection (SAFE ONLY)
+      - name: Inject WiFi config
+        run: |
           mkdir -p examples/factory_demo/main
-
-          cat > "$FILE" <<'EOF'
-          idf_component_register(
-          SRCS "app_main.c"
-          INCLUDE_DIRS "."
-          )
+          cat <<EOF > examples/factory_demo/main/wifi_config.h
+          #pragma once
+          #define WIFI_SSID "${{ secrets.WIFI_SSID }}"
+          #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
           EOF
 
-          echo "CMakeLists fixed:"
-          cat "$FILE"
-
-      - name: Build firmware
+      # 🛠 Build firmware
+      - name: Build ESP32-S3-BOX firmware
+        shell: bash
         run: |
           set -e
           . $IDF_PATH/export.sh
@@ -53,12 +65,14 @@ jobs:
 
           idf.py set-target esp32s3
 
+          # Use stable BOX config (NOT BOX-3 chain)
           cp sdkconfig.ci.box sdkconfig
 
           idf.py fullclean
           idf.py reconfigure
           idf.py build
 
+      # 📦 Merge binaries
       - name: Merge firmware
         run: |
           cd examples/factory_demo/build
@@ -69,6 +83,7 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
+      # 📤 Upload artifact
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
