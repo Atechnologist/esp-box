@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo Stable Build (Final Fix)
+name: ESP32-S3-BOX Factory Demo (LOCKED STABLE BUILD)
 
 on:
   workflow_dispatch:
@@ -13,18 +13,18 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # 📥 Checkout repo
-      - name: Checkout Repository
+      # 📥 Checkout
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # 🔧 Git safe directory fix
-      - name: Fix Git Safe Directory
+      # 🔧 Git safety
+      - name: Git safe directory
         run: git config --global --add safe.directory '*'
 
-      # 🔐 Inject WiFi credentials safely
+      # 🔐 WiFi injection (SAFE ONLY FILE)
       - name: Inject WiFi config
         run: |
           mkdir -p examples/factory_demo/main
@@ -34,23 +34,14 @@ jobs:
           #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
           EOF
 
-      # 🧹 REMOVE MISSING COMPONENT DEPENDENCY (AHT20 FIX)
-      - name: Remove unsupported components
-        run: |
-          . $IDF_PATH/export.sh
-
-          # Remove ONLY aht20 references safely
-          find . -type f -name "CMakeLists.txt" -exec sed -i '/aht20/d' {} \;
-          find . -type f -name "idf_component.yml" -exec sed -i '/aht20/d' {} \;
-
-      # 🧹 Clean build environment (SAFE)
-      - name: Clean build artifacts
+      # 🧹 HARD RULE CLEAN (NO FILE EDITING OF BUILD SYSTEM)
+      - name: Clean only build artifacts
         run: |
           rm -rf build
           rm -rf managed_components
 
-      # 🛠 Build firmware
-      - name: Build Factory Demo
+      # 🛠 Build
+      - name: Build firmware
         shell: bash
         run: |
           set -e
@@ -60,35 +51,18 @@ jobs:
 
           idf.py set-target esp32s3
 
-          # Use correct BOX-S3 configuration
+          # IMPORTANT: do NOT overwrite CMakeLists or BSP files
           cp sdkconfig.ci.box sdkconfig
 
           idf.py fullclean
           idf.py reconfigure
 
-          # Safe HTTP tuning
+          # safe tuning only
           echo "CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024" >> sdkconfig
 
           idf.py build
 
-      # 📦 Merge firmware
-      - name: Merge firmware
-        run: |
-          cd examples/factory_demo/build
-
-          esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_box_s3_final.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      # 📤 Upload artifact
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: ESP32-S3-BOX-Final-Firmware
-          path: examples/factory_demo/build/factory_demo_box_s3_final.bin
-      # 📦 Merge firmware binary
+      # 📦 Merge binaries
       - name: Merge firmware
         run: |
           cd examples/factory_demo/build
@@ -103,5 +77,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-S3-BOX-Stable
+          name: ESP32-S3-BOX-STABLE
           path: examples/factory_demo/build/factory_demo_box_s3_stable.bin
