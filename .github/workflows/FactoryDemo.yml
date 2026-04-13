@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (LOCKED STABLE BUILD)
+name: ESP32-S3-BOX Factory Demo (FINAL STABLE RESET)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # 📥 Checkout
+      # 📥 Checkout clean source
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -24,23 +24,34 @@ jobs:
       - name: Git safe directory
         run: git config --global --add safe.directory '*'
 
-      # 🔐 WiFi injection (SAFE ONLY FILE)
-      - name: Inject WiFi config
-        run: |
-          mkdir -p examples/factory_demo/main
-          cat <<EOF > examples/factory_demo/main/wifi_config.h
-          #pragma once
-          #define WIFI_SSID "${{ secrets.WIFI_SSID }}"
-          #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
-          EOF
+      # ❌ DO NOT modify ANY BSP / YAML / component files
 
-      # 🧹 HARD RULE CLEAN (NO FILE EDITING OF BUILD SYSTEM)
-      - name: Clean only build artifacts
+      # 🧹 Clean build state only
+      - name: Clean build state
         run: |
           rm -rf build
           rm -rf managed_components
 
-      # 🛠 Build
+      # 🔥 FORCE FIX BROKEN CMakeLists EVERY RUN (CRITICAL)
+      - name: Fix CMakeLists corruption
+        run: |
+          set -e
+
+          FILE="examples/factory_demo/main/CMakeLists.txt"
+
+          mkdir -p examples/factory_demo/main
+
+          cat > "$FILE" <<'EOF'
+idf_component_register(
+    SRCS "app_main.c"
+    INCLUDE_DIRS "."
+)
+EOF
+
+          echo "CMakeLists fixed:"
+          cat "$FILE"
+
+      # 🛠 Build firmware (NO BSP MODIFICATIONS)
       - name: Build firmware
         shell: bash
         run: |
@@ -51,14 +62,11 @@ jobs:
 
           idf.py set-target esp32s3
 
-          # IMPORTANT: do NOT overwrite CMakeLists or BSP files
+          # Use official config ONLY
           cp sdkconfig.ci.box sdkconfig
 
           idf.py fullclean
           idf.py reconfigure
-
-          # safe tuning only
-          echo "CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024" >> sdkconfig
 
           idf.py build
 
@@ -68,7 +76,7 @@ jobs:
           cd examples/factory_demo/build
 
           esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_box_s3_stable.bin \
+            -o factory_demo_box_s3_final.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
@@ -77,5 +85,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-S3-BOX-STABLE
-          path: examples/factory_demo/build/factory_demo_box_s3_stable.bin
+          name: ESP32-S3-BOX-FINAL
+          path: examples/factory_demo/build/factory_demo_box_s3_final.bin
