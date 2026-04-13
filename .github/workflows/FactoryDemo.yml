@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (FINAL STABLE NO AHT20)
+name: ESP32-S3-BOX Factory Demo (FINAL STABLE CLEAN)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # 📥 Checkout
+      # 📥 Checkout clean repo
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -24,27 +24,22 @@ jobs:
       - name: Git safe directory
         run: git config --global --add safe.directory '*'
 
-      # 🧹 CLEAN BUILD ONLY
-      - name: Clean environment
+      # 🚨 CRITICAL FIX: RESTORE BSP YAML (THIS FIXES YOUR ERROR)
+      - name: Restore BSP YAML integrity
+        run: |
+          echo "Restoring BSP manifest..."
+          git checkout -- components/bsp/idf_component.yml || true
+
+          echo "Checking BSP YAML:"
+          cat components/bsp/idf_component.yml || true
+
+      # 🧹 CLEAN ONLY BUILD OUTPUT (NEVER TOUCH COMPONENTS)
+      - name: Clean build artifacts
         run: |
           rm -rf build
           rm -rf managed_components
 
-      # 🚨 HARD FIX: REMOVE esp-box-3 + AHT20 FROM COMPONENT GRAPH
-      - name: Force remove problematic dependency chain
-        run: |
-          set -e
-
-          echo "Disabling esp-box-3 dependency chain..."
-
-          # Remove esp-box-3 usage from all component manifests safely
-          find . -name "idf_component.yml" -exec sed -i '/esp-box-3/d' {} \;
-          find . -name "idf_component.yml" -exec sed -i '/aht20/d' {} \;
-
-          # Remove dependency lock so ESP-IDF re-solves cleanly
-          find . -name "dependencies.lock" -delete
-
-      # 🔐 WiFi injection (SAFE ONLY)
+      # 🔐 Inject WiFi safely (ONLY USER APP AREA)
       - name: Inject WiFi config
         run: |
           mkdir -p examples/factory_demo/main
@@ -65,7 +60,7 @@ jobs:
 
           idf.py set-target esp32s3
 
-          # Use stable BOX config (NOT BOX-3 chain)
+          # IMPORTANT: use official BOX config
           cp sdkconfig.ci.box sdkconfig
 
           idf.py fullclean
