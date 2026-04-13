@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo (FINAL WORKING - NO KCONFIG)
+name: Build ESP32-S3-BOX WiFi Web Firmware
 
 on:
   workflow_dispatch:
@@ -8,71 +8,79 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: espressif/idf:release-v5.1
+
+    container:
+      image: espressif/idf:release-v5.1
 
     steps:
-      # ✅ Checkout your repo (custom files only)
+      # 📥 Checkout repo
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-      # 🔐 Fix Git safe directory
+      # 🔧 Fix Git safe directory
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 📦 Clone ESP-BOX (clean source)
-      - name: Clone ESP-BOX
+      # 🔐 Inject WiFi credentials from GitHub Secrets
+      - name: Inject WiFi credentials
         run: |
-          git clone --recursive https://github.com/espressif/esp-box.git esp-box
+          cat <<EOF > examples/factory_demo/main/wifi_config.h
+          #pragma once
+          #define WIFI_SSID "${{ secrets.WIFI_SSID }}"
+          #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
+          EOF
 
-      # 🔥 FIX dependencies (THIS IS THE REAL FIX)
-      - name: Patch broken dependencies
+      # 🔥 FIX dependencies + FORCE correct BSP
+      - name: Fix dependencies and force ESP-BOX-S3 BSP
         run: |
-          cd esp-box
+          # Remove problematic external drivers
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \;
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \;
 
-      # 🚀 Build firmware
+          # Ensure correct BSP
+          idf.py remove-dependency espressif/esp-box-3 || true
+          idf.py add-dependency espressif/esp-box-s3
+
+      # 🛠 Build firmware
       - name: Build Firmware
+        shell: bash
         run: |
           set -e
+
           . $IDF_PATH/export.sh
 
-          cd esp-box/examples/factory_demo
+          cd examples/factory_demo
 
-          # ✅ Inject custom files ONLY
-          cp $GITHUB_WORKSPACE/custom/main/web_server.c main/web_server.c
-          cp $GITHUB_WORKSPACE/custom/main/web_server.h main/web_server.h
+          idf.py set-target esp32s3
 
-          # ✅ Extend CMake safely
-          FILE=main/CMakeLists.txt
-          grep -q web_server.c $FILE || \
-            sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
-
-          # ✅ Use correct config
+          # Use BOX-S3 config (important for touch + display)
           cp sdkconfig.ci.box sdkconfig
 
-          # 🚀 Build
-          idf.py set-target esp32s3
-          idf.py fullclean || true
+          # Clean everything to avoid cached wrong BSP
+          idf.py fullclean
+          rm -rf managed_components
+          idf.py reconfigure
+
+          # Ensure HTTP server enabled (safe)
+          echo "CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024" >> sdkconfig
+
           idf.py build
 
-      # 📦 Merge firmware (FIXED ENV)
-      - name: Merge Firmware
-        run: |
-          set -e
-          . $IDF_PATH/export.sh
+          cd build
 
-          cd esp-box/examples/factory_demo/build
-
-          python -m esptool --chip esp32s3 merge_bin \
-            -o factory_demo_box.bin \
+          # Merge firmware into single BIN
+          esptool.py --chip esp32s3 merge_bin \
+            -o factory_demo_box_s3_wifi.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📤 Upload firmware
+      # 📦 Upload artifact
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-S3-BOX-Firmware
-          path: esp-box/examples/factory_demo/build/factory_demo_box.bin
+          name: ESP32-S3-BOX-WiFi-Web
+          path: examples/factory_demo/build/factory_demo_box_s3_wifi.bin
