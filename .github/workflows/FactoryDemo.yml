@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Demo Stable Build
+name: ESP32-S3-BOX Factory Demo Stable (Clean Build)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # 📥 Checkout full repo (with submodules)
+      # 📥 Checkout repo
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
@@ -24,8 +24,8 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 🔐 Inject WiFi credentials (safe, no BSP impact)
-      - name: Inject WiFi credentials
+      # 🔐 Inject WiFi credentials (SAFE)
+      - name: Inject WiFi config
         run: |
           mkdir -p examples/factory_demo/main
           cat <<EOF > examples/factory_demo/main/wifi_config.h
@@ -34,17 +34,27 @@ jobs:
           #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
           EOF
 
-      # 🧹 SAFE CLEAN (NO YAML editing!)
-      - name: Safe project cleanup
+      # 🧹 RESTORE CRITICAL FILES (FIX YOUR ERROR)
+      - name: Restore factory demo build files
+        run: |
+          # Restore CLEAN CMakeLists.txt (fixes your crash)
+          cat <<EOF > examples/factory_demo/main/CMakeLists.txt
+          idf_component_register(
+              SRCS "app_main.c"
+              INCLUDE_DIRS "."
+          )
+          EOF
+
+      # 🧹 SAFE CLEAN (NO BSP TOUCHING)
+      - name: Clean build artifacts safely
         run: |
           . $IDF_PATH/export.sh
 
-          # ONLY remove build artifacts (SAFE)
-          rm -rf managed_components
           rm -rf build
+          rm -rf managed_components
 
-      # 🛠 Build factory demo
-      - name: Build Firmware
+      # 🛠 Build firmware
+      - name: Build Factory Demo
         shell: bash
         run: |
           set -e
@@ -57,16 +67,16 @@ jobs:
           # Use official working config for ESP32-S3-BOX
           cp sdkconfig.ci.box sdkconfig
 
-          # Clean rebuild (safe)
+          # Clean rebuild
           idf.py fullclean
           idf.py reconfigure
 
-          # Enable HTTP server buffer tuning (safe add)
+          # Optional safe HTTP tuning
           echo "CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024" >> sdkconfig
 
           idf.py build
 
-      # 📦 Merge binaries
+      # 📦 Merge firmware binary
       - name: Merge firmware
         run: |
           cd examples/factory_demo/build
@@ -78,8 +88,8 @@ jobs:
             $(cat flash_args)
 
       # 📤 Upload artifact
-      - name: Upload Firmware
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-S3-BOX-Stable-Firmware
+          name: ESP32-S3-BOX-Stable
           path: examples/factory_demo/build/factory_demo_box_s3_stable.bin
