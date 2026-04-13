@@ -24,7 +24,7 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # 🔐 Inject WiFi credentials from GitHub Secrets
+      # 🔐 Inject WiFi credentials
       - name: Inject WiFi credentials
         run: |
           cat <<EOF > examples/factory_demo/main/wifi_config.h
@@ -33,14 +33,17 @@ jobs:
           #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
           EOF
 
-      # 🔥 FIX dependencies + FORCE correct BSP
-      - name: Fix dependencies and force ESP-BOX-S3 BSP
+      # 🔥 FIX dependencies + BSP (WITH ENV LOADED)
+      - name: Fix dependencies and force BSP
+        shell: bash
         run: |
+          . $IDF_PATH/export.sh
+
           # Remove problematic external drivers
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \;
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \;
 
-          # Ensure correct BSP
+          # Force correct BSP
           idf.py remove-dependency espressif/esp-box-3 || true
           idf.py add-dependency espressif/esp-box-s3
 
@@ -49,36 +52,31 @@ jobs:
         shell: bash
         run: |
           set -e
-
           . $IDF_PATH/export.sh
 
           cd examples/factory_demo
 
           idf.py set-target esp32s3
 
-          # Use BOX-S3 config (important for touch + display)
           cp sdkconfig.ci.box sdkconfig
 
-          # Clean everything to avoid cached wrong BSP
           idf.py fullclean
           rm -rf managed_components
           idf.py reconfigure
 
-          # Ensure HTTP server enabled (safe)
           echo "CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024" >> sdkconfig
 
           idf.py build
 
           cd build
 
-          # Merge firmware into single BIN
           esptool.py --chip esp32s3 merge_bin \
             -o factory_demo_box_s3_wifi.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-      # 📦 Upload artifact
+      # 📦 Upload firmware
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
