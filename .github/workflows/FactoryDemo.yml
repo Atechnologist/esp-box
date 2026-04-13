@@ -36,11 +36,11 @@ jobs:
           mkdir -p examples/factory_demo/main
 
           cat > "$FILE" <<'EOF'
-          idf_component_register(
-          SRCS "app_main.c"
-          INCLUDE_DIRS "."
-          )
-          EOF
+idf_component_register(
+    SRCS "app_main.c"
+    INCLUDE_DIRS "."
+)
+EOF
 
           echo "CMakeLists content:"
           cat "$FILE"
