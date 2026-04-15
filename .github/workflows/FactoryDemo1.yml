@@ -3,7 +3,7 @@ name: Build ESP32-S3-BOX Factory Demo
 on:
   workflow_dispatch:
   push:
-    branches: [ master ]
+    branches: [ main ]
 
 jobs:
   build:
@@ -13,22 +13,35 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      - name: Checkout Repository
+      # ----------------------------
+      # Checkout repo
+      # ----------------------------
+      - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
+          repository: espressif/esp-box
           submodules: recursive
           fetch-depth: 0
 
-      - name: Fix Git Safe Directory
+      # ----------------------------
+      # Fix git safe directory issue
+      # ----------------------------
+      - name: Git safe directory fix
         run: git config --global --add safe.directory '*'
 
-      # 🔧 SAFE dependency patch (keep this!)
-      - name: Patch broken dependencies
+      # ----------------------------
+      # FIX missing component manager issues
+      # ----------------------------
+      - name: Patch broken LCD / touch dependencies
         run: |
+          set -e
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \;
-          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \;
+          find . -name "esp-lcd-ili9341/d' {} \;" || true
 
-      - name: Build Factory Demo
+      # ----------------------------
+      # Build ESP-S3-BOX factory demo
+      # ----------------------------
+      - name: Build firmware
         shell: bash
         run: |
           set -e
@@ -38,20 +51,19 @@ jobs:
           cd examples/factory_demo
 
           idf.py set-target esp32s3
+
           cp sdkconfig.ci.box sdkconfig
 
-          idf.py fullclean build
+          # IMPORTANT: reconfigure fixes component resolution
+          idf.py reconfigure
+          idf.py build
 
-          cd build
-
-          esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_box.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      - name: Upload Firmware
+      # ----------------------------
+      # Upload binaries (NO esptool needed)
+      # ----------------------------
+      - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-S3-BOX-factory-demo
-          path: examples/factory_demo/build/factory_demo_box.bin
+          name: esp32s3-box-factory
+          path: |
+            examples/factory_demo/build/*.bin
