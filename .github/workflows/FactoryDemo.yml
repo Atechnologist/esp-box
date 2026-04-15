@@ -7,6 +7,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    container:
+      image: espressif/idf:release-v5.1
+
     steps:
       - name: Checkout esp-box repo
         uses: actions/checkout@v4
@@ -14,17 +17,8 @@ jobs:
           repository: espressif/esp-box
           path: esp-box
 
-      - name: Setup ESP-IDF
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          esp_idf_version: v5.1.2
-          target: esp32s3
-          command: ""   # disable auto build
-
       - name: Build firmware
-        shell: bash
         run: |
-          set -e
           cd esp-box/examples/voice_assistant
           idf.py set-target esp32s3
           idf.py fullclean
