@@ -1,0 +1,86 @@
+name: Factory Demo + Safe Web Layer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.1
+
+    steps:
+      - name: Checkout ESP-BOX
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          submodules: recursive
+
+      - name: Fix Git Safe Directory
+        run: git config --global --add safe.directory '*'
+
+      - name: Create Web Server Files
+        run: |
+          cd examples/factory_demo/main
+
+          echo '#pragma once' > web_server.h
+          echo 'void web_server_start(void);' >> web_server.h
+
+          echo '#include "web_server.h"' > web_server.c
+          echo '#include "esp_http_server.h"' >> web_server.c
+          echo '#include "esp_log.h"' >> web_server.c
+          echo '' >> web_server.c
+          echo 'static const char *TAG = "WEB";' >> web_server.c
+          echo '' >> web_server.c
+          echo 'static esp_err_t root_handler(httpd_req_t *req)' >> web_server.c
+          echo '{' >> web_server.c
+          echo '    const char resp[] = "<h1>ESP32-S3-BOX</h1><p>SAFE WEB LAYER ACTIVE</p>";' >> web_server.c
+          echo '    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);' >> web_server.c
+          echo '    return ESP_OK;' >> web_server.c
+          echo '}' >> web_server.c
+          echo '' >> web_server.c
+          echo 'void web_server_start(void)' >> web_server.c
+          echo '{' >> web_server.c
+          echo '    httpd_config_t config = HTTPD_DEFAULT_CONFIG();' >> web_server.c
+          echo '    httpd_handle_t server = NULL;' >> web_server.c
+          echo '' >> web_server.c
+          echo '    if (httpd_start(&server, &config) == ESP_OK) {' >> web_server.c
+          echo '        httpd_uri_t uri = {' >> web_server.c
+          echo '            .uri = "/", ' >> web_server.c
+          echo '            .method = HTTP_GET,' >> web_server.c
+          echo '            .handler = root_handler' >> web_server.c
+          echo '        };' >> web_server.c
+          echo '' >> web_server.c
+          echo '        httpd_register_uri_handler(server, &uri);' >> web_server.c
+          echo '        ESP_LOGI(TAG, "Web server started");' >> web_server.c
+          echo '    }' >> web_server.c
+          echo '}' >> web_server.c
+
+      - name: Patch main.c
+        run: |
+          FILE=examples/factory_demo/main/main.c
+          sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+          sed -i '/app_rmaker_start()/a     web_server_start();' $FILE
+
+      - name: Add to CMake
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
+
+      - name: Build
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+          idf.py fullclean build
+
+      - name: Merge firmware
+        run: |
+          cd examples/factory_demo/build
+          esptool.py --chip esp32s3 merge_bin -o factory_demo_box.bin --flash_mode dio --flash_size 16MB $(cat flash_args)
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: examples/factory_demo/build/factory_demo_box.bin
