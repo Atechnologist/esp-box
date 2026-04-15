@@ -15,13 +15,14 @@ jobs:
         repository: espressif/esp-box
         path: esp-box
 
-    - name: Setup ESP-IDF
+    - name: Setup ESP-IDF (NO AUTO BUILD)
       uses: espressif/esp-idf-ci-action@v1
       with:
         esp_idf_version: v5.1.2
         target: esp32s3
+        command: ""   # 🔥 THIS LINE FIXES YOUR ERROR
 
-    - name: Build Voice Assistant
+    - name: Build Voice Assistant (correct folder)
       run: |
         cd esp-box/examples/voice_assistant
         idf.py set-target esp32s3
