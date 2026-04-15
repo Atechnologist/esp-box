@@ -1,4 +1,4 @@
-name: Factory Demo Build
+name: Factory Demo + Safe Web Layer
 
 on:
   workflow_dispatch:
@@ -15,7 +15,71 @@ jobs:
           repository: espressif/esp-box
           submodules: recursive
 
-      - name: Build Factory Demo
+      - name: Fix Git Safe Directory
+        run: git config --global --add safe.directory '*'
+
+      # ✅ ONLY add web layer (no SR touch)
+      - name: Add Web Server
+        run: |
+          set -e
+          cd examples/factory_demo/main
+
+          # header
+          printf "#pragma once\nvoid web_server_start(void);\n" > web_server.h
+
+          # implementation
+          cat > web_server.c << 'EOF'
+          #include "web_server.h"
+          #include "esp_http_server.h"
+          #include "esp_log.h"
+
+          static const char *TAG = "WEB";
+
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const char resp[] =
+                  "<h1>ESP32-S3-BOX</h1>"
+                  "<p>SAFE WEB LAYER ACTIVE</p>";
+
+              httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          void web_server_start(void)
+          {
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              httpd_handle_t server = NULL;
+
+              if (httpd_start(&server, &config) == ESP_OK) {
+                  httpd_uri_t uri = {
+                      .uri = "/",
+                      .method = HTTP_GET,
+                      .handler = root_handler
+                  };
+
+                  httpd_register_uri_handler(server, &uri);
+                  ESP_LOGI(TAG, "Web server started");
+              }
+          }
+          EOF
+
+      # ✅ Inject include + call safely
+      - name: Patch main.c safely
+        run: |
+          FILE=examples/factory_demo/main/main.c
+
+          grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+
+          grep -q web_server_start $FILE || sed -i '/app_rmaker_start()/a     web_server_start();' $FILE
+
+      # ✅ compile web file only
+      - name: Add web_server.c to build
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          grep -q web_server.c $FILE || sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
+
+      # ✅ build unchanged factory (IMPORTANT)
+      - name: Build Firmware
         run: |
           set -e
           . $IDF_PATH/export.sh
@@ -23,3 +87,10 @@ jobs:
           idf.py set-target esp32s3
           cp sdkconfig.ci.box sdkconfig
           idf.py fullclean build
+
+      # optional merge (only if you used it before)
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-safe-web
+          path: examples/factory_demo/build/*.bin
