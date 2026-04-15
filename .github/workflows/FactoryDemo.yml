@@ -1,97 +1,36 @@
-name: ESP32-S3-BOX Factory Demo (HARD RESET FIX)
+name: Build ESP-BOX Voice Assistant
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ master ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    container:
-      image: espressif/idf:release-v5.1
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
+    - name: Checkout esp-box repo
+      uses: actions/checkout@v4
+      with:
+        repository: espressif/esp-box
+        path: esp-box
 
-      - name: Git safe directory
-        run: git config --global --add safe.directory '*'
+    - name: Setup ESP-IDF
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.1.2
+        target: esp32s3
 
-      # 🚨 HARD FIX: ALWAYS DESTROY BROKEN CMakeLists FIRST
-      - name: Force clean CMakeLists (CRITICAL FIX)
-        run: |
-          set -e
+    - name: Build Voice Assistant
+      run: |
+        cd esp-box/examples/voice_assistant
+        idf.py set-target esp32s3
+        idf.py fullclean
+        idf.py build
 
-          FILE="examples/factory_demo/main/CMakeLists.txt"
-
-          echo "Checking file: $FILE"
-
-          rm -f "$FILE"
-
-          mkdir -p examples/factory_demo/main
-
-          cat > "$FILE" <<'EOF'
-          idf_component_register(
-          SRCS "app_main.c"
-          INCLUDE_DIRS "."
-          )
-          EOF
-
-          echo "CMakeLists content:"
-          cat "$FILE"
-
-      # 🧹 Clean build artifacts only
-      - name: Clean build
-        run: |
-          rm -rf build
-          rm -rf managed_components
-
-      # 🔐 WiFi injection ONLY
-      - name: Inject WiFi
-        run: |
-          mkdir -p examples/factory_demo/main
-          cat <<EOF > examples/factory_demo/main/wifi_config.h
-          #pragma once
-          #define WIFI_SSID "${{ secrets.WIFI_SSID }}"
-          #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
-          EOF
-
-      # 🛠 Build
-      - name: Build firmware
-        shell: bash
-        run: |
-          set -e
-          . $IDF_PATH/export.sh
-
-          cd examples/factory_demo
-
-          idf.py set-target esp32s3
-
-          cp sdkconfig.ci.box sdkconfig
-
-          idf.py fullclean
-          idf.py reconfigure
-          idf.py build
-
-      # 📦 Merge firmware
-      - name: Merge binary
-        run: |
-          cd examples/factory_demo/build
-
-          esptool.py --chip esp32s3 merge_bin \
-            -o factory_demo_box_s3_final.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      # 📤 Upload
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: ESP32-S3-BOX-FINAL
-          path: examples/factory_demo/build/factory_demo_box_s3_final.bin
+    - name: Upload firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: espbox-voice-firmware
+        path: |
+          esp-box/examples/voice_assistant/build/*.bin
