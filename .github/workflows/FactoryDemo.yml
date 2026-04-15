@@ -2,7 +2,6 @@ name: Factory Demo + Safe Web Layer
 
 on:
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-latest
