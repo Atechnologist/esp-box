@@ -1,31 +1,112 @@
-name: Build ESP-BOX Voice Assistant
-
-on:
-  workflow_dispatch:
+name: ESP32-S3-BOX Hybrid (Voice + Web) on:
+workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+build:
+runs-on: ubuntu-latest
+container: espressif/idf:release-v5.1
 
-    container:
-      image: espressif/idf:release-v5.1
+steps:
+  # ✅ 1. Get official working repo
+  - name: Checkout ESP-BOX
+    uses: actions/checkout@v4
+    with:
+      repository: espressif/esp-box
+      submodules: recursive
 
-    steps:
-      - name: Checkout esp-box repo
-        uses: actions/checkout@v4
-        with:
-          repository: espressif/esp-box
-          path: esp-box
+  - name: Fix Git Safe Directory
+    run: git config --global --add safe.directory '*'
 
-      - name: Build firmware
-        run: |
-          cd esp-box/examples/voice_assistant
-          idf.py set-target esp32s3
-          idf.py fullclean
-          idf.py build
+  # ✅ 2. Inject ONLY web server (do NOT touch SR files)
+  - name: Inject Web Server
+    shell: bash
+    run: |
+      set -e
 
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: espbox-voice
-          path: esp-box/examples/voice_assistant/build/*.bin
+      cd examples/factory_demo/main
+
+      # --- web_server.h ---
+      cat << 'EOF' > web_server.h
+      #pragma once
+      void web_server_start(void);
+      EOF
+
+      # --- web_server.c ---
+      cat << 'EOF' > web_server.c
+      #include "web_server.h"
+      #include "esp_http_server.h"
+      #include "esp_log.h"
+
+      static const char *TAG = "WEB";
+
+      static esp_err_t root_handler(httpd_req_t *req)
+      {
+          const char resp[] =
+              "<h1>ESP32-S3-BOX</h1>"
+              "<p>Voice + Web OK</p>";
+          httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+          return ESP_OK;
+      }
+
+      void web_server_start(void)
+      {
+          httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+          httpd_handle_t server = NULL;
+
+          if (httpd_start(&server, &config) == ESP_OK) {
+              httpd_uri_t uri = {
+                  .uri = "/",
+                  .method = HTTP_GET,
+                  .handler = root_handler
+              };
+              httpd_register_uri_handler(server, &uri);
+              ESP_LOGI(TAG, "Web server started");
+          }
+      }
+      EOF
+
+  # ✅ 3. Hook web server into existing main.c (SAFE INSERT)
+  - name: Patch main.c safely
+    shell: bash
+    run: |
+      set -e
+
+      FILE=examples/factory_demo/main/main.c
+
+      # Add include if missing
+      grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+
+      # Add startup AFTER RainMaker start (safe point)
+      grep -q web_server_start $FILE || sed -i '/app_rmaker_start()/a \    web_server_start();' $FILE
+
+  # ✅ 4. Ensure web_server.c is compiled
+  - name: Update CMakeLists
+    shell: bash
+    run: |
+      FILE=examples/factory_demo/main/CMakeLists.txt
+      grep -q web_server.c $FILE || sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
+
+  # ✅ 5. Build EXACT factory config (keeps model.bin working)
+  - name: Build Firmware (Voice + Web)
+    shell: bash
+    run: |
+      set -e
+      . $IDF_PATH/export.sh
+      cd examples/factory_demo
+      idf.py set-target esp32s3
+      cp sdkconfig.ci.box sdkconfig
+      idf.py fullclean build
+
+      cd build
+      esptool.py --chip esp32s3 merge_bin \
+        -o factory_demo_box.bin \
+        --flash_mode dio \
+        --flash_size 16MB \
+        $(cat flash_args)
+
+  # ✅ 6. Upload firmware
+  - name: Upload Firmware
+    uses: actions/upload-artifact@v4
+    with:
+      name: esp-box-hybrid
+      path: examples/factory_demo/build/factory_demo_box.bin
