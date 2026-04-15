@@ -14,7 +14,7 @@ jobs:
 
     steps:
       # ----------------------------
-      # Checkout repo
+      # Checkout ESP-BOX repo
       # ----------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
@@ -24,22 +24,28 @@ jobs:
           fetch-depth: 0
 
       # ----------------------------
-      # Fix git safe directory issue
+      # Fix Git safe directory
       # ----------------------------
       - name: Git safe directory fix
         run: git config --global --add safe.directory '*'
 
       # ----------------------------
-      # FIX missing component manager issues
+      # IMPORTANT: Enable component manager
       # ----------------------------
-      - name: Patch broken LCD / touch dependencies
-        run: |
-          set -e
-          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \;
-          find . -name "esp-lcd-ili9341/d' {} \;" || true
+      - name: Enable ESP-IDF component manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
-      # Build ESP-S3-BOX factory demo
+      # Patch broken LCD/touch deps (safe cleanup)
+      # ----------------------------
+      - name: Patch broken dependencies
+        run: |
+          set -e
+          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
+          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
+
+      # ----------------------------
+      # Build factory demo (correct flow)
       # ----------------------------
       - name: Build firmware
         shell: bash
@@ -54,16 +60,16 @@ jobs:
 
           cp sdkconfig.ci.box sdkconfig
 
-          # IMPORTANT: reconfigure fixes component resolution
+          # IMPORTANT: forces dependency resolution
           idf.py reconfigure
           idf.py build
 
       # ----------------------------
-      # Upload binaries (NO esptool needed)
+      # Upload firmware artifacts
       # ----------------------------
-      - name: Upload firmware artifacts
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-factory
+          name: esp32s3-box-factory-demo
           path: |
             examples/factory_demo/build/*.bin
