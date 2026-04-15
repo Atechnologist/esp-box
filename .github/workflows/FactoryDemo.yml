@@ -1,51 +1,21 @@
-name: ESP32-S3-BOX Hybrid (Voice + Web)
+name: Factory Demo Build
 
 on:workflow_dispatch:
 
 jobs:build:runs-on: ubuntu-latestcontainer: espressif/idf.1
 
 steps:
-  - name: Checkout ESP-BOX
+  - name: Checkout
     uses: actions/checkout@v4
     with:
       repository: espressif/esp-box
       submodules: recursive
 
-  - name: Fix Git Safe Directory
-    run: git config --global --add safe.directory '*'
-
-  - name: Add Web Server Files
+  - name: Build Factory Demo
     run: |
-      cd examples/factory_demo/main
-
-      printf '#pragma once\nvoid web_server_start(void);\n' > web_server.h
-
-      printf '#include "web_server.h"\n#include "esp_http_server.h"\n#include "esp_log.h"\n\nstatic const char *TAG="WEB";\n\nstatic esp_err_t root_handler(httpd_req_t *req){\nconst char resp[]="<h1>ESP32-S3-BOX</h1><p>Voice + Web OK</p>";\nhttpd_resp_send(req,resp,HTTPD_RESP_USE_STRLEN);\nreturn ESP_OK;\n}\n\nvoid web_server_start(void){\nhttpd_config_t config=HTTPD_DEFAULT_CONFIG();\nhttpd_handle_t server=NULL;\nif(httpd_start(&server,&config)==ESP_OK){\nhttpd_uri_t uri={.uri=\"/\",.method=HTTP_GET,.handler=root_handler};\nhttpd_register_uri_handler(server,&uri);\n}\n}\n' > web_server.c
-
-  - name: Patch main.c
-    run: |
-      FILE=examples/factory_demo/main/main.c
-      grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
-      grep -q web_server_start $FILE || sed -i '/app_rmaker_start()/a     web_server_start();' $FILE
-
-  - name: Add web_server.c to build
-    run: |
-      FILE=examples/factory_demo/main/CMakeLists.txt
-      grep -q web_server.c $FILE || sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
-
-  - name: Build firmware
-    run: |
+      set -e
       . $IDF_PATH/export.sh
       cd examples/factory_demo
       idf.py set-target esp32s3
       cp sdkconfig.ci.box sdkconfig
       idf.py fullclean build
-
-      cd build
-      esptool.py --chip esp32s3 merge_bin -o factory_demo_box.bin --flash_mode dio --flash_size 16MB $(cat flash_args)
-
-  - name: Upload firmware
-    uses: actions/upload-artifact@v4
-    with:
-      name: esp-box-hybrid
-      path: examples/factory_demo/build/factory_demo_box.bin
