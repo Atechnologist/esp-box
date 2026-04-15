@@ -1,7 +1,6 @@
 name: Build ESP-BOX Voice Assistant
 
 on:
-  push:
   workflow_dispatch:
 
 jobs:
@@ -9,29 +8,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout esp-box repo
-      uses: actions/checkout@v4
-      with:
-        repository: espressif/esp-box
-        path: esp-box
+      - name: Checkout esp-box repo
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          path: esp-box
 
-    - name: Setup ESP-IDF (NO AUTO BUILD)
-      uses: espressif/esp-idf-ci-action@v1
-      with:
-        esp_idf_version: v5.1.2
-        target: esp32s3
-        command: ""   # 🔥 THIS LINE FIXES YOUR ERROR
+      - name: Setup ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.1.2
+          target: esp32s3
+          command: ""   # disable auto build
 
-    - name: Build Voice Assistant (correct folder)
-      run: |
-        cd esp-box/examples/voice_assistant
-        idf.py set-target esp32s3
-        idf.py fullclean
-        idf.py build
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -e
+          cd esp-box/examples/voice_assistant
+          idf.py set-target esp32s3
+          idf.py fullclean
+          idf.py build
 
-    - name: Upload firmware
-      uses: actions/upload-artifact@v4
-      with:
-        name: espbox-voice-firmware
-        path: |
-          esp-box/examples/voice_assistant/build/*.bin
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: espbox-voice
+          path: esp-box/examples/voice_assistant/build/*.bin
