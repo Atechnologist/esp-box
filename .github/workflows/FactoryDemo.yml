@@ -1,13 +1,10 @@
-name: ESP32-S3-BOX Hybrid (Voice + Web) on:
-workflow_dispatch:
+name: ESP32-S3-BOX Hybrid (Voice + Web)
 
-jobs:
-build:
-runs-on: ubuntu-latest
-container: espressif/idf:release-v5.1
+on:workflow_dispatch:
+
+jobs:build:runs-on: ubuntu-latestcontainer: espressif/idf.1
 
 steps:
-  # ✅ 1. Get official working repo
   - name: Checkout ESP-BOX
     uses: actions/checkout@v4
     with:
@@ -17,80 +14,27 @@ steps:
   - name: Fix Git Safe Directory
     run: git config --global --add safe.directory '*'
 
-  # ✅ 2. Inject ONLY web server (do NOT touch SR files)
-  - name: Inject Web Server
-    shell: bash
+  - name: Add Web Server Files
     run: |
-      set -e
-
       cd examples/factory_demo/main
 
-      # --- web_server.h ---
-      cat << 'EOF' > web_server.h
-      #pragma once
-      void web_server_start(void);
-      EOF
+      printf '#pragma once\nvoid web_server_start(void);\n' > web_server.h
 
-      # --- web_server.c ---
-      cat << 'EOF' > web_server.c
-      #include "web_server.h"
-      #include "esp_http_server.h"
-      #include "esp_log.h"
+      printf '#include "web_server.h"\n#include "esp_http_server.h"\n#include "esp_log.h"\n\nstatic const char *TAG="WEB";\n\nstatic esp_err_t root_handler(httpd_req_t *req){\nconst char resp[]="<h1>ESP32-S3-BOX</h1><p>Voice + Web OK</p>";\nhttpd_resp_send(req,resp,HTTPD_RESP_USE_STRLEN);\nreturn ESP_OK;\n}\n\nvoid web_server_start(void){\nhttpd_config_t config=HTTPD_DEFAULT_CONFIG();\nhttpd_handle_t server=NULL;\nif(httpd_start(&server,&config)==ESP_OK){\nhttpd_uri_t uri={.uri=\"/\",.method=HTTP_GET,.handler=root_handler};\nhttpd_register_uri_handler(server,&uri);\n}\n}\n' > web_server.c
 
-      static const char *TAG = "WEB";
-
-      static esp_err_t root_handler(httpd_req_t *req)
-      {
-          const char resp[] =
-              "<h1>ESP32-S3-BOX</h1>"
-              "<p>Voice + Web OK</p>";
-          httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-          return ESP_OK;
-      }
-
-      void web_server_start(void)
-      {
-          httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-          httpd_handle_t server = NULL;
-
-          if (httpd_start(&server, &config) == ESP_OK) {
-              httpd_uri_t uri = {
-                  .uri = "/",
-                  .method = HTTP_GET,
-                  .handler = root_handler
-              };
-              httpd_register_uri_handler(server, &uri);
-              ESP_LOGI(TAG, "Web server started");
-          }
-      }
-      EOF
-
-  # ✅ 3. Hook web server into existing main.c (SAFE INSERT)
-  - name: Patch main.c safely
-    shell: bash
+  - name: Patch main.c
     run: |
-      set -e
-
       FILE=examples/factory_demo/main/main.c
-
-      # Add include if missing
       grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+      grep -q web_server_start $FILE || sed -i '/app_rmaker_start()/a     web_server_start();' $FILE
 
-      # Add startup AFTER RainMaker start (safe point)
-      grep -q web_server_start $FILE || sed -i '/app_rmaker_start()/a \    web_server_start();' $FILE
-
-  # ✅ 4. Ensure web_server.c is compiled
-  - name: Update CMakeLists
-    shell: bash
+  - name: Add web_server.c to build
     run: |
       FILE=examples/factory_demo/main/CMakeLists.txt
       grep -q web_server.c $FILE || sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
 
-  # ✅ 5. Build EXACT factory config (keeps model.bin working)
-  - name: Build Firmware (Voice + Web)
-    shell: bash
+  - name: Build firmware
     run: |
-      set -e
       . $IDF_PATH/export.sh
       cd examples/factory_demo
       idf.py set-target esp32s3
@@ -98,14 +42,9 @@ steps:
       idf.py fullclean build
 
       cd build
-      esptool.py --chip esp32s3 merge_bin \
-        -o factory_demo_box.bin \
-        --flash_mode dio \
-        --flash_size 16MB \
-        $(cat flash_args)
+      esptool.py --chip esp32s3 merge_bin -o factory_demo_box.bin --flash_mode dio --flash_size 16MB $(cat flash_args)
 
-  # ✅ 6. Upload firmware
-  - name: Upload Firmware
+  - name: Upload firmware
     uses: actions/upload-artifact@v4
     with:
       name: esp-box-hybrid
