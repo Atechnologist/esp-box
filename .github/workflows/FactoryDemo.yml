@@ -1,21 +1,25 @@
 name: Factory Demo Build
 
-on:workflow_dispatch:
+on:
+  workflow_dispatch:
 
-jobs:build:runs-on: ubuntu-latestcontainer: espressif/idf.1
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.1
 
-steps:
-  - name: Checkout
-    uses: actions/checkout@v4
-    with:
-      repository: espressif/esp-box
-      submodules: recursive
+    steps:
+      - name: Checkout ESP-BOX
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          submodules: recursive
 
-  - name: Build Factory Demo
-    run: |
-      set -e
-      . $IDF_PATH/export.sh
-      cd examples/factory_demo
-      idf.py set-target esp32s3
-      cp sdkconfig.ci.box sdkconfig
-      idf.py fullclean build
+      - name: Build Factory Demo
+        run: |
+          set -e
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+          idf.py fullclean build
