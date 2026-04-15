@@ -19,7 +19,7 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      - name: Build firmware
+      - name: Build Factory Demo (ESP-IDF native)
         run: |
           set -e
           . $IDF_PATH/export.sh
@@ -28,21 +28,17 @@ jobs:
 
           idf.py set-target esp32s3
           cp sdkconfig.ci.box sdkconfig
+
           idf.py fullclean build
 
-      - name: Merge firmware (FIXED esptool)
+      - name: Show build output
         run: |
-          set -e
           cd examples/factory_demo/build
+          ls -lh
 
-          python -m esptool --chip esp32s3 merge_bin \
-            -o factory_demo_box.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      - name: Upload firmware
+      - name: Upload firmware binaries
         uses: actions/upload-artifact@v4
         with:
           name: factory-demo
-          path: examples/factory_demo/build/factory_demo_box.bin
+          path: |
+            examples/factory_demo/build/*.bin
