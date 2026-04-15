@@ -19,7 +19,7 @@ jobs:
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      - name: Build Factory Demo (ESP-IDF native)
+      - name: Build firmware (NO ESPTOOL, NO MERGE)
         run: |
           set -e
           . $IDF_PATH/export.sh
@@ -31,14 +31,12 @@ jobs:
 
           idf.py fullclean build
 
-      - name: Show build output
+      - name: Verify build output
         run: |
-          cd examples/factory_demo/build
-          ls -lh
+          ls -lah examples/factory_demo/build
 
       - name: Upload firmware binaries
         uses: actions/upload-artifact@v4
         with:
           name: factory-demo
-          path: |
-            examples/factory_demo/build/*.bin
+          path: examples/factory_demo/build/*.bin
