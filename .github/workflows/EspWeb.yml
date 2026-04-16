@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Stable Web UI Build
+name: ESP32-S3-BOX Web UI (Event-Based Stable)
 
 on:
   workflow_dispatch:
@@ -40,12 +40,11 @@ jobs:
       # ----------------------------
       - name: Patch dependencies
         run: |
-          set -e
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # Add Web UI (SAFE VERSION)
+      # Add Web UI (EVENT-BASED)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -125,15 +124,32 @@ jobs:
           EOF
 
       # ----------------------------
-      # Patch main.c safely
+      # Patch main.c (EVENT-BASED START)
       # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q 'web_server.h' $FILE || sed -i '1i #include "web_server.h"' $FILE
+          # include
+          grep -q web_server.h $FILE || sed -i '1i #include "web_server.h"' $FILE
 
-          grep -q 'web_server_start' $FILE || sed -i '/void app_main/,/}/ s/}/    web_server_start();\n}/' $FILE
+          # remove old injections
+          sed -i '/web_server_start/d' $FILE
+          sed -i '/web_event_handler/d' $FILE
+
+          # add event handler before app_main
+          sed -i '/void app_main/i \
+          #include "esp_event.h"\n\
+          #include "esp_wifi.h"\n\
+          static void web_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)\n\
+          {\n\
+              if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {\n\
+                  web_server_start();\n\
+              }\n\
+          }\n' $FILE
+
+          # register handler inside app_main
+          sed -i '/app_main(void)/,/}/ s/{/{\n    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &web_event_handler, NULL);/' $FILE
 
       # ----------------------------
       # Patch CMake
@@ -151,14 +167,10 @@ jobs:
       # ----------------------------
       - name: Build
         run: |
-          set -e
           . $IDF_PATH/export.sh
-
           cd examples/factory_demo
-
           idf.py set-target esp32s3
           cp sdkconfig.ci.box sdkconfig
-
           idf.py reconfigure
           idf.py build
 
@@ -167,9 +179,7 @@ jobs:
       # ----------------------------
       - name: Merge firmware
         run: |
-          set -e
           . $IDF_PATH/export.sh
-
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
@@ -180,27 +190,10 @@ jobs:
             $(cat flash_args)
 
       # ----------------------------
-      # Package firmware
-      # ----------------------------
-      - name: Package firmware
-        run: |
-          cd examples/factory_demo/build
-
-          zip firmware.zip \
-            bootloader/bootloader.bin \
-            partition_table/partition-table.bin \
-            ota_data_initial.bin \
-            factory_demo.bin \
-            storage.bin \
-            srmodels/srmodels.bin
-
-      # ----------------------------
       # Upload
       # ----------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-stable-web
-          path: |
-            examples/factory_demo/build/firmware.zip
-            examples/factory_demo/build/factory_merged.bin
+          name: esp32s3-box-web-ui
+          path: examples/factory_demo/build/factory_merged.bin
