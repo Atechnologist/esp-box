@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Web UI (Event-Based Stable)
+name: ESP32-S3-BOX Web UI Stable
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
-      # Patch broken dependencies
+      # Patch dependencies
       # ----------------------------
       - name: Patch dependencies
         run: |
@@ -44,7 +44,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # Add Web UI (EVENT-BASED)
+      # Add Web UI (SAFE)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -124,32 +124,22 @@ jobs:
           EOF
 
       # ----------------------------
-      # Patch main.c (EVENT-BASED START)
+      # Patch main.c (SAFE DELAY)
       # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          # include
-          grep -q web_server.h $FILE || sed -i '1i #include "web_server.h"' $FILE
+          # Add include safely
+          grep -q 'web_server.h' $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-          # remove old injections
+          # Remove bad injections if any
           sed -i '/web_server_start/d' $FILE
-          sed -i '/web_event_handler/d' $FILE
 
-          # add event handler before app_main
-          sed -i '/void app_main/i \
-          #include "esp_event.h"\n\
-          #include "esp_wifi.h"\n\
-          static void web_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)\n\
-          {\n\
-              if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {\n\
-                  web_server_start();\n\
-              }\n\
-          }\n' $FILE
-
-          # register handler inside app_main
-          sed -i '/app_main(void)/,/}/ s/{/{\n    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &web_event_handler, NULL);/' $FILE
+          # Start after RainMaker
+          sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(4000));\
+          web_server_start();' $FILE
 
       # ----------------------------
       # Patch CMake
@@ -190,7 +180,7 @@ jobs:
             $(cat flash_args)
 
       # ----------------------------
-      # Upload
+      # Upload firmware
       # ----------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
