@@ -24,30 +24,30 @@ jobs:
           fetch-depth: 0
 
       # ----------------------------
-      # Fix Git safe directory
+      # Fix Git issue
       # ----------------------------
-      - name: Git safe directory fix
+      - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
       # ----------------------------
-      # IMPORTANT: Enable component manager
+      # Enable component manager (CRITICAL)
       # ----------------------------
-      - name: Enable ESP-IDF component manager
+      - name: Enable ESP-IDF Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
-      # Patch broken LCD/touch deps (safe cleanup)
+      # Patch broken dependencies
       # ----------------------------
-      - name: Patch broken dependencies
+      - name: Patch dependencies
         run: |
           set -e
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # Build factory demo (correct flow)
+      # Build firmware
       # ----------------------------
-      - name: Build firmware
+      - name: Build Factory Demo
         shell: bash
         run: |
           set -e
@@ -57,19 +57,31 @@ jobs:
           cd examples/factory_demo
 
           idf.py set-target esp32s3
-
           cp sdkconfig.ci.box sdkconfig
 
-          # IMPORTANT: forces dependency resolution
           idf.py reconfigure
           idf.py build
 
       # ----------------------------
-      # Upload firmware artifacts
+      # Package firmware (ALL required files)
+      # ----------------------------
+      - name: Package firmware
+        run: |
+          cd examples/factory_demo/build
+
+          zip firmware.zip \
+            bootloader/bootloader.bin \
+            partition_table/partition-table.bin \
+            ota_data_initial.bin \
+            factory_demo.bin \
+            storage.bin \
+            srmodels/srmodels.bin
+
+      # ----------------------------
+      # Upload firmware ZIP
       # ----------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-factory-demo
-          path: |
-            examples/factory_demo/build/*.bin
+          name: esp32s3-box-firmware
+          path: examples/factory_demo/build/firmware.zip
