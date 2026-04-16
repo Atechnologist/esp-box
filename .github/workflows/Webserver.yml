@@ -1,0 +1,206 @@
+name: ESP32-S3-BOX Stable Web UI Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: espressif/idf:release-v5.1
+
+    steps:
+      # ----------------------------
+      # Checkout ESP-BOX
+      # ----------------------------
+      - name: Checkout ESP-BOX
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          submodules: recursive
+          fetch-depth: 0
+
+      # ----------------------------
+      # Fix Git
+      # ----------------------------
+      - name: Fix Git Safe Directory
+        run: git config --global --add safe.directory '*'
+
+      # ----------------------------
+      # Enable Component Manager
+      # ----------------------------
+      - name: Enable Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+
+      # ----------------------------
+      # Patch broken dependencies
+      # ----------------------------
+      - name: Patch dependencies
+        run: |
+          set -e
+          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
+          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
+
+      # ----------------------------
+      # Add Web UI (SAFE VERSION)
+      # ----------------------------
+      - name: Add Web UI
+        run: |
+          cd examples/factory_demo/main
+
+          cat > web_server.h << 'EOF'
+          #pragma once
+          void web_server_start(void);
+          EOF
+
+          cat > web_server.c << 'EOF'
+          #include "web_server.h"
+          #include "esp_http_server.h"
+          #include "esp_log.h"
+          #include "driver/gpio.h"
+
+          static const char *TAG = "WEB";
+          static bool light_on = false;
+
+          #define LED_GPIO 2
+
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              char resp[512];
+
+              snprintf(resp, sizeof(resp),
+                  "<html><body>"
+                  "<h1>ESP32-S3-BOX</h1>"
+                  "<p>Status: <b>%s</b></p>"
+                  "<button onclick=\"fetch('/toggle').then(()=>location.reload())\">Toggle</button>"
+                  "<script>setTimeout(()=>location.reload(),2000);</script>"
+                  "</body></html>",
+                  light_on ? "ON" : "OFF"
+              );
+
+              httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          static esp_err_t toggle_handler(httpd_req_t *req)
+          {
+              light_on = !light_on;
+              gpio_set_level(LED_GPIO, light_on);
+
+              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          void web_server_start(void)
+          {
+              gpio_reset_pin(LED_GPIO);
+              gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              httpd_handle_t server = NULL;
+
+              if (httpd_start(&server, &config) == ESP_OK) {
+
+                  httpd_uri_t root = {
+                      .uri = "/",
+                      .method = HTTP_GET,
+                      .handler = root_handler
+                  };
+
+                  httpd_uri_t toggle = {
+                      .uri = "/toggle",
+                      .method = HTTP_GET,
+                      .handler = toggle_handler
+                  };
+
+                  httpd_register_uri_handler(server, &root);
+                  httpd_register_uri_handler(server, &toggle);
+
+                  ESP_LOGI(TAG, "Web UI started");
+              }
+          }
+          EOF
+
+      # ----------------------------
+      # Patch main.c safely
+      # ----------------------------
+      - name: Patch main.c
+        run: |
+          FILE=examples/factory_demo/main/main.c
+
+          grep -q 'web_server.h' $FILE || sed -i '1i #include "web_server.h"' $FILE
+
+          grep -q 'web_server_start' $FILE || sed -i '/void app_main/,/}/ s/}/    web_server_start();\n}/' $FILE
+
+      # ----------------------------
+      # Patch CMake
+      # ----------------------------
+      - name: Patch CMake
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+
+          grep -q web_server.c $FILE || sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
+
+          grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
+
+      # ----------------------------
+      # Build
+      # ----------------------------
+      - name: Build
+        run: |
+          set -e
+          . $IDF_PATH/export.sh
+
+          cd examples/factory_demo
+
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+
+          idf.py reconfigure
+          idf.py build
+
+      # ----------------------------
+      # Merge firmware
+      # ----------------------------
+      - name: Merge firmware
+        run: |
+          set -e
+          . $IDF_PATH/export.sh
+
+          cd examples/factory_demo/build
+
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o factory_merged.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
+
+      # ----------------------------
+      # Package firmware
+      # ----------------------------
+      - name: Package firmware
+        run: |
+          cd examples/factory_demo/build
+
+          zip firmware.zip \
+            bootloader/bootloader.bin \
+            partition_table/partition-table.bin \
+            ota_data_initial.bin \
+            factory_demo.bin \
+            storage.bin \
+            srmodels/srmodels.bin
+
+      # ----------------------------
+      # Upload
+      # ----------------------------
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-box-stable-web
+          path: |
+            examples/factory_demo/build/firmware.zip
+            examples/factory_demo/build/factory_merged.bin
