@@ -1,4 +1,4 @@
-name: Build ESP32-S3-BOX Factory Demo (Merged)
+name: ESP32-S3-BOX + Web UI + Merged Firmware
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ jobs:
 
     steps:
       # ----------------------------
-      # Checkout ESP-BOX repo
+      # Checkout ESP-BOX
       # ----------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
 
       # ----------------------------
-      # Fix Git issue
+      # Fix Git safe directory
       # ----------------------------
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
@@ -32,7 +32,7 @@ jobs:
       # ----------------------------
       # Enable component manager
       # ----------------------------
-      - name: Enable ESP-IDF Component Manager
+      - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
@@ -45,10 +45,106 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
+      # Add Web UI (LIVE STATUS)
+      # ----------------------------
+      - name: Add Web UI
+        run: |
+          cd examples/factory_demo/main
+
+          # Header
+          cat > web_server.h << 'EOF'
+          #pragma once
+          void web_server_start(void);
+          EOF
+
+          # Source
+          cat > web_server.c << 'EOF'
+          #include "web_server.h"
+          #include "esp_http_server.h"
+          #include "esp_log.h"
+          #include "app_driver_light.h"
+
+          static const char *TAG = "WEB";
+          static bool light_on = false;
+
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              char resp[512];
+
+              snprintf(resp, sizeof(resp),
+                  "<html><body>"
+                  "<h1>ESP32-S3-BOX</h1>"
+                  "<p>Status: <b>%s</b></p>"
+                  "<button onclick=\"fetch('/toggle').then(()=>location.reload())\">Toggle</button>"
+                  "<script>setTimeout(()=>location.reload(),2000);</script>"
+                  "</body></html>",
+                  light_on ? "ON" : "OFF"
+              );
+
+              httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          static esp_err_t toggle_handler(httpd_req_t *req)
+          {
+              light_on = !light_on;
+              app_driver_light_set_power(light_on);
+              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          void web_server_start(void)
+          {
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              httpd_handle_t server = NULL;
+
+              if (httpd_start(&server, &config) == ESP_OK) {
+
+                  httpd_uri_t root = {
+                      .uri = "/",
+                      .method = HTTP_GET,
+                      .handler = root_handler
+                  };
+
+                  httpd_uri_t toggle = {
+                      .uri = "/toggle",
+                      .method = HTTP_GET,
+                      .handler = toggle_handler
+                  };
+
+                  httpd_register_uri_handler(server, &root);
+                  httpd_register_uri_handler(server, &toggle);
+
+                  ESP_LOGI(TAG, "Web UI started");
+              }
+          }
+          EOF
+
+      # ----------------------------
+      # Patch main.c safely
+      # ----------------------------
+      - name: Patch main.c
+        run: |
+          FILE=examples/factory_demo/main/main.c
+
+          # Add include if missing
+          grep -q 'web_server.h' $FILE || sed -i '1i #include "web_server.h"' $FILE
+
+          # Inject start into app_main safely
+          grep -q 'web_server_start' $FILE || sed -i '/void app_main/,/}/ s/}/    web_server_start();\n}/' $FILE
+
+      # ----------------------------
+      # Add web_server to build
+      # ----------------------------
+      - name: Patch CMake
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          grep -q web_server.c $FILE || sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
+
+      # ----------------------------
       # Build firmware
       # ----------------------------
-      - name: Build Factory Demo
-        shell: bash
+      - name: Build
         run: |
           set -e
           . $IDF_PATH/export.sh
@@ -62,10 +158,9 @@ jobs:
           idf.py build
 
       # ----------------------------
-      # Merge into SINGLE BIN (SAFE)
+      # Create merged firmware
       # ----------------------------
-      - name: Create merged firmware
-        shell: bash
+      - name: Merge firmware
         run: |
           set -e
           . $IDF_PATH/export.sh
@@ -100,7 +195,7 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-firmware
+          name: esp32s3-box-web-ui
           path: |
             examples/factory_demo/build/firmware.zip
             examples/factory_demo/build/factory_merged.bin
