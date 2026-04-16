@@ -147,7 +147,7 @@ jobs:
           grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
       # ----------------------------
-      # Build
+      # Build Web
       # ----------------------------
       - name: Build
         run: |
