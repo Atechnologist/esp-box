@@ -1,0 +1,87 @@
+name: Build ESP32-S3-BOX Factory Demo
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: espressif/idf:release-v5.1
+
+    steps:
+      # ----------------------------
+      # Checkout ESP-BOX repo
+      # ----------------------------
+      - name: Checkout ESP-BOX
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          submodules: recursive
+          fetch-depth: 0
+
+      # ----------------------------
+      # Fix Git issue
+      # ----------------------------
+      - name: Fix Git Safe Directory
+        run: git config --global --add safe.directory '*'
+
+      # ----------------------------
+      # Enable component manager (CRITICAL)
+      # ----------------------------
+      - name: Enable ESP-IDF Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+
+      # ----------------------------
+      # Patch broken dependencies
+      # ----------------------------
+      - name: Patch dependencies
+        run: |
+          set -e
+          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
+          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
+
+      # ----------------------------
+      # Build firmware
+      # ----------------------------
+      - name: Build Factory Demo
+        shell: bash
+        run: |
+          set -e
+
+          . $IDF_PATH/export.sh
+
+          cd examples/factory_demo
+
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+
+          idf.py reconfigure
+          idf.py build
+
+      # ----------------------------
+      # Package firmware (ALL required files)
+      # ----------------------------
+      - name: Package firmware
+        run: |
+          cd examples/factory_demo/build
+
+          zip firmware.zip \
+            bootloader/bootloader.bin \
+            partition_table/partition-table.bin \
+            ota_data_initial.bin \
+            factory_demo.bin \
+            storage.bin \
+            srmodels/srmodels.bin
+
+      # ----------------------------
+      # Upload firmware ZIP
+      # ----------------------------
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-box-firmware
+          path: examples/factory_demo/build/firmware.zip
