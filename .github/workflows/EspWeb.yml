@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Web UI + Real Light
+name: ESP32-S3-BOX Web UI FULL SYNC
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
-      # Patch dependencies
+      # Patch broken dependencies
       # ----------------------------
       - name: Patch dependencies
         run: |
@@ -44,7 +44,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # Add Web UI (REAL LIGHT CONTROL)
+      # Add Web UI (FULL SYNC)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -66,21 +66,38 @@ jobs:
           static const char *TAG = "WEB";
 
           static esp_rmaker_device_t *light_device = NULL;
-          static bool light_on = false;
 
-          static void find_light_device()
+          // Get power param safely
+          static esp_rmaker_param_t* get_power_param()
           {
-              if (light_device) return;
+              if (!light_device) {
+                  esp_rmaker_node_t *node = esp_rmaker_get_node();
+                  if (!node) return NULL;
 
-              esp_rmaker_node_t *node = esp_rmaker_get_node();
-              if (!node) return;
+                  light_device = esp_rmaker_node_get_device_by_name(node, "Light");
+              }
 
-              light_device = esp_rmaker_node_get_device_by_name(node, "Light");
+              if (!light_device) return NULL;
+
+              return esp_rmaker_device_get_param_by_name(
+                  light_device,
+                  ESP_RMAKER_DEF_POWER_NAME
+              );
+          }
+
+          // Read REAL device state
+          static bool get_light_state()
+          {
+              esp_rmaker_param_t *param = get_power_param();
+              if (!param) return false;
+
+              esp_rmaker_param_val_t val = esp_rmaker_param_get_val(param);
+              return val.val.b;
           }
 
           static esp_err_t root_handler(httpd_req_t *req)
           {
-              find_light_device();
+              bool state = get_light_state();
 
               char resp[512];
 
@@ -91,7 +108,7 @@ jobs:
                   "<button onclick=\"fetch('/toggle').then(()=>location.reload())\">Toggle</button>"
                   "<script>setTimeout(()=>location.reload(),2000);</script>"
                   "</body></html>",
-                  light_on ? "ON" : "OFF"
+                  state ? "ON" : "OFF"
               );
 
               httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
@@ -100,27 +117,19 @@ jobs:
 
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
-              find_light_device();
+              esp_rmaker_param_t *param = get_power_param();
 
-              if (light_device) {
-                  light_on = !light_on;
+              if (param) {
+                  bool current = get_light_state();
 
-                  esp_rmaker_param_t *param =
-                      esp_rmaker_device_get_param_by_name(
-                          light_device,
-                          ESP_RMAKER_DEF_POWER_NAME
-                      );
+                  esp_rmaker_param_update_and_report(
+                      param,
+                      esp_rmaker_bool(!current)
+                  );
 
-                  if (param) {
-                      esp_rmaker_param_update_and_report(
-                          param,
-                          esp_rmaker_bool(light_on)
-                      );
-                  }
-
-                  ESP_LOGI(TAG, "Light toggled: %d", light_on);
+                  ESP_LOGI(TAG, "Light toggled (FULL SYNC)");
               } else {
-                  ESP_LOGW(TAG, "Light device not found");
+                  ESP_LOGW(TAG, "Power param not found");
               }
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
@@ -149,7 +158,7 @@ jobs:
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &toggle);
 
-                  ESP_LOGI(TAG, "Web UI (Real Light) started");
+                  ESP_LOGI(TAG, "Web UI FULL SYNC started");
               }
           }
           EOF
@@ -164,10 +173,10 @@ jobs:
           # Add include
           grep -q 'web_server.h' $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-          # Clean previous bad injections
+          # Clean previous injections
           sed -i '/web_server_start/d' $FILE
 
-          # Start after RainMaker
+          # Start AFTER RainMaker (safe)
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(4000));\
           web_server_start();' $FILE
@@ -216,5 +225,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-real-web-ui
+          name: esp32s3-box-full-sync-web-ui
           path: examples/factory_demo/build/factory_merged.bin
