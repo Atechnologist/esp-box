@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Web UI Stable
+name: ESP32-S3-BOX Web UI + Real Light
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # Add Web UI (SAFE)
+      # Add Web UI (REAL LIGHT CONTROL)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -59,21 +59,35 @@ jobs:
           #include "web_server.h"
           #include "esp_http_server.h"
           #include "esp_log.h"
-          #include "driver/gpio.h"
+
+          #include "esp_rmaker_core.h"
+          #include "esp_rmaker_standard_params.h"
 
           static const char *TAG = "WEB";
+
+          static esp_rmaker_device_t *light_device = NULL;
           static bool light_on = false;
 
-          #define LED_GPIO 2
+          static void find_light_device()
+          {
+              if (light_device) return;
+
+              esp_rmaker_node_t *node = esp_rmaker_get_node();
+              if (!node) return;
+
+              light_device = esp_rmaker_node_get_device_by_name(node, "Light");
+          }
 
           static esp_err_t root_handler(httpd_req_t *req)
           {
+              find_light_device();
+
               char resp[512];
 
               snprintf(resp, sizeof(resp),
                   "<html><body>"
                   "<h1>ESP32-S3-BOX</h1>"
-                  "<p>Status: <b>%s</b></p>"
+                  "<p>Light: <b>%s</b></p>"
                   "<button onclick=\"fetch('/toggle').then(()=>location.reload())\">Toggle</button>"
                   "<script>setTimeout(()=>location.reload(),2000);</script>"
                   "</body></html>",
@@ -86,8 +100,28 @@ jobs:
 
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
-              light_on = !light_on;
-              gpio_set_level(LED_GPIO, light_on);
+              find_light_device();
+
+              if (light_device) {
+                  light_on = !light_on;
+
+                  esp_rmaker_param_t *param =
+                      esp_rmaker_device_get_param_by_name(
+                          light_device,
+                          ESP_RMAKER_DEF_POWER_NAME
+                      );
+
+                  if (param) {
+                      esp_rmaker_param_update_and_report(
+                          param,
+                          esp_rmaker_bool(light_on)
+                      );
+                  }
+
+                  ESP_LOGI(TAG, "Light toggled: %d", light_on);
+              } else {
+                  ESP_LOGW(TAG, "Light device not found");
+              }
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
@@ -95,9 +129,6 @@ jobs:
 
           void web_server_start(void)
           {
-              gpio_reset_pin(LED_GPIO);
-              gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
-
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
               httpd_handle_t server = NULL;
 
@@ -118,22 +149,22 @@ jobs:
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &toggle);
 
-                  ESP_LOGI(TAG, "Web UI started");
+                  ESP_LOGI(TAG, "Web UI (Real Light) started");
               }
           }
           EOF
 
       # ----------------------------
-      # Patch main.c (SAFE DELAY)
+      # Patch main.c (SAFE START)
       # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          # Add include safely
+          # Add include
           grep -q 'web_server.h' $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-          # Remove bad injections if any
+          # Clean previous bad injections
           sed -i '/web_server_start/d' $FILE
 
           # Start after RainMaker
@@ -185,5 +216,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-web-ui
+          name: esp32s3-box-real-web-ui
           path: examples/factory_demo/build/factory_merged.bin
