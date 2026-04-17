@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Web UI FULL SYNC
+name: ESP32-S3-BOX Web UI FULL SYNC (Fixed)
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # Add Web UI (FULL SYNC)
+      # Add Web UI (FULL SYNC FIXED)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -67,14 +67,13 @@ jobs:
 
           static esp_rmaker_device_t *light_device = NULL;
 
-          // Get power param safely
           static esp_rmaker_param_t* get_power_param()
           {
               if (!light_device) {
-                  esp_rmaker_node_t *node = esp_rmaker_get_node();
+                  const esp_rmaker_node_t *node = esp_rmaker_get_node();
                   if (!node) return NULL;
 
-                  light_device = esp_rmaker_node_get_device_by_name(node, "Light");
+                  light_device = esp_rmaker_node_get_device_by_name((esp_rmaker_node_t *)node, "Light");
               }
 
               if (!light_device) return NULL;
@@ -85,14 +84,15 @@ jobs:
               );
           }
 
-          // Read REAL device state
           static bool get_light_state()
           {
               esp_rmaker_param_t *param = get_power_param();
               if (!param) return false;
 
-              esp_rmaker_param_val_t val = esp_rmaker_param_get_val(param);
-              return val.val.b;
+              const esp_rmaker_param_val_t *val = esp_rmaker_param_get_val(param);
+              if (!val) return false;
+
+              return val->val.b;
           }
 
           static esp_err_t root_handler(httpd_req_t *req)
@@ -170,13 +170,10 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          # Add include
           grep -q 'web_server.h' $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-          # Clean previous injections
           sed -i '/web_server_start/d' $FILE
 
-          # Start AFTER RainMaker (safe)
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(4000));\
           web_server_start();' $FILE
