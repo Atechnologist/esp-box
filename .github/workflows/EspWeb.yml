@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Web UI FULL SYNC (Fixed)
+name: ESP32-S3-BOX Real-Time Web UI (No Reload)
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
-      # Patch broken dependencies
+      # Patch dependencies
       # ----------------------------
       - name: Patch dependencies
         run: |
@@ -44,7 +44,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # Add Web UI (FULL SYNC FIXED)
+      # Add Web UI (REAL-TIME AJAX)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -95,22 +95,15 @@ jobs:
               return val->val.b;
           }
 
-          static esp_err_t root_handler(httpd_req_t *req)
+          // -------- JSON API --------
+          static esp_err_t status_handler(httpd_req_t *req)
           {
-              bool state = get_light_state();
-
-              char resp[512];
-
+              char resp[64];
               snprintf(resp, sizeof(resp),
-                  "<html><body>"
-                  "<h1>ESP32-S3-BOX</h1>"
-                  "<p>Light: <b>%s</b></p>"
-                  "<button onclick=\"fetch('/toggle').then(()=>location.reload())\">Toggle</button>"
-                  "<script>setTimeout(()=>location.reload(),2000);</script>"
-                  "</body></html>",
-                  state ? "ON" : "OFF"
-              );
+                       "{\"power\":%s}",
+                       get_light_state() ? "true" : "false");
 
+              httpd_resp_set_type(req, "application/json");
               httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
@@ -127,12 +120,38 @@ jobs:
                       esp_rmaker_bool(!current)
                   );
 
-                  ESP_LOGI(TAG, "Light toggled (FULL SYNC)");
-              } else {
-                  ESP_LOGW(TAG, "Power param not found");
+                  ESP_LOGI(TAG, "Toggle (REAL-TIME)");
               }
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          // -------- UI --------
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const char html[] =
+              "<html><body style='font-family:sans-serif;text-align:center;'>"
+              "<h1>ESP32-S3-BOX</h1>"
+              "<h2 id='state'>Loading...</h2>"
+              "<button onclick='toggle()' style='font-size:20px;'>Toggle</button>"
+
+              "<script>"
+              "async function update(){"
+              " let r=await fetch('/status');"
+              " let j=await r.json();"
+              " document.getElementById('state').innerText = j.power ? 'ON' : 'OFF';"
+              "}"
+              "async function toggle(){"
+              " await fetch('/toggle');"
+              "}"
+              "setInterval(update,500);"
+              "update();"
+              "</script>"
+
+              "</body></html>";
+
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
@@ -155,16 +174,23 @@ jobs:
                       .handler = toggle_handler
                   };
 
+                  httpd_uri_t status = {
+                      .uri = "/status",
+                      .method = HTTP_GET,
+                      .handler = status_handler
+                  };
+
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &toggle);
+                  httpd_register_uri_handler(server, &status);
 
-                  ESP_LOGI(TAG, "Web UI FULL SYNC started");
+                  ESP_LOGI(TAG, "Web UI REAL-TIME started");
               }
           }
           EOF
 
       # ----------------------------
-      # Patch main.c (SAFE START)
+      # Patch main.c
       # ----------------------------
       - name: Patch main.c
         run: |
@@ -222,5 +248,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-full-sync-web-ui
+          name: esp32s3-box-realtime-web-ui
           path: examples/factory_demo/build/factory_merged.bin
