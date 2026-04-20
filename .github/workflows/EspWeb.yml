@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final (WebUI + Voice + Sync FIXED)
+name: ESP32-S3-BOX Final (WebUI + Voice + Sync WORKING)
 
 on:
   workflow_dispatch:
@@ -13,6 +13,9 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
+      # ----------------------------
+      # Checkout
+      # ----------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -20,7 +23,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Fix Git Safe Directory
+      - name: Fix Git
         run: git config --global --add safe.directory '*'
 
       - name: Enable Component Manager
@@ -32,7 +35,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # WEB SERVER (FINAL)
+      # WEB SERVER (FINAL FIXED)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -63,9 +66,6 @@ jobs:
 
                   light_device = esp_rmaker_node_get_device_by_name((esp_rmaker_node_t *)node, "Light");
               }
-
-              if (!light_device) return NULL;
-
               return esp_rmaker_device_get_param_by_name(
                   light_device,
                   ESP_RMAKER_DEF_POWER_NAME
@@ -78,12 +78,10 @@ jobs:
               if (!param) return false;
 
               const esp_rmaker_param_val_t *val = esp_rmaker_param_get_val(param);
-              if (!val) return false;
-
-              return val->val.b;
+              return val ? val->val.b : false;
           }
 
-          // STATUS
+          // -------- STATUS --------
           static esp_err_t status_handler(httpd_req_t *req)
           {
               vTaskDelay(pdMS_TO_TICKS(50));
@@ -98,7 +96,7 @@ jobs:
               return ESP_OK;
           }
 
-          // TOGGLE
+          // -------- TOGGLE --------
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
               esp_rmaker_param_t *param = get_power_param();
@@ -106,12 +104,14 @@ jobs:
               if (param) {
                   bool new_state = !get_light_state();
 
-                  // 🔥 correct driver for ESP-BOX
-                  app_led_set_power(new_state);
+                  // ✅ correct driver for YOUR ESP-BOX
+                  app_pwm_led_set_power(new_state);
 
-                  // update RainMaker properly
-                  esp_rmaker_param_update(param, esp_rmaker_bool(new_state));
-                  esp_rmaker_param_report(param);
+                  // ✅ correct RainMaker API
+                  esp_rmaker_param_update_and_report(
+                      param,
+                      esp_rmaker_bool(new_state)
+                  );
 
                   ESP_LOGI(TAG, "Toggle → %d", new_state);
               }
@@ -120,7 +120,7 @@ jobs:
               return ESP_OK;
           }
 
-          // UI
+          // -------- UI --------
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
@@ -177,7 +177,7 @@ jobs:
                   httpd_register_uri_handler(server, &toggle);
                   httpd_register_uri_handler(server, &status);
 
-                  ESP_LOGI(TAG, "Web UI started (FULLY SYNCED)");
+                  ESP_LOGI(TAG, "Web UI started (FINAL OK)");
               }
           }
           EOF
@@ -241,5 +241,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-sync
+          name: esp32s3-box-final-working
           path: examples/factory_demo/build/factory_merged.bin
