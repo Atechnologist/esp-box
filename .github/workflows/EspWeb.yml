@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Stable (Voice + WebUI + RainMaker)
+name: ESP32-S3-BOX Final (WebUI + Voice + Sync FIXED)
 
 on:
   workflow_dispatch:
@@ -13,9 +13,6 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # ----------------------------
-      # Checkout ESP-BOX
-      # ----------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -23,28 +20,19 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # ----------------------------
-      # Fix Git
-      # ----------------------------
       - name: Fix Git Safe Directory
         run: git config --global --add safe.directory '*'
 
-      # ----------------------------
-      # Enable Component Manager
-      # ----------------------------
       - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
-      # ----------------------------
-      # Patch dependencies
-      # ----------------------------
       - name: Patch dependencies
         run: |
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # Add Web UI (REAL-TIME)
+      # WEB SERVER (FINAL FIXED)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -62,9 +50,9 @@ jobs:
 
           #include "esp_rmaker_core.h"
           #include "esp_rmaker_standard_params.h"
+          #include "app_driver.h"
 
           static const char *TAG = "WEB";
-
           static esp_rmaker_device_t *light_device = NULL;
 
           static esp_rmaker_param_t* get_power_param()
@@ -95,9 +83,12 @@ jobs:
               return val->val.b;
           }
 
-          // -------- JSON API --------
+          // -------- STATUS --------
           static esp_err_t status_handler(httpd_req_t *req)
           {
+              // small delay to avoid race condition
+              vTaskDelay(pdMS_TO_TICKS(50));
+
               char resp[64];
               snprintf(resp, sizeof(resp),
                        "{\"power\":%s}",
@@ -108,17 +99,22 @@ jobs:
               return ESP_OK;
           }
 
+          // -------- TOGGLE --------
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
               esp_rmaker_param_t *param = get_power_param();
 
               if (param) {
-                  bool current = get_light_state();
+                  bool new_state = !get_light_state();
 
-                  esp_rmaker_param_update_and_report(
-                      param,
-                      esp_rmaker_bool(!current)
-                  );
+                  // 🔥 1. Update hardware
+                  app_driver_set_power(new_state);
+
+                  // 🔥 2. Update RainMaker (correct pipeline)
+                  esp_rmaker_param_update(param, esp_rmaker_bool(new_state));
+                  esp_rmaker_param_report(param);
+
+                  ESP_LOGI(TAG, "Toggle → %d", new_state);
               }
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
@@ -136,12 +132,14 @@ jobs:
 
               "<script>"
               "async function update(){"
-              " let r=await fetch('/status');"
-              " let j=await r.json();"
-              " document.getElementById('state').innerText = j.power ? 'ON' : 'OFF';"
+              " try {"
+              "  let r=await fetch('/status');"
+              "  let j=await r.json();"
+              "  document.getElementById('state').innerText = j.power ? 'ON' : 'OFF';"
+              " } catch(e){}"
               "}"
               "async function toggle(){ await fetch('/toggle'); }"
-              "setInterval(update,300);"
+              "setInterval(update,200);"
               "update();"
               "</script>"
 
@@ -180,13 +178,13 @@ jobs:
                   httpd_register_uri_handler(server, &toggle);
                   httpd_register_uri_handler(server, &status);
 
-                  ESP_LOGI(TAG, "Web UI started");
+                  ESP_LOGI(TAG, "Web UI started (SYNC FIXED)");
               }
           }
           EOF
 
       # ----------------------------
-      # Patch main.c
+      # PATCH main.c
       # ----------------------------
       - name: Patch main.c
         run: |
@@ -201,7 +199,7 @@ jobs:
           web_server_start();' $FILE
 
       # ----------------------------
-      # Patch CMake
+      # PATCH CMAKE
       # ----------------------------
       - name: Patch CMake
         run: |
@@ -212,7 +210,7 @@ jobs:
           grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
       # ----------------------------
-      # Build
+      # BUILD
       # ----------------------------
       - name: Build
         run: |
@@ -224,7 +222,7 @@ jobs:
           idf.py build
 
       # ----------------------------
-      # Merge firmware
+      # MERGE BIN
       # ----------------------------
       - name: Merge firmware
         run: |
@@ -239,10 +237,10 @@ jobs:
             $(cat flash_args)
 
       # ----------------------------
-      # Upload firmware
+      # UPLOAD
       # ----------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-stable
+          name: esp32s3-box-final-sync
           path: examples/factory_demo/build/factory_merged.bin
