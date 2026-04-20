@@ -32,7 +32,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # WEB SERVER (FINAL FIXED)
+      # WEB SERVER (FINAL)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -50,7 +50,7 @@ jobs:
 
           #include "esp_rmaker_core.h"
           #include "esp_rmaker_standard_params.h"
-          #include "app_driver.h"
+          #include "app_led.h"
 
           static const char *TAG = "WEB";
           static esp_rmaker_device_t *light_device = NULL;
@@ -83,10 +83,9 @@ jobs:
               return val->val.b;
           }
 
-          // -------- STATUS --------
+          // STATUS
           static esp_err_t status_handler(httpd_req_t *req)
           {
-              // small delay to avoid race condition
               vTaskDelay(pdMS_TO_TICKS(50));
 
               char resp[64];
@@ -99,7 +98,7 @@ jobs:
               return ESP_OK;
           }
 
-          // -------- TOGGLE --------
+          // TOGGLE
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
               esp_rmaker_param_t *param = get_power_param();
@@ -107,10 +106,10 @@ jobs:
               if (param) {
                   bool new_state = !get_light_state();
 
-                  // 🔥 1. Update hardware
-                  app_driver_set_power(new_state);
+                  // 🔥 correct driver for ESP-BOX
+                  app_led_set_power(new_state);
 
-                  // 🔥 2. Update RainMaker (correct pipeline)
+                  // update RainMaker properly
                   esp_rmaker_param_update(param, esp_rmaker_bool(new_state));
                   esp_rmaker_param_report(param);
 
@@ -121,7 +120,7 @@ jobs:
               return ESP_OK;
           }
 
-          // -------- UI --------
+          // UI
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
@@ -178,7 +177,7 @@ jobs:
                   httpd_register_uri_handler(server, &toggle);
                   httpd_register_uri_handler(server, &status);
 
-                  ESP_LOGI(TAG, "Web UI started (SYNC FIXED)");
+                  ESP_LOGI(TAG, "Web UI started (FULLY SYNCED)");
               }
           }
           EOF
