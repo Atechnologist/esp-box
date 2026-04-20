@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final (WebUI + Voice + Sync WORKING)
+name: ESP32-S3-BOX Final (Factory Sync Correct)
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # WEB SERVER (FINAL FIXED)
+      # WEB SERVER (FINAL CLEAN)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -53,7 +53,6 @@ jobs:
 
           #include "esp_rmaker_core.h"
           #include "esp_rmaker_standard_params.h"
-          #include "app_led.h"
 
           static const char *TAG = "WEB";
           static esp_rmaker_device_t *light_device = NULL;
@@ -64,8 +63,14 @@ jobs:
                   const esp_rmaker_node_t *node = esp_rmaker_get_node();
                   if (!node) return NULL;
 
-                  light_device = esp_rmaker_node_get_device_by_name((esp_rmaker_node_t *)node, "Light");
+                  light_device = esp_rmaker_node_get_device_by_name(
+                      (esp_rmaker_node_t *)node,
+                      "Light"
+                  );
               }
+
+              if (!light_device) return NULL;
+
               return esp_rmaker_device_get_param_by_name(
                   light_device,
                   ESP_RMAKER_DEF_POWER_NAME
@@ -77,16 +82,17 @@ jobs:
               esp_rmaker_param_t *param = get_power_param();
               if (!param) return false;
 
-              const esp_rmaker_param_val_t *val = esp_rmaker_param_get_val(param);
+              const esp_rmaker_param_val_t *val =
+                  esp_rmaker_param_get_val(param);
+
               return val ? val->val.b : false;
           }
 
           // -------- STATUS --------
           static esp_err_t status_handler(httpd_req_t *req)
           {
-              vTaskDelay(pdMS_TO_TICKS(50));
-
               char resp[64];
+
               snprintf(resp, sizeof(resp),
                        "{\"power\":%s}",
                        get_light_state() ? "true" : "false");
@@ -104,16 +110,13 @@ jobs:
               if (param) {
                   bool new_state = !get_light_state();
 
-                  // ✅ correct driver for YOUR ESP-BOX
-                  app_pwm_led_set_power(new_state);
-
-                  // ✅ correct RainMaker API
+                  // 🔥 ONLY use RainMaker (factory callback handles hardware)
                   esp_rmaker_param_update_and_report(
                       param,
                       esp_rmaker_bool(new_state)
                   );
 
-                  ESP_LOGI(TAG, "Toggle → %d", new_state);
+                  ESP_LOGI(TAG, "Toggle via RainMaker → %d", new_state);
               }
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
@@ -177,7 +180,7 @@ jobs:
                   httpd_register_uri_handler(server, &toggle);
                   httpd_register_uri_handler(server, &status);
 
-                  ESP_LOGI(TAG, "Web UI started (FINAL OK)");
+                  ESP_LOGI(TAG, "Web UI started (factory-synced)");
               }
           }
           EOF
@@ -189,7 +192,8 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+          grep -q web_server.h $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
           sed -i '/web_server_start/d' $FILE
 
@@ -204,9 +208,11 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
 
-          grep -q web_server.c $FILE || sed -i 's/"main.c"/"main.c" "web_server.c"/' $FILE
+          grep -q web_server.c $FILE || \
+          sed -i 's/"main.c"/"main.c" "web_server.c"/' $FILE
 
-          grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
+          grep -q esp_http_server $FILE || \
+          sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
       # ----------------------------
       # BUILD
@@ -241,5 +247,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-working
+          name: esp32s3-box-factory-synced
           path: examples/factory_demo/build/factory_merged.bin
