@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Hybrid (Real-Time UI + AP/STA)
+name: ESP32-S3-BOX Final Hybrid (WebUI + Voice + AP SAFE)
 
 on:
   workflow_dispatch:
@@ -95,7 +95,7 @@ jobs:
               return val->val.b;
           }
 
-          // -------- JSON API --------
+          // JSON status
           static esp_err_t status_handler(httpd_req_t *req)
           {
               char resp[64];
@@ -108,6 +108,7 @@ jobs:
               return ESP_OK;
           }
 
+          // toggle
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
               esp_rmaker_param_t *param = get_power_param();
@@ -120,14 +121,14 @@ jobs:
                       esp_rmaker_bool(!current)
                   );
 
-                  ESP_LOGI(TAG, "Toggle (REAL-TIME)");
+                  ESP_LOGI(TAG, "Toggle");
               }
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          // -------- UI --------
+          // UI
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
@@ -142,9 +143,7 @@ jobs:
               " let j=await r.json();"
               " document.getElementById('state').innerText = j.power ? 'ON' : 'OFF';"
               "}"
-              "async function toggle(){"
-              " await fetch('/toggle');"
-              "}"
+              "async function toggle(){ await fetch('/toggle'); }"
               "setInterval(update,300);"
               "update();"
               "</script>"
@@ -184,37 +183,27 @@ jobs:
                   httpd_register_uri_handler(server, &toggle);
                   httpd_register_uri_handler(server, &status);
 
-                  ESP_LOGI(TAG, "Web UI REAL-TIME started");
+                  ESP_LOGI(TAG, "Web UI started");
               }
           }
           EOF
 
       # ----------------------------
-      # Add WiFi Hybrid (AP+STA)
+      # Add SAFE AP (no crash)
       # ----------------------------
-      - name: Add WiFi Hybrid
+      - name: Add WiFi AP (SAFE)
         run: |
           cd examples/factory_demo/main
 
-          cat > wifi_hybrid.c << 'EOF'
+          cat > wifi_ap.c << 'EOF'
           #include "esp_wifi.h"
-          #include "esp_event.h"
           #include "esp_log.h"
           #include <string.h>
 
-          static const char *TAG = "WIFI";
+          static const char *TAG = "WIFI_AP";
 
-          void wifi_init_softap_sta(void)
+          void wifi_enable_ap(void)
           {
-              esp_netif_init();
-              esp_event_loop_create_default();
-
-              esp_netif_create_default_wifi_sta();
-              esp_netif_create_default_wifi_ap();
-
-              wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-              esp_wifi_init(&cfg);
-
               wifi_config_t ap_config = {
                   .ap = {
                       .ssid = "ESP-BOX",
@@ -229,9 +218,7 @@ jobs:
               esp_wifi_set_mode(WIFI_MODE_APSTA);
               esp_wifi_set_config(WIFI_IF_AP, &ap_config);
 
-              esp_wifi_start();
-
-              ESP_LOGI(TAG, "AP+STA mode started");
+              ESP_LOGI(TAG, "AP enabled: ESP-BOX / 12345678");
           }
           EOF
 
@@ -242,18 +229,15 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          # Include web
           grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-          # Add WiFi init
-          grep -q wifi_init_softap_sta $FILE || sed -i '/app_rmaker_start()/i \
-          extern void wifi_init_softap_sta(void); \
-          wifi_init_softap_sta();' $FILE
+          grep -q wifi_enable_ap $FILE || sed -i '/app_wifi_start()/a \
+          extern void wifi_enable_ap(void); \
+          vTaskDelay(pdMS_TO_TICKS(2000)); \
+          wifi_enable_ap();' $FILE
 
-          # Clean old calls
           sed -i '/web_server_start/d' $FILE
 
-          # Start web after RainMaker
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(4000));\
           web_server_start();' $FILE
@@ -265,7 +249,7 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
 
-          grep -q web_server.c $FILE || sed -i 's/"main.c"/"main.c" "web_server.c" "wifi_hybrid.c"/' $FILE
+          grep -q web_server.c $FILE || sed -i 's/"main.c"/"main.c" "web_server.c" "wifi_ap.c"/' $FILE
 
           grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
@@ -302,5 +286,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-hybrid-realtime
+          name: esp32s3-box-final-hybrid
           path: examples/factory_demo/build/factory_merged.bin
