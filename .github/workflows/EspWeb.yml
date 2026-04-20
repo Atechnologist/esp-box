@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final Hybrid (WebUI + Voice + AP SAFE)
+name: ESP32-S3-BOX Stable (Voice + WebUI + RainMaker)
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # Add Web UI (REAL-TIME AJAX)
+      # Add Web UI (REAL-TIME)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -95,7 +95,7 @@ jobs:
               return val->val.b;
           }
 
-          // JSON status
+          // -------- JSON API --------
           static esp_err_t status_handler(httpd_req_t *req)
           {
               char resp[64];
@@ -108,7 +108,6 @@ jobs:
               return ESP_OK;
           }
 
-          // toggle
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
               esp_rmaker_param_t *param = get_power_param();
@@ -120,15 +119,13 @@ jobs:
                       param,
                       esp_rmaker_bool(!current)
                   );
-
-                  ESP_LOGI(TAG, "Toggle");
               }
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          // UI
+          // -------- UI --------
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
@@ -189,40 +186,6 @@ jobs:
           EOF
 
       # ----------------------------
-      # Add SAFE AP (no crash)
-      # ----------------------------
-      - name: Add WiFi AP (SAFE)
-        run: |
-          cd examples/factory_demo/main
-
-          cat > wifi_ap.c << 'EOF'
-          #include "esp_wifi.h"
-          #include "esp_log.h"
-          #include <string.h>
-
-          static const char *TAG = "WIFI_AP";
-
-          void wifi_enable_ap(void)
-          {
-              wifi_config_t ap_config = {
-                  .ap = {
-                      .ssid = "ESP-BOX",
-                      .ssid_len = strlen("ESP-BOX"),
-                      .channel = 1,
-                      .password = "12345678",
-                      .max_connection = 4,
-                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
-                  }
-              };
-
-              esp_wifi_set_mode(WIFI_MODE_APSTA);
-              esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-
-              ESP_LOGI(TAG, "AP enabled: ESP-BOX / 12345678");
-          }
-          EOF
-
-      # ----------------------------
       # Patch main.c
       # ----------------------------
       - name: Patch main.c
@@ -230,11 +193,6 @@ jobs:
           FILE=examples/factory_demo/main/main.c
 
           grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
-
-          grep -q wifi_enable_ap $FILE || sed -i '/app_wifi_start()/a \
-          extern void wifi_enable_ap(void); \
-          vTaskDelay(pdMS_TO_TICKS(2000)); \
-          wifi_enable_ap();' $FILE
 
           sed -i '/web_server_start/d' $FILE
 
@@ -249,7 +207,7 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
 
-          grep -q web_server.c $FILE || sed -i 's/"main.c"/"main.c" "web_server.c" "wifi_ap.c"/' $FILE
+          grep -q web_server.c $FILE || sed -i 's/"main.c"/"main.c" "web_server.c"/' $FILE
 
           grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
@@ -286,5 +244,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-hybrid
+          name: esp32s3-box-stable
           path: examples/factory_demo/build/factory_merged.bin
