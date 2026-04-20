@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Real-Time Web UI (No Reload)
+name: ESP32-S3-BOX Hybrid (Real-Time UI + AP/STA)
 
 on:
   workflow_dispatch:
@@ -145,7 +145,7 @@ jobs:
               "async function toggle(){"
               " await fetch('/toggle');"
               "}"
-              "setInterval(update,500);"
+              "setInterval(update,300);"
               "update();"
               "</script>"
 
@@ -190,16 +190,70 @@ jobs:
           EOF
 
       # ----------------------------
+      # Add WiFi Hybrid (AP+STA)
+      # ----------------------------
+      - name: Add WiFi Hybrid
+        run: |
+          cd examples/factory_demo/main
+
+          cat > wifi_hybrid.c << 'EOF'
+          #include "esp_wifi.h"
+          #include "esp_event.h"
+          #include "esp_log.h"
+          #include <string.h>
+
+          static const char *TAG = "WIFI";
+
+          void wifi_init_softap_sta(void)
+          {
+              esp_netif_init();
+              esp_event_loop_create_default();
+
+              esp_netif_create_default_wifi_sta();
+              esp_netif_create_default_wifi_ap();
+
+              wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+              esp_wifi_init(&cfg);
+
+              wifi_config_t ap_config = {
+                  .ap = {
+                      .ssid = "ESP-BOX",
+                      .ssid_len = strlen("ESP-BOX"),
+                      .channel = 1,
+                      .password = "12345678",
+                      .max_connection = 4,
+                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
+                  }
+              };
+
+              esp_wifi_set_mode(WIFI_MODE_APSTA);
+              esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+
+              esp_wifi_start();
+
+              ESP_LOGI(TAG, "AP+STA mode started");
+          }
+          EOF
+
+      # ----------------------------
       # Patch main.c
       # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q 'web_server.h' $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+          # Include web
+          grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
+          # Add WiFi init
+          grep -q wifi_init_softap_sta $FILE || sed -i '/app_rmaker_start()/i \
+          extern void wifi_init_softap_sta(void); \
+          wifi_init_softap_sta();' $FILE
+
+          # Clean old calls
           sed -i '/web_server_start/d' $FILE
 
+          # Start web after RainMaker
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(4000));\
           web_server_start();' $FILE
@@ -211,7 +265,7 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
 
-          grep -q web_server.c $FILE || sed -i 's/SRCS "main.c"/SRCS "main.c" "web_server.c"/' $FILE
+          grep -q web_server.c $FILE || sed -i 's/"main.c"/"main.c" "web_server.c" "wifi_hybrid.c"/' $FILE
 
           grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
@@ -248,5 +302,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-realtime-web-ui
+          name: esp32s3-box-hybrid-realtime
           path: examples/factory_demo/build/factory_merged.bin
