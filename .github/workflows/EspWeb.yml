@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final (AP + WebUI + Sync)
+name: ESP32-S3-BOX Final (AP + WebUI + Retry FIX)
 
 on:
   workflow_dispatch:
@@ -33,6 +33,25 @@ jobs:
         run: |
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
+
+      # ----------------------------
+      # FIX WIFI RETRY LOOP
+      # ----------------------------
+      - name: Fix WiFi reconnect loop
+        run: |
+          FILE=examples/factory_demo/main/app/app_wifi.c
+
+          # Add retry counter
+          grep -q MAX_RETRY $FILE || sed -i '1i #define MAX_RETRY 5\nstatic int retry_count = 0;' $FILE
+
+          # Patch reconnect logic
+          sed -i 's/esp_wifi_connect();/\
+          if (retry_count < MAX_RETRY) {\
+              retry_count++;\
+              esp_wifi_connect();\
+          } else {\
+              ESP_LOGI("WIFI", "Max retries reached → AP mode only");\
+          }/' $FILE
 
       # ----------------------------
       # WEB SERVER
@@ -106,10 +125,10 @@ jobs:
               if (param) {
                   bool new_state = !get_light_state();
 
-                  // 🔥 REAL hardware control
+                  // hardware
                   app_pwm_led_set_power(new_state);
 
-                  // 🔥 sync RainMaker
+                  // sync
                   esp_rmaker_param_update_and_report(
                       param,
                       esp_rmaker_bool(new_state)
@@ -127,7 +146,6 @@ jobs:
               "<h1>ESP32-S3-BOX</h1>"
               "<h2 id='state'>Loading...</h2>"
               "<button onclick='toggle()' style='font-size:20px;'>Toggle</button>"
-
               "<script>"
               "async function update(){"
               " try {"
@@ -137,10 +155,9 @@ jobs:
               " } catch(e){}"
               "}"
               "async function toggle(){ await fetch('/toggle'); }"
-              "setInterval(update,200);"
+              "setInterval(update,300);"
               "update();"
               "</script>"
-
               "</body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
@@ -182,30 +199,24 @@ jobs:
           EOF
 
       # ----------------------------
-      # PATCH main.c (ADD AP MODE)
+      # PATCH main.c (AP MODE)
       # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          # include web + wifi
           grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
           grep -q esp_wifi.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_wifi.h"' $FILE
 
-          # remove old start
           sed -i '/web_server_start/d' $FILE
-          sed -i '/enable_softap/d' $FILE
 
-          # add AP function
           sed -i '/app_rmaker_start()/a \
           \n\
-          // ---- Enable SoftAP safely ----\
           wifi_config_t ap_config = {\
               .ap = {\
                   .ssid = "ESP-BOX",\
-                  .ssid_len = 0,\
-                  .channel = 1,\
                   .password = "12345678",\
+                  .channel = 1,\
                   .max_connection = 4,\
                   .authmode = WIFI_AUTH_WPA_WPA2_PSK\
               },\
@@ -259,5 +270,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-ap-webui
+          name: esp32s3-box-final-stable
           path: examples/factory_demo/build/factory_merged.bin
