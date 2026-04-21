@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final (Factory Sync Correct)
+name: ESP32-S3-BOX Final (WebUI + Voice + Hardware FIXED)
 
 on:
   workflow_dispatch:
@@ -13,9 +13,6 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # ----------------------------
-      # Checkout
-      # ----------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -35,7 +32,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # WEB SERVER (FINAL CLEAN)
+      # WEB SERVER (FINAL FIX)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -53,6 +50,7 @@ jobs:
 
           #include "esp_rmaker_core.h"
           #include "esp_rmaker_standard_params.h"
+          #include "app_led.h"
 
           static const char *TAG = "WEB";
           static esp_rmaker_device_t *light_device = NULL;
@@ -68,8 +66,6 @@ jobs:
                       "Light"
                   );
               }
-
-              if (!light_device) return NULL;
 
               return esp_rmaker_device_get_param_by_name(
                   light_device,
@@ -88,7 +84,7 @@ jobs:
               return val ? val->val.b : false;
           }
 
-          // -------- STATUS --------
+          // STATUS
           static esp_err_t status_handler(httpd_req_t *req)
           {
               char resp[64];
@@ -102,7 +98,7 @@ jobs:
               return ESP_OK;
           }
 
-          // -------- TOGGLE --------
+          // TOGGLE (FINAL FIX)
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
               esp_rmaker_param_t *param = get_power_param();
@@ -110,20 +106,23 @@ jobs:
               if (param) {
                   bool new_state = !get_light_state();
 
-                  // 🔥 ONLY use RainMaker (factory callback handles hardware)
+                  // 🔥 REAL hardware control
+                  app_pwm_led_set_power(new_state);
+
+                  // 🔥 sync RainMaker
                   esp_rmaker_param_update_and_report(
                       param,
                       esp_rmaker_bool(new_state)
                   );
 
-                  ESP_LOGI(TAG, "Toggle via RainMaker → %d", new_state);
+                  ESP_LOGI(TAG, "Toggle FIXED → %d", new_state);
               }
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          // -------- UI --------
+          // UI
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
@@ -180,14 +179,12 @@ jobs:
                   httpd_register_uri_handler(server, &toggle);
                   httpd_register_uri_handler(server, &status);
 
-                  ESP_LOGI(TAG, "Web UI started (factory-synced)");
+                  ESP_LOGI(TAG, "Web UI started (HARDWARE FIXED)");
               }
           }
           EOF
 
-      # ----------------------------
       # PATCH main.c
-      # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
@@ -201,9 +198,7 @@ jobs:
           vTaskDelay(pdMS_TO_TICKS(4000));\
           web_server_start();' $FILE
 
-      # ----------------------------
       # PATCH CMAKE
-      # ----------------------------
       - name: Patch CMake
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
@@ -214,9 +209,7 @@ jobs:
           grep -q esp_http_server $FILE || \
           sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
-      # ----------------------------
       # BUILD
-      # ----------------------------
       - name: Build
         run: |
           . $IDF_PATH/export.sh
@@ -226,9 +219,7 @@ jobs:
           idf.py reconfigure
           idf.py build
 
-      # ----------------------------
-      # MERGE BIN
-      # ----------------------------
+      # MERGE
       - name: Merge firmware
         run: |
           . $IDF_PATH/export.sh
@@ -241,11 +232,9 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
-      # ----------------------------
       # UPLOAD
-      # ----------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-factory-synced
+          name: esp32s3-box-final-hw-fixed
           path: examples/factory_demo/build/factory_merged.bin
