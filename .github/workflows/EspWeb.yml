@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final (WebUI + Voice + Hardware FIXED)
+name: ESP32-S3-BOX Final (AP + WebUI + Sync)
 
 on:
   workflow_dispatch:
@@ -13,6 +13,9 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
+      # ----------------------------
+      # Checkout
+      # ----------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -32,7 +35,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # WEB SERVER (FINAL FIX)
+      # WEB SERVER
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -84,11 +87,9 @@ jobs:
               return val ? val->val.b : false;
           }
 
-          // STATUS
           static esp_err_t status_handler(httpd_req_t *req)
           {
               char resp[64];
-
               snprintf(resp, sizeof(resp),
                        "{\"power\":%s}",
                        get_light_state() ? "true" : "false");
@@ -98,7 +99,6 @@ jobs:
               return ESP_OK;
           }
 
-          // TOGGLE (FINAL FIX)
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
               esp_rmaker_param_t *param = get_power_param();
@@ -114,15 +114,12 @@ jobs:
                       param,
                       esp_rmaker_bool(new_state)
                   );
-
-                  ESP_LOGI(TAG, "Toggle FIXED → %d", new_state);
               }
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          // UI
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
@@ -179,37 +176,59 @@ jobs:
                   httpd_register_uri_handler(server, &toggle);
                   httpd_register_uri_handler(server, &status);
 
-                  ESP_LOGI(TAG, "Web UI started (HARDWARE FIXED)");
+                  ESP_LOGI(TAG, "Web UI started");
               }
           }
           EOF
 
-      # PATCH main.c
+      # ----------------------------
+      # PATCH main.c (ADD AP MODE)
+      # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q web_server.h $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+          # include web + wifi
+          grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+          grep -q esp_wifi.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_wifi.h"' $FILE
 
+          # remove old start
           sed -i '/web_server_start/d' $FILE
+          sed -i '/enable_softap/d' $FILE
 
+          # add AP function
           sed -i '/app_rmaker_start()/a \
+          \n\
+          // ---- Enable SoftAP safely ----\
+          wifi_config_t ap_config = {\
+              .ap = {\
+                  .ssid = "ESP-BOX",\
+                  .ssid_len = 0,\
+                  .channel = 1,\
+                  .password = "12345678",\
+                  .max_connection = 4,\
+                  .authmode = WIFI_AUTH_WPA_WPA2_PSK\
+              },\
+          };\
+          esp_wifi_set_mode(WIFI_MODE_APSTA);\
+          esp_wifi_set_config(WIFI_IF_AP, &ap_config);\
+          \n\
           vTaskDelay(pdMS_TO_TICKS(4000));\
           web_server_start();' $FILE
 
+      # ----------------------------
       # PATCH CMAKE
+      # ----------------------------
       - name: Patch CMake
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
 
-          grep -q web_server.c $FILE || \
-          sed -i 's/"main.c"/"main.c" "web_server.c"/' $FILE
+          grep -q web_server.c $FILE || sed -i 's/"main.c"/"main.c" "web_server.c"/' $FILE
+          grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
-          grep -q esp_http_server $FILE || \
-          sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
-
+      # ----------------------------
       # BUILD
+      # ----------------------------
       - name: Build
         run: |
           . $IDF_PATH/export.sh
@@ -219,7 +238,9 @@ jobs:
           idf.py reconfigure
           idf.py build
 
+      # ----------------------------
       # MERGE
+      # ----------------------------
       - name: Merge firmware
         run: |
           . $IDF_PATH/export.sh
@@ -232,9 +253,11 @@ jobs:
             --flash_size 16MB \
             $(cat flash_args)
 
+      # ----------------------------
       # UPLOAD
+      # ----------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-hw-fixed
+          name: esp32s3-box-ap-webui
           path: examples/factory_demo/build/factory_merged.bin
