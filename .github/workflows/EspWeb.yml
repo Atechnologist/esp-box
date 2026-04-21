@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final (AP + WebUI + Retry FIX)
+name: ESP32-S3-BOX Final (AP + WebUI + Clean RainMaker)
 
 on:
   workflow_dispatch:
@@ -41,10 +41,8 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/app/app_wifi.c
 
-          # Add retry counter
           grep -q MAX_RETRY $FILE || sed -i '1i #define MAX_RETRY 5\nstatic int retry_count = 0;' $FILE
 
-          # Patch reconnect logic
           sed -i 's/esp_wifi_connect();/\
           if (retry_count < MAX_RETRY) {\
               retry_count++;\
@@ -125,10 +123,8 @@ jobs:
               if (param) {
                   bool new_state = !get_light_state();
 
-                  // hardware
                   app_pwm_led_set_power(new_state);
 
-                  // sync
                   esp_rmaker_param_update_and_report(
                       param,
                       esp_rmaker_bool(new_state)
@@ -199,19 +195,33 @@ jobs:
           EOF
 
       # ----------------------------
-      # PATCH main.c (AP MODE)
+      # PATCH main.c (AP + RainMaker fix)
       # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
+          # includes
           grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
           grep -q esp_wifi.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_wifi.h"' $FILE
+          grep -q esp_event.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_event.h"' $FILE
 
-          sed -i '/web_server_start/d' $FILE
+          # REMOVE direct RainMaker start
+          sed -i 's/app_rmaker_start();//g' $FILE
 
-          sed -i '/app_rmaker_start()/a \
-          \n\
+          # ADD event handler
+          sed -i '/void app_main()/a \
+          static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){\
+              if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP){\
+                  ESP_LOGI("WIFI", "Connected → starting RainMaker");\
+                  app_rmaker_start();\
+              }\
+          }' $FILE
+
+          # REGISTER handler + AP + WEB
+          sed -i '/app_wifi_start()/a \
+          esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL);\
+          \
           wifi_config_t ap_config = {\
               .ap = {\
                   .ssid = "ESP-BOX",\
@@ -223,7 +233,7 @@ jobs:
           };\
           esp_wifi_set_mode(WIFI_MODE_APSTA);\
           esp_wifi_set_config(WIFI_IF_AP, &ap_config);\
-          \n\
+          \
           vTaskDelay(pdMS_TO_TICKS(4000));\
           web_server_start();' $FILE
 
@@ -233,7 +243,6 @@ jobs:
       - name: Patch CMake
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
-
           grep -q web_server.c $FILE || sed -i 's/"main.c"/"main.c" "web_server.c"/' $FILE
           grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
@@ -270,5 +279,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-stable
+          name: esp32s3-box-final-clean
           path: examples/factory_demo/build/factory_merged.bin
