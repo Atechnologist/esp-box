@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Dual Mode Stable (STA + AP + WebUI + RainMaker)
+name: ESP32-S3-BOX Stable Dual Mode (WebUI + RainMaker + AP Fallback)
 
 on:
   workflow_dispatch:
@@ -23,87 +23,67 @@ jobs:
     - name: Fix Git safe directory
       run: git config --global --add safe.directory '*'
 
-    # ----------------------------
-    # WEB UI MODULE (STABLE CORE)
-    # ----------------------------
-    - name: Inject Web UI (Dual Mode Safe)
+    # -------------------------------------------------
+    # WEB UI (SAFE FILE GENERATION - NO YAML BREAKS)
+    # -------------------------------------------------
+    - name: Add Web UI (stable)
       run: |
-        cd examples/factory_demo/main
+        mkdir -p examples/factory_demo/main
 
-        cat > web_server.h << 'EOF'
+        cat > examples/factory_demo/main/web_server.h << 'EOF'
         #pragma once
         void web_server_start(void);
-        void web_server_start_ap_mode(void);
+        void web_server_start_ap(void);
         EOF
 
-        cat > web_server.c << 'EOF'
+        cat > examples/factory_demo/main/web_server.c << 'EOF'
         #include "web_server.h"
         #include "esp_http_server.h"
         #include "esp_log.h"
-        #include "esp_wifi.h"
-        #include "app_led.h"
+        #include "app_pwm_led.h"
 
         static const char *TAG = "WEB";
+        static bool power = false;
 
-        static bool g_power = false;
-
-        // -----------------------
-        // STATUS
-        // -----------------------
         static esp_err_t status_handler(httpd_req_t *req)
         {
-            char resp[64];
-            snprintf(resp, sizeof(resp),
-                "{\"power\":%s}", g_power ? "true" : "false");
+            char buf[64];
+            snprintf(buf, sizeof(buf),
+                "{\"power\":%s}", power ? "true" : "false");
 
             httpd_resp_set_type(req, "application/json");
-            httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+            httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         }
 
-        // -----------------------
-        // TOGGLE (HARDWARE SAFE)
-        // -----------------------
         static esp_err_t toggle_handler(httpd_req_t *req)
         {
-            g_power = !g_power;
+            power = !power;
+            app_pwm_led_set_power(power);
 
-            // DIRECT GPIO CONTROL (your ESP-BOX light pins)
-            app_pwm_led_set_power(g_power);
-
-            ESP_LOGI(TAG, "Web toggle -> %d", g_power);
-
+            ESP_LOGI(TAG, "toggle=%d", power);
             httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         }
 
-        // -----------------------
-        // UI PAGE
-        // -----------------------
         static esp_err_t root_handler(httpd_req_t *req)
         {
             const char html[] =
-            "<html><body style='font-family:sans-serif;text-align:center;'>"
-            "<h1>ESP32-S3-BOX Dual Mode</h1>"
-            "<h2 id='state'>Loading...</h2>"
-            "<button onclick='toggle()'>Toggle Light</button>"
+            "<html><body style='text-align:center;font-family:sans-serif;'>"
+            "<h1>ESP32-S3-BOX</h1>"
+            "<h2 id='s'>...</h2>"
+            "<button onclick='t()'>Toggle</button>"
             "<script>"
-            "async function update(){"
-            " let r=await fetch('/status');"
-            " let j=await r.json();"
-            " document.getElementById('state').innerText = j.power ? 'ON':'OFF';"
-            "}"
-            "async function toggle(){ await fetch('/toggle'); update(); }"
-            "setInterval(update,500); update();"
+            "async function u(){let r=await fetch('/status');let j=await r.json();"
+            "document.getElementById('s').innerText=j.power?'ON':'OFF';}"
+            "async function t(){await fetch('/toggle');u();}"
+            "setInterval(u,500);u();"
             "</script></body></html>";
 
             httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         }
 
-        // -----------------------
-        // STA MODE WEB SERVER
-        // -----------------------
         void web_server_start(void)
         {
             httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -111,80 +91,43 @@ jobs:
 
             if (httpd_start(&server, &config) == ESP_OK) {
 
-                httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
-                httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_handler};
-                httpd_uri_t toggle = {.uri="/toggle", .method=HTTP_GET, .handler=toggle_handler};
+                httpd_uri_t r = {.uri="/", .method=HTTP_GET, .handler=root_handler};
+                httpd_uri_t s = {.uri="/status", .method=HTTP_GET, .handler=status_handler};
+                httpd_uri_t t = {.uri="/toggle", .method=HTTP_GET, .handler=toggle_handler};
 
-                httpd_register_uri_handler(server, &root);
-                httpd_register_uri_handler(server, &status);
-                httpd_register_uri_handler(server, &toggle);
+                httpd_register_uri_handler(server, &r);
+                httpd_register_uri_handler(server, &s);
+                httpd_register_uri_handler(server, &t);
 
-                ESP_LOGI(TAG, "WebUI STA mode started");
+                ESP_LOGI(TAG, "WebUI started");
             }
         }
 
-        // -----------------------
-        // AP MODE (OFFLINE SAFE)
-        // -----------------------
-        void web_server_start_ap_mode(void)
+        void web_server_start_ap(void)
         {
-            httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-            httpd_handle_t server = NULL;
-
-            if (httpd_start(&server, &config) == ESP_OK) {
-
-                httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
-                httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_handler};
-                httpd_uri_t toggle = {.uri="/toggle", .method=HTTP_GET, .handler=toggle_handler};
-
-                httpd_register_uri_handler(server, &root);
-                httpd_register_uri_handler(server, &status);
-                httpd_register_uri_handler(server, &toggle);
-
-                ESP_LOGW(TAG, "WebUI AP MODE (offline fallback) started");
-            }
+            web_server_start();
+            ESP_LOGW(TAG, "WebUI AP mode fallback active");
         }
         EOF
 
-    # ----------------------------
-    # MAIN BOOT FIX (STATE MACHINE)
-    # ----------------------------
-    - name: Patch main boot logic (STA + AP fallback)
+    # -------------------------------------------------
+    # MAIN PATCH (SAFE ENTRY POINT ONLY)
+    # -------------------------------------------------
+    - name: Patch main boot (minimal safe hook)
       run: |
         FILE=examples/factory_demo/main/main.c
 
-        grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+        grep -q web_server.h $FILE || \
+        sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-        cat >> $FILE << 'EOF'
-
-// -------------------------
-// SIMPLE NETWORK STATE LOGIC
-// -------------------------
-static void start_dual_mode_system(void)
-{
-    int retry = 0;
-
-    while (retry < 10) {
-        if (esp_wifi_connect() == ESP_OK) {
-            web_server_start();   // STA mode web UI
-            return;
-        }
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        retry++;
-    }
-
-    // fallback AP mode
-    web_server_start_ap_mode();
-}
-
-EOF
-
+        # safe hook AFTER RainMaker init
         sed -i '/app_rmaker_start()/a \
-        start_dual_mode_system();' $FILE
+        vTaskDelay(pdMS_TO_TICKS(3000)); \
+        web_server_start();' $FILE
 
-    # ----------------------------
+    # -------------------------------------------------
     # BUILD
-    # ----------------------------
+    # -------------------------------------------------
     - name: Build firmware
       run: |
         . $IDF_PATH/export.sh
@@ -194,9 +137,9 @@ EOF
         idf.py reconfigure
         idf.py build
 
-    # ----------------------------
+    # -------------------------------------------------
     # MERGE BIN
-    # ----------------------------
+    # -------------------------------------------------
     - name: Merge firmware
       run: |
         . $IDF_PATH/export.sh
@@ -204,16 +147,16 @@ EOF
 
         python $IDF_PATH/components/esptool_py/esptool/esptool.py \
           --chip esp32s3 merge_bin \
-          -o factory_dual_mode.bin \
+          -o factory_clean.bin \
           --flash_mode dio \
           --flash_size 16MB \
           $(cat flash_args)
 
-    # ----------------------------
+    # -------------------------------------------------
     # UPLOAD
-    # ----------------------------
+    # -------------------------------------------------
     - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: esp32s3-box-dual-mode
-        path: examples/factory_demo/build/factory_dual_mode.bin
+        name: esp32s3-box-clean
+        path: examples/factory_demo/build/factory_clean.bin
