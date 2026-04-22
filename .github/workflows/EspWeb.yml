@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final (AP + WebUI + Clean RainMaker)
+name: ESP32-S3-BOX Final Stable (AP + WebUI + SR + Provisioning)
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # FIX WIFI RETRY LOOP
+      # LIMIT WIFI RETRIES
       # ----------------------------
       - name: Fix WiFi reconnect loop
         run: |
@@ -48,7 +48,7 @@ jobs:
               retry_count++;\
               esp_wifi_connect();\
           } else {\
-              ESP_LOGI("WIFI", "Max retries reached → AP mode only");\
+              ESP_LOGI("WIFI", "Max retries reached → AP mode");\
           }/' $FILE
 
       # ----------------------------
@@ -141,20 +141,15 @@ jobs:
               "<html><body style='font-family:sans-serif;text-align:center;'>"
               "<h1>ESP32-S3-BOX</h1>"
               "<h2 id='state'>Loading...</h2>"
-              "<button onclick='toggle()' style='font-size:20px;'>Toggle</button>"
+              "<button onclick='toggle()'>Toggle</button>"
               "<script>"
               "async function update(){"
-              " try {"
-              "  let r=await fetch('/status');"
-              "  let j=await r.json();"
-              "  document.getElementById('state').innerText = j.power ? 'ON' : 'OFF';"
-              " } catch(e){}"
-              "}"
+              " try { let r=await fetch('/status'); let j=await r.json();"
+              " document.getElementById('state').innerText = j.power ? 'ON':'OFF';"
+              " } catch(e){} }"
               "async function toggle(){ await fetch('/toggle'); }"
-              "setInterval(update,300);"
-              "update();"
-              "</script>"
-              "</body></html>";
+              "setInterval(update,500); update();"
+              "</script></body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
@@ -167,23 +162,9 @@ jobs:
 
               if (httpd_start(&server, &config) == ESP_OK) {
 
-                  httpd_uri_t root = {
-                      .uri = "/",
-                      .method = HTTP_GET,
-                      .handler = root_handler
-                  };
-
-                  httpd_uri_t toggle = {
-                      .uri = "/toggle",
-                      .method = HTTP_GET,
-                      .handler = toggle_handler
-                  };
-
-                  httpd_uri_t status = {
-                      .uri = "/status",
-                      .method = HTTP_GET,
-                      .handler = status_handler
-                  };
+                  httpd_uri_t root = { .uri="/", .method=HTTP_GET, .handler=root_handler };
+                  httpd_uri_t toggle = { .uri="/toggle", .method=HTTP_GET, .handler=toggle_handler };
+                  httpd_uri_t status = { .uri="/status", .method=HTTP_GET, .handler=status_handler };
 
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &toggle);
@@ -195,30 +176,23 @@ jobs:
           EOF
 
       # ----------------------------
-      # PATCH main.c (AP + RainMaker fix)
+      # PATCH main.c (CORRECT ORDER)
       # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          # includes
           grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
           grep -q esp_wifi.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_wifi.h"' $FILE
           grep -q esp_event.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_event.h"' $FILE
 
-          # REMOVE direct RainMaker start
+          # Remove direct RainMaker start
           sed -i 's/app_rmaker_start();//g' $FILE
 
-          # ADD event handler
-          sed -i '/void app_main()/a \
-          static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){\
-              if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP){\
-                  ESP_LOGI("WIFI", "Connected → starting RainMaker");\
-                  app_rmaker_start();\
-              }\
-          }' $FILE
+          # Add handler BEFORE app_main
+          sed -i '1i static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){ if(event_base==IP_EVENT && event_id==IP_EVENT_STA_GOT_IP){ app_rmaker_start(); }}' $FILE
 
-          # REGISTER handler + AP + WEB
+          # Insert correct order
           sed -i '/app_wifi_start()/a \
           esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL);\
           \
@@ -235,7 +209,10 @@ jobs:
           esp_wifi_set_config(WIFI_IF_AP, &ap_config);\
           \
           vTaskDelay(pdMS_TO_TICKS(4000));\
-          web_server_start();' $FILE
+          web_server_start();\
+          \
+          vTaskDelay(pdMS_TO_TICKS(8000));\
+          app_sr_init();' $FILE
 
       # ----------------------------
       # PATCH CMAKE
@@ -279,5 +256,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-clean
+          name: esp32s3-box-final-stable
           path: examples/factory_demo/build/factory_merged.bin
