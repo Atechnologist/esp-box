@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Stable Build (No main.c patching)
+name: ESP32-S3-BOX FINAL (Event Driven Stable)
 
 on:
   workflow_dispatch:
@@ -21,16 +21,15 @@ jobs:
         with:
           repository: espressif/esp-box
           submodules: recursive
-          fetch-depth: 0
 
-      - name: Fix Git safe directory
+      - name: Fix Git
         run: git config --global --add safe.directory '*'
 
       - name: Enable component manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
-      # Fix dependency issues
+      # Fix dependencies
       # ----------------------------
       - name: Patch dependencies
         run: |
@@ -51,19 +50,18 @@ jobs:
               retry_count++;\
               esp_wifi_connect();\
           } else {\
-              ESP_LOGI("WIFI", "Max retries reached → AP only mode");\
+              ESP_LOGI("WIFI", "Max retries reached → AP mode");\
           }/' $FILE
 
       # ----------------------------
-      # Add Web UI + background task
+      # Add Web Server (EVENT DRIVEN)
       # ----------------------------
-      - name: Add Web UI (no main patch)
+      - name: Add Web UI
         run: |
           cd examples/factory_demo/main
 
           cat > web_server.h << 'EOF'
           #pragma once
-          void web_server_start(void);
           void web_task_start(void);
           EOF
 
@@ -72,17 +70,40 @@ jobs:
 
           #include "esp_http_server.h"
           #include "esp_log.h"
+          #include "esp_event.h"
+          #include "esp_wifi.h"
+
           #include "freertos/FreeRTOS.h"
           #include "freertos/task.h"
+          #include "freertos/event_groups.h"
 
           #include "esp_rmaker_core.h"
           #include "esp_rmaker_standard_params.h"
-          #include "esp_wifi.h"
           #include "app_led.h"
 
           static const char *TAG = "WEB";
 
+          static EventGroupHandle_t wifi_event_group;
+          #define WIFI_READY_BIT BIT0
+
           static esp_rmaker_device_t *light_device = NULL;
+
+          // -----------------------------
+          // WiFi Event Handler
+          // -----------------------------
+          static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+                                         int32_t event_id, void* event_data)
+          {
+              if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+                  ESP_LOGI(TAG, "STA Got IP");
+                  xEventGroupSetBits(wifi_event_group, WIFI_READY_BIT);
+              }
+
+              if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
+                  ESP_LOGI(TAG, "AP Started");
+                  xEventGroupSetBits(wifi_event_group, WIFI_READY_BIT);
+              }
+          }
 
           // -----------------------------
           // RainMaker helpers
@@ -117,7 +138,7 @@ jobs:
           }
 
           // -----------------------------
-          // HTTP handlers
+          // HTTP
           // -----------------------------
           static esp_err_t status_handler(httpd_req_t *req)
           {
@@ -170,7 +191,7 @@ jobs:
               return ESP_OK;
           }
 
-          void web_server_start(void)
+          static void web_server_start(void)
           {
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
               httpd_handle_t server = NULL;
@@ -190,16 +211,28 @@ jobs:
           }
 
           // -----------------------------
-          // Background task (SAFE)
+          // Task
           // -----------------------------
           static void web_task(void *arg)
           {
-              vTaskDelay(pdMS_TO_TICKS(5000));
+              wifi_event_group = xEventGroupCreate();
+
+              esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL);
+              esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL);
+
+              ESP_LOGI(TAG, "Waiting for network...");
+
+              xEventGroupWaitBits(wifi_event_group,
+                                  WIFI_READY_BIT,
+                                  pdFALSE,
+                                  pdFALSE,
+                                  portMAX_DELAY);
+
+              ESP_LOGI(TAG, "Network ready → start Web UI");
 
               web_server_start();
 
-              // Start SR safely later
-              vTaskDelay(pdMS_TO_TICKS(8000));
+              vTaskDelay(pdMS_TO_TICKS(5000));
 
               extern void app_sr_init(void);
               app_sr_init();
@@ -214,14 +247,13 @@ jobs:
           EOF
 
       # ----------------------------
-      # Inject task call (SAFE)
+      # Hook into main
       # ----------------------------
-      - name: Hook task into main (minimal patch)
+      - name: Hook Web Task
         run: |
           FILE=examples/factory_demo/main/main.c
 
           grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
-
           sed -i '/app_wifi_start()/a web_task_start();' $FILE
 
       # ----------------------------
@@ -236,7 +268,7 @@ jobs:
       # ----------------------------
       # Build
       # ----------------------------
-      - name: Build firmware
+      - name: Build
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -246,7 +278,7 @@ jobs:
           idf.py build
 
       # ----------------------------
-      # Merge binary
+      # Merge
       # ----------------------------
       - name: Merge firmware
         run: |
@@ -266,5 +298,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-stable
+          name: esp32s3-box-final
           path: examples/factory_demo/build/factory_merged.bin
