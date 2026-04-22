@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final Stable (AP + WebUI + SR + Provisioning)
+name: ESP32-S3-BOX Final Stable (AP + WebUI + SR + FIXED BUILD)
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # LIMIT WIFI RETRIES
+      # FIX WIFI RETRY LOOP
       # ----------------------------
       - name: Fix WiFi reconnect loop
         run: |
@@ -176,23 +176,36 @@ jobs:
           EOF
 
       # ----------------------------
-      # PATCH main.c (CORRECT ORDER)
+      # PATCH main.c (FIXED)
       # ----------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
+          # Ensure includes
+          grep -q esp_event.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_event.h"' $FILE
+          grep -q stdint.h $FILE || sed -i '/#include "app_rmaker.h"/a #include <stdint.h>' $FILE
           grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
           grep -q esp_wifi.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_wifi.h"' $FILE
-          grep -q esp_event.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_event.h"' $FILE
 
-          # Remove direct RainMaker start
+          # Remove broken handler if exists
+          sed -i '/wifi_event_handler/d' $FILE
+
+          # Add handler AFTER includes
+          sed -i '/#include.*app_rmaker.h/a \
+          \n\
+          static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {\
+              if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {\
+                  ESP_LOGI("WIFI", "Connected → starting RainMaker");\
+                  app_rmaker_start();\
+              }\
+          }\
+          ' $FILE
+
+          # Remove direct start
           sed -i 's/app_rmaker_start();//g' $FILE
 
-          # Add handler BEFORE app_main
-          sed -i '1i static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){ if(event_base==IP_EVENT && event_id==IP_EVENT_STA_GOT_IP){ app_rmaker_start(); }}' $FILE
-
-          # Insert correct order
+          # Insert proper sequence
           sed -i '/app_wifi_start()/a \
           esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL);\
           \
@@ -256,5 +269,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-stable
+          name: esp32s3-box-final-stable-fixed
           path: examples/factory_demo/build/factory_merged.bin
