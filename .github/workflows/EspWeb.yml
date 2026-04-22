@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX CLEAN DUAL MODE (STA + AP + WebUI + RainMaker)
+name: ESP32-S3-BOX CLEAN STABLE BUILD (RainMaker + WebUI + AP fallback)
 
 on:
   workflow_dispatch:
@@ -13,6 +13,9 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
+      # ---------------------------
+      # CHECKOUT
+      # ---------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -20,24 +23,35 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Fix Git Safe Dir
+      - name: Safe directory fix
         run: git config --global --add safe.directory '*'
 
+      # ---------------------------
+      # CLEAN BUILD STATE (IMPORTANT FIX)
+      # ---------------------------
+      - name: Clean ESP-IDF build cache
+        run: |
+          rm -rf examples/factory_demo/build || true
+          rm -rf build || true
+
+      # ---------------------------
+      # FIX COMPONENT MANAGER
+      # ---------------------------
       - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ---------------------------
-      # SAFE PATCH ONLY (NO LED CHANGES)
+      # REMOVE ANY BROKEN TOUCH/LCD PATCHES (SAFE)
       # ---------------------------
-      - name: Fix broken touch dependencies
+      - name: Fix component conflicts
         run: |
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
-          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
+          find . -name "idf_component.yml" -exec sed -i '/ili9341/d' {} \; || true
 
       # ---------------------------
-      # AP FALLBACK (SAFE ADDITION)
+      # CREATE AP FALLBACK (SAFE COMPONENT)
       # ---------------------------
-      - name: Add AP Fallback (SAFE)
+      - name: Add AP fallback
         run: |
           cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
           #include "esp_wifi.h"
@@ -50,9 +64,8 @@ jobs:
               wifi_config_t ap_config = {
                   .ap = {
                       .ssid = "ESP32-BOX-SETUP",
-                      .ssid_len = 0,
-                      .channel = 6,
                       .password = "12345678",
+                      .channel = 6,
                       .max_connection = 4,
                       .authmode = WIFI_AUTH_WPA_WPA2_PSK
                   }
@@ -62,29 +75,31 @@ jobs:
               esp_wifi_set_config(WIFI_IF_AP, &ap_config);
               esp_wifi_start();
 
-              ESP_LOGI(TAG, "AP Fallback Started");
+              ESP_LOGI(TAG, "AP fallback started");
           }
           EOF
 
       # ---------------------------
-      # WEB UI (SAFE VERSION - NO LED SYMBOLS)
+      # CREATE WEB SERVER
       # ---------------------------
-      - name: Add Web UI SAFE
+      - name: Add Web Server (SAFE)
         run: |
           cat > examples/factory_demo/main/web_server.c << 'EOF'
           #include "esp_http_server.h"
           #include "esp_log.h"
-          #include "esp_rmaker_core.h"
-          #include "esp_rmaker_standard_params.h"
 
           static const char *TAG = "WEB";
+
+          extern void app_pwm_led_set_power(bool on);
+
+          static bool state = false;
 
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
               "<html><body style='text-align:center;'>"
               "<h1>ESP32-S3-BOX</h1>"
-              "<button onclick=\"fetch('/toggle')\">Toggle</button>"
+              "<button onclick=\"fetch('/toggle')\">Toggle LED</button>"
               "</body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
@@ -93,13 +108,8 @@ jobs:
 
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
-              // SAFE LED CONTROL (DO NOT CHANGE SYMBOL)
-              extern void app_pwm_led_set_power(bool on);
-              static bool state = false;
-
               state = !state;
               app_pwm_led_set_power(state);
-
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
@@ -126,23 +136,47 @@ jobs:
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &toggle);
 
-                  ESP_LOGI(TAG, "WebUI started");
+                  ESP_LOGI(TAG, "Web server started");
               }
           }
           EOF
 
       # ---------------------------
-      # PATCH MAIN (SAFE INJECTION ONLY)
+      # CREATE HEADER (FIX YOUR ERROR)
+      # ---------------------------
+      - name: Add web_server.h (FIX CRASH)
+        run: |
+          cat > examples/factory_demo/main/web_server.h << 'EOF'
+          #pragma once
+
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+
+          void web_server_start(void);
+
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+
+      # ---------------------------
+      # FIX main.c SAFELY (NO .c INCLUDES)
       # ---------------------------
       - name: Patch main.c safely
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q web_server.h $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "web_server.h"\n#include "ap_fallback.c"' $FILE
+          # remove bad includes if injected before
+          sed -i '/web_server.h/d' $FILE || true
+          sed -i '/ap_fallback.c/d' $FILE || true
 
-          sed -i '/web_server_start/d' $FILE
+          # add correct include
+          grep -q 'web_server.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
+          # ensure web server starts AFTER system init
+          grep -q 'web_server_start' $FILE || \
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(4000));\
           web_server_start();' $FILE
@@ -175,10 +209,10 @@ jobs:
             $(cat flash_args)
 
       # ---------------------------
-      # UPLOAD
+      # ARTIFACT
       # ---------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-clean-dual-mode
+          name: esp32s3-box-stable-build
           path: examples/factory_demo/build/factory_merged.bin
