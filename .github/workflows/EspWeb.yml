@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX FINAL (Event Driven Stable)
+name: ESP32-S3-BOX Factory Stable + WebUI Only
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ jobs:
 
     steps:
       # ----------------------------
-      # Checkout
+      # Checkout original repo
       # ----------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
@@ -22,39 +22,14 @@ jobs:
           repository: espressif/esp-box
           submodules: recursive
 
-      - name: Fix Git
+      - name: Fix git safe directory
         run: git config --global --add safe.directory '*'
 
       - name: Enable component manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
-      # Fix dependencies
-      # ----------------------------
-      - name: Patch dependencies
-        run: |
-          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
-          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
-
-      # ----------------------------
-      # Fix WiFi retry loop
-      # ----------------------------
-      - name: Fix WiFi reconnect loop
-        run: |
-          FILE=examples/factory_demo/main/app/app_wifi.c
-
-          grep -q MAX_RETRY $FILE || sed -i '1i #define MAX_RETRY 5\nstatic int retry_count = 0;' $FILE
-
-          sed -i 's/esp_wifi_connect();/\
-          if (retry_count < MAX_RETRY) {\
-              retry_count++;\
-              esp_wifi_connect();\
-          } else {\
-              ESP_LOGI("WIFI", "Max retries reached → AP mode");\
-          }/' $FILE
-
-      # ----------------------------
-      # Add Web Server (EVENT DRIVEN)
+      # ONLY add web server (no WiFi changes)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -62,6 +37,7 @@ jobs:
 
           cat > web_server.h << 'EOF'
           #pragma once
+          void web_server_start(void);
           void web_task_start(void);
           EOF
 
@@ -70,12 +46,8 @@ jobs:
 
           #include "esp_http_server.h"
           #include "esp_log.h"
-          #include "esp_event.h"
-          #include "esp_wifi.h"
-
           #include "freertos/FreeRTOS.h"
           #include "freertos/task.h"
-          #include "freertos/event_groups.h"
 
           #include "esp_rmaker_core.h"
           #include "esp_rmaker_standard_params.h"
@@ -83,31 +55,8 @@ jobs:
 
           static const char *TAG = "WEB";
 
-          static EventGroupHandle_t wifi_event_group;
-          #define WIFI_READY_BIT BIT0
-
           static esp_rmaker_device_t *light_device = NULL;
 
-          // -----------------------------
-          // WiFi Event Handler
-          // -----------------------------
-          static void wifi_event_handler(void* arg, esp_event_base_t event_base,
-                                         int32_t event_id, void* event_data)
-          {
-              if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-                  ESP_LOGI(TAG, "STA Got IP");
-                  xEventGroupSetBits(wifi_event_group, WIFI_READY_BIT);
-              }
-
-              if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
-                  ESP_LOGI(TAG, "AP Started");
-                  xEventGroupSetBits(wifi_event_group, WIFI_READY_BIT);
-              }
-          }
-
-          // -----------------------------
-          // RainMaker helpers
-          // -----------------------------
           static esp_rmaker_param_t* get_power_param()
           {
               if (!light_device) {
@@ -137,9 +86,6 @@ jobs:
               return val ? val->val.b : false;
           }
 
-          // -----------------------------
-          // HTTP
-          // -----------------------------
           static esp_err_t status_handler(httpd_req_t *req)
           {
               char resp[64];
@@ -180,18 +126,18 @@ jobs:
               "<button onclick='toggle()'>Toggle</button>"
               "<script>"
               "async function update(){"
-              " try { let r=await fetch('/status'); let j=await r.json();"
+              " let r=await fetch('/status'); let j=await r.json();"
               " document.getElementById('state').innerText = j.power ? 'ON':'OFF';"
-              " } catch(e){} }"
+              "}"
               "async function toggle(){ await fetch('/toggle'); }"
-              "setInterval(update,500); update();"
+              "setInterval(update,1000); update();"
               "</script></body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          static void web_server_start(void)
+          void web_server_start(void)
           {
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
               httpd_handle_t server = NULL;
@@ -210,33 +156,10 @@ jobs:
               }
           }
 
-          // -----------------------------
-          // Task
-          // -----------------------------
           static void web_task(void *arg)
           {
-              wifi_event_group = xEventGroupCreate();
-
-              esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL);
-              esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL);
-
-              ESP_LOGI(TAG, "Waiting for network...");
-
-              xEventGroupWaitBits(wifi_event_group,
-                                  WIFI_READY_BIT,
-                                  pdFALSE,
-                                  pdFALSE,
-                                  portMAX_DELAY);
-
-              ESP_LOGI(TAG, "Network ready → start Web UI");
-
+              vTaskDelay(pdMS_TO_TICKS(8000)); // wait factory demo init
               web_server_start();
-
-              vTaskDelay(pdMS_TO_TICKS(5000));
-
-              extern void app_sr_init(void);
-              app_sr_init();
-
               vTaskDelete(NULL);
           }
 
@@ -247,13 +170,15 @@ jobs:
           EOF
 
       # ----------------------------
-      # Hook into main
+      # Hook ONLY web task (no WiFi changes)
       # ----------------------------
-      - name: Hook Web Task
+      - name: Hook Web Task into main
         run: |
           FILE=examples/factory_demo/main/main.c
 
           grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+
+          # attach after wifi start WITHOUT touching logic
           sed -i '/app_wifi_start()/a web_task_start();' $FILE
 
       # ----------------------------
@@ -298,5 +223,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final
+          name: esp32s3-box-stable-webui
           path: examples/factory_demo/build/factory_merged.bin
