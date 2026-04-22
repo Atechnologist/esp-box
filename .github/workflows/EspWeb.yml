@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX FINAL (Stable + WebUI + AP Fallback)
+name: ESP32-S3-BOX FINAL (Stable + WebUI + AP Fallback + FIXED)
 
 on:
   workflow_dispatch:
@@ -30,7 +30,7 @@ jobs:
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
-      # Clean problematic deps
+      # Fix problematic components
       # ----------------------------
       - name: Patch dependencies
         run: |
@@ -38,7 +38,16 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # WEB SERVER (WORKING VERSION)
+      # 🔥 FIX LED HEADER (CRITICAL)
+      # ----------------------------
+      - name: Fix LED header (export function)
+        run: |
+          FILE=examples/factory_demo/main/app/app_led.h
+          grep -q app_led_set_power $FILE || \
+          sed -i '/#pragma once/a void app_led_set_power(bool power);' $FILE
+
+      # ----------------------------
+      # WEB SERVER
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -140,23 +149,9 @@ jobs:
 
               if (httpd_start(&server, &config) == ESP_OK) {
 
-                  httpd_uri_t root = {
-                      .uri="/",
-                      .method=HTTP_GET,
-                      .handler=root_handler
-                  };
-
-                  httpd_uri_t toggle = {
-                      .uri="/toggle",
-                      .method=HTTP_GET,
-                      .handler=toggle_handler
-                  };
-
-                  httpd_uri_t status = {
-                      .uri="/status",
-                      .method=HTTP_GET,
-                      .handler=status_handler
-                  };
+                  httpd_uri_t root = { .uri="/", .method=HTTP_GET, .handler=root_handler };
+                  httpd_uri_t toggle = { .uri="/toggle", .method=HTTP_GET, .handler=toggle_handler };
+                  httpd_uri_t status = { .uri="/status", .method=HTTP_GET, .handler=status_handler };
 
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &toggle);
@@ -167,6 +162,103 @@ jobs:
           }
           EOF
 
+      # ----------------------------
+      # AP FALLBACK
+      # ----------------------------
+      - name: Add AP fallback
+        run: |
+          cd examples/factory_demo/main
+
+          cat > ap_fallback.c << 'EOF'
+          #include "esp_wifi.h"
+          #include "esp_log.h"
+
+          void start_ap_fallback(void)
+          {
+              wifi_config_t ap_config = {
+                  .ap = {
+                      .ssid = "ESP32-BOX",
+                      .password = "12345678",
+                      .max_connection = 4,
+                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
+                  },
+              };
+
+              esp_wifi_set_mode(WIFI_MODE_APSTA);
+              esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+              esp_wifi_start();
+
+              ESP_LOGI("AP", "Fallback AP Started");
+          }
+          EOF
+
+      # ----------------------------
+      # PATCH MAIN (SAFE)
+      # ----------------------------
+      - name: Patch main.c
+        run: |
+          FILE=examples/factory_demo/main/main.c
+
+          grep -q web_server.h $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+
+          grep -q start_ap_fallback $FILE || \
+          sed -i '/#include "web_server.h"/a void start_ap_fallback(void);' $FILE
+
+          sed -i '/web_server_start/d' $FILE
+          sed -i '/start_ap_fallback/d' $FILE
+
+          sed -i '/app_rmaker_start()/a web_server_start();' $FILE
+          sed -i '/app_wifi_start()/a start_ap_fallback();' $FILE
+
+      # ----------------------------
+      # PATCH CMAKE
+      # ----------------------------
+      - name: Patch CMake
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+
+          grep -q web_server.c $FILE || \
+          sed -i 's/"main.c"/"main.c" "web_server.c" "ap_fallback.c"/' $FILE
+
+          grep -q esp_http_server $FILE || \
+          sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
+
+      # ----------------------------
+      # BUILD
+      # ----------------------------
+      - name: Build firmware
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+          idf.py reconfigure
+          idf.py build
+
+      # ----------------------------
+      # MERGE
+      # ----------------------------
+      - name: Merge firmware
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo/build
+
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o factory_merged.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
+
+      # ----------------------------
+      # UPLOAD
+      # ----------------------------
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-box-final-fixed
+          path: examples/factory_demo/build/factory_merged.bin
       # ----------------------------
       # AP FALLBACK (SAFE)
       # ----------------------------
