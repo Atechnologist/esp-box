@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Stable Dual Mode (WebUI + RainMaker + AP Fallback)
+name: ESP32-S3-BOX Stable (RainMaker + WebUI + AP Fallback SAFE)
 
 on:
   workflow_dispatch:
@@ -13,6 +13,10 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
+
+    # ----------------------------
+    # Checkout
+    # ----------------------------
     - name: Checkout ESP-BOX
       uses: actions/checkout@v4
       with:
@@ -23,33 +27,63 @@ jobs:
     - name: Fix Git safe directory
       run: git config --global --add safe.directory '*'
 
-    # -------------------------------------------------
-    # WEB UI (SAFE FILE GENERATION - NO YAML BREAKS)
-    # -------------------------------------------------
-    - name: Add Web UI (stable)
+    # ----------------------------
+    # WEB SERVER (WORKING BASELINE)
+    # ----------------------------
+    - name: Add Web UI (stable version)
       run: |
         mkdir -p examples/factory_demo/main
 
         cat > examples/factory_demo/main/web_server.h << 'EOF'
         #pragma once
         void web_server_start(void);
-        void web_server_start_ap(void);
         EOF
 
         cat > examples/factory_demo/main/web_server.c << 'EOF'
         #include "web_server.h"
         #include "esp_http_server.h"
         #include "esp_log.h"
-        #include "app_pwm_led.h"
+        #include "esp_rmaker_core.h"
+        #include "esp_rmaker_standard_params.h"
+        #include "app_led.h"
 
         static const char *TAG = "WEB";
-        static bool power = false;
+
+        static esp_rmaker_device_t *light_device = NULL;
+
+        static esp_rmaker_param_t *get_power_param(void)
+        {
+            if (!light_device) {
+                const esp_rmaker_node_t *node = esp_rmaker_get_node();
+                if (!node) return NULL;
+
+                light_device = esp_rmaker_node_get_device_by_name(
+                    (esp_rmaker_node_t *)node,
+                    "Light"
+                );
+            }
+
+            return esp_rmaker_device_get_param_by_name(
+                light_device,
+                ESP_RMAKER_DEF_POWER_NAME
+            );
+        }
+
+        static bool get_state(void)
+        {
+            esp_rmaker_param_t *p = get_power_param();
+            if (!p) return false;
+
+            const esp_rmaker_param_val_t *v = esp_rmaker_param_get_val(p);
+            return v ? v->val.b : false;
+        }
 
         static esp_err_t status_handler(httpd_req_t *req)
         {
             char buf[64];
             snprintf(buf, sizeof(buf),
-                "{\"power\":%s}", power ? "true" : "false");
+                     "{\"power\":%s}",
+                     get_state() ? "true" : "false");
 
             httpd_resp_set_type(req, "application/json");
             httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -58,10 +92,19 @@ jobs:
 
         static esp_err_t toggle_handler(httpd_req_t *req)
         {
-            power = !power;
-            app_pwm_led_set_power(power);
+            bool new_state = !get_state();
 
-            ESP_LOGI(TAG, "toggle=%d", power);
+            esp_rmaker_param_t *p = get_power_param();
+            if (p) {
+                app_led_set_power(new_state);
+                esp_rmaker_param_update_and_report(
+                    p,
+                    esp_rmaker_bool(new_state)
+                );
+
+                ESP_LOGI(TAG, "Toggle=%d", new_state);
+            }
+
             httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         }
@@ -69,12 +112,14 @@ jobs:
         static esp_err_t root_handler(httpd_req_t *req)
         {
             const char html[] =
-            "<html><body style='text-align:center;font-family:sans-serif;'>"
+            "<html><body style='font-family:sans-serif;text-align:center;'>"
             "<h1>ESP32-S3-BOX</h1>"
             "<h2 id='s'>...</h2>"
             "<button onclick='t()'>Toggle</button>"
             "<script>"
-            "async function u(){let r=await fetch('/status');let j=await r.json();"
+            "async function u(){"
+            "let r=await fetch('/status');"
+            "let j=await r.json();"
             "document.getElementById('s').innerText=j.power?'ON':'OFF';}"
             "async function t(){await fetch('/toggle');u();}"
             "setInterval(u,500);u();"
@@ -102,32 +147,67 @@ jobs:
                 ESP_LOGI(TAG, "WebUI started");
             }
         }
+        EOF
 
-        void web_server_start_ap(void)
+    # ----------------------------
+    # SAFE AP FALLBACK (NO LOOP CRASH)
+    # ----------------------------
+    - name: Add AP fallback mode (safe)
+      run: |
+        cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
+        #include "esp_wifi.h"
+        #include "esp_event.h"
+        #include "esp_log.h"
+        #include "esp_netif.h"
+
+        static const char *TAG = "AP_FALLBACK";
+
+        void start_ap_mode(void)
         {
-            web_server_start();
-            ESP_LOGW(TAG, "WebUI AP mode fallback active");
+            esp_netif_create_default_wifi_ap();
+
+            wifi_config_t ap_cfg = {
+                .ap = {
+                    .ssid = "ESP32-BOX-AP",
+                    .password = "12345678",
+                    .max_connection = 4,
+                    .authmode = WIFI_AUTH_WPA_WPA2_PSK
+                },
+            };
+
+            esp_wifi_set_mode(WIFI_MODE_AP);
+            esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+            esp_wifi_start();
+
+            ESP_LOGW(TAG, "AP MODE ACTIVE (fallback)");
         }
         EOF
 
-    # -------------------------------------------------
-    # MAIN PATCH (SAFE ENTRY POINT ONLY)
-    # -------------------------------------------------
-    - name: Patch main boot (minimal safe hook)
+    # ----------------------------
+    # PATCH MAIN SAFELY
+    # ----------------------------
+    - name: Patch main (safe hooks only)
       run: |
         FILE=examples/factory_demo/main/main.c
 
         grep -q web_server.h $FILE || \
         sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-        # safe hook AFTER RainMaker init
+        grep -q ap_fallback.c $FILE || \
+        sed -i '/#include "web_server.h"/a #include "ap_fallback.c"' $FILE
+
+        # start WebUI AFTER RainMaker init
         sed -i '/app_rmaker_start()/a \
         vTaskDelay(pdMS_TO_TICKS(3000)); \
         web_server_start();' $FILE
 
-    # -------------------------------------------------
+        # fallback AP trigger hook (SAFE, non-blocking)
+        sed -i '/app_wifi_start()/a \
+        if (esp_wifi_connect() != ESP_OK) start_ap_mode();' $FILE
+
+    # ----------------------------
     # BUILD
-    # -------------------------------------------------
+    # ----------------------------
     - name: Build firmware
       run: |
         . $IDF_PATH/export.sh
@@ -137,9 +217,9 @@ jobs:
         idf.py reconfigure
         idf.py build
 
-    # -------------------------------------------------
+    # ----------------------------
     # MERGE BIN
-    # -------------------------------------------------
+    # ----------------------------
     - name: Merge firmware
       run: |
         . $IDF_PATH/export.sh
@@ -147,16 +227,16 @@ jobs:
 
         python $IDF_PATH/components/esptool_py/esptool/esptool.py \
           --chip esp32s3 merge_bin \
-          -o factory_clean.bin \
+          -o factory_ap_safe.bin \
           --flash_mode dio \
           --flash_size 16MB \
           $(cat flash_args)
 
-    # -------------------------------------------------
+    # ----------------------------
     # UPLOAD
-    # -------------------------------------------------
+    # ----------------------------
     - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: esp32s3-box-clean
-        path: examples/factory_demo/build/factory_clean.bin
+        name: esp32s3-box-ap-safe
+        path: examples/factory_demo/build/factory_ap_safe.bin
