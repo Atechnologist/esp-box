@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Final Stable (AP + WebUI + SR + FIXED BUILD)
+name: ESP32-S3-BOX Stable Build (No main.c patching)
 
 on:
   workflow_dispatch:
@@ -23,19 +23,22 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Fix Git
+      - name: Fix Git safe directory
         run: git config --global --add safe.directory '*'
 
-      - name: Enable Component Manager
+      - name: Enable component manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
+      # ----------------------------
+      # Fix dependency issues
+      # ----------------------------
       - name: Patch dependencies
         run: |
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # FIX WIFI RETRY LOOP
+      # Fix WiFi retry loop
       # ----------------------------
       - name: Fix WiFi reconnect loop
         run: |
@@ -48,33 +51,42 @@ jobs:
               retry_count++;\
               esp_wifi_connect();\
           } else {\
-              ESP_LOGI("WIFI", "Max retries reached → AP mode");\
+              ESP_LOGI("WIFI", "Max retries reached → AP only mode");\
           }/' $FILE
 
       # ----------------------------
-      # WEB SERVER
+      # Add Web UI + background task
       # ----------------------------
-      - name: Add Web UI
+      - name: Add Web UI (no main patch)
         run: |
           cd examples/factory_demo/main
 
           cat > web_server.h << 'EOF'
           #pragma once
           void web_server_start(void);
+          void web_task_start(void);
           EOF
 
           cat > web_server.c << 'EOF'
           #include "web_server.h"
+
           #include "esp_http_server.h"
           #include "esp_log.h"
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
 
           #include "esp_rmaker_core.h"
           #include "esp_rmaker_standard_params.h"
+          #include "esp_wifi.h"
           #include "app_led.h"
 
           static const char *TAG = "WEB";
+
           static esp_rmaker_device_t *light_device = NULL;
 
+          // -----------------------------
+          // RainMaker helpers
+          // -----------------------------
           static esp_rmaker_param_t* get_power_param()
           {
               if (!light_device) {
@@ -104,6 +116,9 @@ jobs:
               return val ? val->val.b : false;
           }
 
+          // -----------------------------
+          // HTTP handlers
+          // -----------------------------
           static esp_err_t status_handler(httpd_req_t *req)
           {
               char resp[64];
@@ -173,62 +188,44 @@ jobs:
                   ESP_LOGI(TAG, "Web UI started");
               }
           }
+
+          // -----------------------------
+          // Background task (SAFE)
+          // -----------------------------
+          static void web_task(void *arg)
+          {
+              vTaskDelay(pdMS_TO_TICKS(5000));
+
+              web_server_start();
+
+              // Start SR safely later
+              vTaskDelay(pdMS_TO_TICKS(8000));
+
+              extern void app_sr_init(void);
+              app_sr_init();
+
+              vTaskDelete(NULL);
+          }
+
+          void web_task_start(void)
+          {
+              xTaskCreate(web_task, "web_task", 4096, NULL, 5, NULL);
+          }
           EOF
 
       # ----------------------------
-      # PATCH main.c (FIXED)
+      # Inject task call (SAFE)
       # ----------------------------
-      - name: Patch main.c
+      - name: Hook task into main (minimal patch)
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          # Ensure includes
-          grep -q esp_event.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_event.h"' $FILE
-          grep -q stdint.h $FILE || sed -i '/#include "app_rmaker.h"/a #include <stdint.h>' $FILE
           grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
-          grep -q esp_wifi.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "esp_wifi.h"' $FILE
 
-          # Remove broken handler if exists
-          sed -i '/wifi_event_handler/d' $FILE
-
-          # Add handler AFTER includes
-          sed -i '/#include.*app_rmaker.h/a \
-          \n\
-          static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {\
-              if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {\
-                  ESP_LOGI("WIFI", "Connected → starting RainMaker");\
-                  app_rmaker_start();\
-              }\
-          }\
-          ' $FILE
-
-          # Remove direct start
-          sed -i 's/app_rmaker_start();//g' $FILE
-
-          # Insert proper sequence
-          sed -i '/app_wifi_start()/a \
-          esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL);\
-          \
-          wifi_config_t ap_config = {\
-              .ap = {\
-                  .ssid = "ESP-BOX",\
-                  .password = "12345678",\
-                  .channel = 1,\
-                  .max_connection = 4,\
-                  .authmode = WIFI_AUTH_WPA_WPA2_PSK\
-              },\
-          };\
-          esp_wifi_set_mode(WIFI_MODE_APSTA);\
-          esp_wifi_set_config(WIFI_IF_AP, &ap_config);\
-          \
-          vTaskDelay(pdMS_TO_TICKS(4000));\
-          web_server_start();\
-          \
-          vTaskDelay(pdMS_TO_TICKS(8000));\
-          app_sr_init();' $FILE
+          sed -i '/app_wifi_start()/a web_task_start();' $FILE
 
       # ----------------------------
-      # PATCH CMAKE
+      # Patch CMake
       # ----------------------------
       - name: Patch CMake
         run: |
@@ -237,9 +234,9 @@ jobs:
           grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
 
       # ----------------------------
-      # BUILD
+      # Build
       # ----------------------------
-      - name: Build
+      - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -249,7 +246,7 @@ jobs:
           idf.py build
 
       # ----------------------------
-      # MERGE
+      # Merge binary
       # ----------------------------
       - name: Merge firmware
         run: |
@@ -264,10 +261,10 @@ jobs:
             $(cat flash_args)
 
       # ----------------------------
-      # UPLOAD
+      # Upload
       # ----------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-stable-fixed
+          name: esp32s3-box-stable
           path: examples/factory_demo/build/factory_merged.bin
