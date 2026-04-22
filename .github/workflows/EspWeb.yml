@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Stable (RainMaker + WebUI + AP Fallback SAFE)
+name: ESP32-S3-BOX Stable (WebUI + RainMaker + AP Fallback)
 
 on:
   workflow_dispatch:
@@ -28,9 +28,9 @@ jobs:
       run: git config --global --add safe.directory '*'
 
     # ----------------------------
-    # WEB SERVER (WORKING BASELINE)
+    # WEB SERVER (CORRECT LED API)
     # ----------------------------
-    - name: Add Web UI (stable version)
+    - name: Add Web UI
       run: |
         mkdir -p examples/factory_demo/main
 
@@ -45,10 +45,9 @@ jobs:
         #include "esp_log.h"
         #include "esp_rmaker_core.h"
         #include "esp_rmaker_standard_params.h"
-        #include "app_led.h"
+        #include "app_pwm_led.h"   // ✅ CORRECT FOR YOUR BUILD
 
         static const char *TAG = "WEB";
-
         static esp_rmaker_device_t *light_device = NULL;
 
         static esp_rmaker_param_t *get_power_param(void)
@@ -62,6 +61,8 @@ jobs:
                     "Light"
                 );
             }
+
+            if (!light_device) return NULL;
 
             return esp_rmaker_device_get_param_by_name(
                 light_device,
@@ -93,10 +94,13 @@ jobs:
         static esp_err_t toggle_handler(httpd_req_t *req)
         {
             bool new_state = !get_state();
-
             esp_rmaker_param_t *p = get_power_param();
+
             if (p) {
-                app_led_set_power(new_state);
+                // ✅ REAL hardware control (correct API)
+                app_pwm_led_set_power(new_state);
+
+                // ✅ Sync RainMaker
                 esp_rmaker_param_update_and_report(
                     p,
                     esp_rmaker_bool(new_state)
@@ -150,25 +154,24 @@ jobs:
         EOF
 
     # ----------------------------
-    # SAFE AP FALLBACK (NO LOOP CRASH)
+    # AP FALLBACK (SAFE)
     # ----------------------------
-    - name: Add AP fallback mode (safe)
+    - name: Add AP fallback
       run: |
         cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
         #include "esp_wifi.h"
-        #include "esp_event.h"
-        #include "esp_log.h"
         #include "esp_netif.h"
+        #include "esp_log.h"
 
-        static const char *TAG = "AP_FALLBACK";
+        static const char *TAG = "AP";
 
         void start_ap_mode(void)
         {
             esp_netif_create_default_wifi_ap();
 
-            wifi_config_t ap_cfg = {
+            wifi_config_t ap_config = {
                 .ap = {
-                    .ssid = "ESP32-BOX-AP",
+                    .ssid = "ESP32-BOX",
                     .password = "12345678",
                     .max_connection = 4,
                     .authmode = WIFI_AUTH_WPA_WPA2_PSK
@@ -176,34 +179,30 @@ jobs:
             };
 
             esp_wifi_set_mode(WIFI_MODE_AP);
-            esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+            esp_wifi_set_config(WIFI_IF_AP, &ap_config);
             esp_wifi_start();
 
-            ESP_LOGW(TAG, "AP MODE ACTIVE (fallback)");
+            ESP_LOGW(TAG, "Fallback AP started");
         }
         EOF
 
     # ----------------------------
-    # PATCH MAIN SAFELY
+    # PATCH MAIN (SAFE ORDER)
     # ----------------------------
-    - name: Patch main (safe hooks only)
+    - name: Patch main
       run: |
         FILE=examples/factory_demo/main/main.c
 
         grep -q web_server.h $FILE || \
         sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-        grep -q ap_fallback.c $FILE || \
-        sed -i '/#include "web_server.h"/a #include "ap_fallback.c"' $FILE
+        grep -q start_ap_mode $FILE || \
+        sed -i '/#include "web_server.h"/a void start_ap_mode(void);' $FILE
 
-        # start WebUI AFTER RainMaker init
+        # Start WebUI AFTER RainMaker
         sed -i '/app_rmaker_start()/a \
         vTaskDelay(pdMS_TO_TICKS(3000)); \
         web_server_start();' $FILE
-
-        # fallback AP trigger hook (SAFE, non-blocking)
-        sed -i '/app_wifi_start()/a \
-        if (esp_wifi_connect() != ESP_OK) start_ap_mode();' $FILE
 
     # ----------------------------
     # BUILD
@@ -218,7 +217,7 @@ jobs:
         idf.py build
 
     # ----------------------------
-    # MERGE BIN
+    # MERGE
     # ----------------------------
     - name: Merge firmware
       run: |
@@ -227,7 +226,7 @@ jobs:
 
         python $IDF_PATH/components/esptool_py/esptool/esptool.py \
           --chip esp32s3 merge_bin \
-          -o factory_ap_safe.bin \
+          -o factory_ap_ok.bin \
           --flash_mode dio \
           --flash_size 16MB \
           $(cat flash_args)
@@ -238,5 +237,5 @@ jobs:
     - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: esp32s3-box-ap-safe
-        path: examples/factory_demo/build/factory_ap_safe.bin
+        name: esp32s3-box-final
+        path: examples/factory_demo/build/factory_ap_ok.bin
