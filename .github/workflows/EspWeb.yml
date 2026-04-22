@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX Factory Stable + WebUI Only
+name: ESP32-S3-BOX Dual Mode Stable (STA + AP + WebUI + RainMaker)
 
 on:
   workflow_dispatch:
@@ -13,215 +13,207 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # ----------------------------
-      # Checkout original repo
-      # ----------------------------
-      - name: Checkout ESP-BOX
-        uses: actions/checkout@v4
-        with:
-          repository: espressif/esp-box
-          submodules: recursive
+    - name: Checkout ESP-BOX
+      uses: actions/checkout@v4
+      with:
+        repository: espressif/esp-box
+        submodules: recursive
+        fetch-depth: 0
 
-      - name: Fix git safe directory
-        run: git config --global --add safe.directory '*'
+    - name: Fix Git safe directory
+      run: git config --global --add safe.directory '*'
 
-      - name: Enable component manager
-        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+    # ----------------------------
+    # WEB UI MODULE (STABLE CORE)
+    # ----------------------------
+    - name: Inject Web UI (Dual Mode Safe)
+      run: |
+        cd examples/factory_demo/main
 
-      # ----------------------------
-      # ONLY add web server (no WiFi changes)
-      # ----------------------------
-      - name: Add Web UI
-        run: |
-          cd examples/factory_demo/main
+        cat > web_server.h << 'EOF'
+        #pragma once
+        void web_server_start(void);
+        void web_server_start_ap_mode(void);
+        EOF
 
-          cat > web_server.h << 'EOF'
-          #pragma once
-          void web_server_start(void);
-          void web_task_start(void);
-          EOF
+        cat > web_server.c << 'EOF'
+        #include "web_server.h"
+        #include "esp_http_server.h"
+        #include "esp_log.h"
+        #include "esp_wifi.h"
+        #include "app_led.h"
 
-          cat > web_server.c << 'EOF'
-          #include "web_server.h"
+        static const char *TAG = "WEB";
 
-          #include "esp_http_server.h"
-          #include "esp_log.h"
-          #include "freertos/FreeRTOS.h"
-          #include "freertos/task.h"
+        static bool g_power = false;
 
-          #include "esp_rmaker_core.h"
-          #include "esp_rmaker_standard_params.h"
-          #include "app_led.h"
+        // -----------------------
+        // STATUS
+        // -----------------------
+        static esp_err_t status_handler(httpd_req_t *req)
+        {
+            char resp[64];
+            snprintf(resp, sizeof(resp),
+                "{\"power\":%s}", g_power ? "true" : "false");
 
-          static const char *TAG = "WEB";
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
 
-          static esp_rmaker_device_t *light_device = NULL;
+        // -----------------------
+        // TOGGLE (HARDWARE SAFE)
+        // -----------------------
+        static esp_err_t toggle_handler(httpd_req_t *req)
+        {
+            g_power = !g_power;
 
-          static esp_rmaker_param_t* get_power_param()
-          {
-              if (!light_device) {
-                  const esp_rmaker_node_t *node = esp_rmaker_get_node();
-                  if (!node) return NULL;
+            // DIRECT GPIO CONTROL (your ESP-BOX light pins)
+            app_pwm_led_set_power(g_power);
 
-                  light_device = esp_rmaker_node_get_device_by_name(
-                      (esp_rmaker_node_t *)node,
-                      "Light"
-                  );
-              }
+            ESP_LOGI(TAG, "Web toggle -> %d", g_power);
 
-              return esp_rmaker_device_get_param_by_name(
-                  light_device,
-                  ESP_RMAKER_DEF_POWER_NAME
-              );
-          }
+            httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
 
-          static bool get_light_state()
-          {
-              esp_rmaker_param_t *param = get_power_param();
-              if (!param) return false;
+        // -----------------------
+        // UI PAGE
+        // -----------------------
+        static esp_err_t root_handler(httpd_req_t *req)
+        {
+            const char html[] =
+            "<html><body style='font-family:sans-serif;text-align:center;'>"
+            "<h1>ESP32-S3-BOX Dual Mode</h1>"
+            "<h2 id='state'>Loading...</h2>"
+            "<button onclick='toggle()'>Toggle Light</button>"
+            "<script>"
+            "async function update(){"
+            " let r=await fetch('/status');"
+            " let j=await r.json();"
+            " document.getElementById('state').innerText = j.power ? 'ON':'OFF';"
+            "}"
+            "async function toggle(){ await fetch('/toggle'); update(); }"
+            "setInterval(update,500); update();"
+            "</script></body></html>";
 
-              const esp_rmaker_param_val_t *val =
-                  esp_rmaker_param_get_val(param);
+            httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
 
-              return val ? val->val.b : false;
-          }
+        // -----------------------
+        // STA MODE WEB SERVER
+        // -----------------------
+        void web_server_start(void)
+        {
+            httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+            httpd_handle_t server = NULL;
 
-          static esp_err_t status_handler(httpd_req_t *req)
-          {
-              char resp[64];
-              snprintf(resp, sizeof(resp),
-                       "{\"power\":%s}",
-                       get_light_state() ? "true" : "false");
+            if (httpd_start(&server, &config) == ESP_OK) {
 
-              httpd_resp_set_type(req, "application/json");
-              httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
+                httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
+                httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_handler};
+                httpd_uri_t toggle = {.uri="/toggle", .method=HTTP_GET, .handler=toggle_handler};
 
-          static esp_err_t toggle_handler(httpd_req_t *req)
-          {
-              esp_rmaker_param_t *param = get_power_param();
+                httpd_register_uri_handler(server, &root);
+                httpd_register_uri_handler(server, &status);
+                httpd_register_uri_handler(server, &toggle);
 
-              if (param) {
-                  bool new_state = !get_light_state();
+                ESP_LOGI(TAG, "WebUI STA mode started");
+            }
+        }
 
-                  app_pwm_led_set_power(new_state);
+        // -----------------------
+        // AP MODE (OFFLINE SAFE)
+        // -----------------------
+        void web_server_start_ap_mode(void)
+        {
+            httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+            httpd_handle_t server = NULL;
 
-                  esp_rmaker_param_update_and_report(
-                      param,
-                      esp_rmaker_bool(new_state)
-                  );
-              }
+            if (httpd_start(&server, &config) == ESP_OK) {
 
-              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
+                httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
+                httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_handler};
+                httpd_uri_t toggle = {.uri="/toggle", .method=HTTP_GET, .handler=toggle_handler};
 
-          static esp_err_t root_handler(httpd_req_t *req)
-          {
-              const char html[] =
-              "<html><body style='font-family:sans-serif;text-align:center;'>"
-              "<h1>ESP32-S3-BOX</h1>"
-              "<h2 id='state'>Loading...</h2>"
-              "<button onclick='toggle()'>Toggle</button>"
-              "<script>"
-              "async function update(){"
-              " let r=await fetch('/status'); let j=await r.json();"
-              " document.getElementById('state').innerText = j.power ? 'ON':'OFF';"
-              "}"
-              "async function toggle(){ await fetch('/toggle'); }"
-              "setInterval(update,1000); update();"
-              "</script></body></html>";
+                httpd_register_uri_handler(server, &root);
+                httpd_register_uri_handler(server, &status);
+                httpd_register_uri_handler(server, &toggle);
 
-              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
+                ESP_LOGW(TAG, "WebUI AP MODE (offline fallback) started");
+            }
+        }
+        EOF
 
-          void web_server_start(void)
-          {
-              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-              httpd_handle_t server = NULL;
+    # ----------------------------
+    # MAIN BOOT FIX (STATE MACHINE)
+    # ----------------------------
+    - name: Patch main boot logic (STA + AP fallback)
+      run: |
+        FILE=examples/factory_demo/main/main.c
 
-              if (httpd_start(&server, &config) == ESP_OK) {
+        grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-                  httpd_uri_t root = { .uri="/", .method=HTTP_GET, .handler=root_handler };
-                  httpd_uri_t toggle = { .uri="/toggle", .method=HTTP_GET, .handler=toggle_handler };
-                  httpd_uri_t status = { .uri="/status", .method=HTTP_GET, .handler=status_handler };
+        cat >> $FILE << 'EOF'
 
-                  httpd_register_uri_handler(server, &root);
-                  httpd_register_uri_handler(server, &toggle);
-                  httpd_register_uri_handler(server, &status);
+// -------------------------
+// SIMPLE NETWORK STATE LOGIC
+// -------------------------
+static void start_dual_mode_system(void)
+{
+    int retry = 0;
 
-                  ESP_LOGI(TAG, "Web UI started");
-              }
-          }
+    while (retry < 10) {
+        if (esp_wifi_connect() == ESP_OK) {
+            web_server_start();   // STA mode web UI
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        retry++;
+    }
 
-          static void web_task(void *arg)
-          {
-              vTaskDelay(pdMS_TO_TICKS(8000)); // wait factory demo init
-              web_server_start();
-              vTaskDelete(NULL);
-          }
+    // fallback AP mode
+    web_server_start_ap_mode();
+}
 
-          void web_task_start(void)
-          {
-              xTaskCreate(web_task, "web_task", 4096, NULL, 5, NULL);
-          }
-          EOF
+EOF
 
-      # ----------------------------
-      # Hook ONLY web task (no WiFi changes)
-      # ----------------------------
-      - name: Hook Web Task into main
-        run: |
-          FILE=examples/factory_demo/main/main.c
+        sed -i '/app_rmaker_start()/a \
+        start_dual_mode_system();' $FILE
 
-          grep -q web_server.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
+    # ----------------------------
+    # BUILD
+    # ----------------------------
+    - name: Build firmware
+      run: |
+        . $IDF_PATH/export.sh
+        cd examples/factory_demo
+        idf.py set-target esp32s3
+        cp sdkconfig.ci.box sdkconfig
+        idf.py reconfigure
+        idf.py build
 
-          # attach after wifi start WITHOUT touching logic
-          sed -i '/app_wifi_start()/a web_task_start();' $FILE
+    # ----------------------------
+    # MERGE BIN
+    # ----------------------------
+    - name: Merge firmware
+      run: |
+        . $IDF_PATH/export.sh
+        cd examples/factory_demo/build
 
-      # ----------------------------
-      # Patch CMake
-      # ----------------------------
-      - name: Patch CMake
-        run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-          grep -q web_server.c $FILE || sed -i 's/"main.c"/"main.c" "web_server.c"/' $FILE
-          grep -q esp_http_server $FILE || sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
+        python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+          --chip esp32s3 merge_bin \
+          -o factory_dual_mode.bin \
+          --flash_mode dio \
+          --flash_size 16MB \
+          $(cat flash_args)
 
-      # ----------------------------
-      # Build
-      # ----------------------------
-      - name: Build
-        run: |
-          . $IDF_PATH/export.sh
-          cd examples/factory_demo
-          idf.py set-target esp32s3
-          cp sdkconfig.ci.box sdkconfig
-          idf.py reconfigure
-          idf.py build
-
-      # ----------------------------
-      # Merge
-      # ----------------------------
-      - name: Merge firmware
-        run: |
-          . $IDF_PATH/export.sh
-          cd examples/factory_demo/build
-
-          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o factory_merged.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      # ----------------------------
-      # Upload
-      # ----------------------------
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32s3-box-stable-webui
-          path: examples/factory_demo/build/factory_merged.bin
+    # ----------------------------
+    # UPLOAD
+    # ----------------------------
+    - name: Upload firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: esp32s3-box-dual-mode
+        path: examples/factory_demo/build/factory_dual_mode.bin
