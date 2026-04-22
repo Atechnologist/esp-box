@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX FINAL (Stable + WebUI + AP Fallback + FIXED)
+name: ESP32-S3-BOX Final Production
 
 on:
   workflow_dispatch:
@@ -13,9 +13,6 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # ----------------------------
-      # Checkout
-      # ----------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -23,14 +20,14 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Fix Git
+      - name: Fix Git safe directory
         run: git config --global --add safe.directory '*'
 
       - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ----------------------------
-      # Fix problematic components
+      # PATCH DEPENDENCIES (stable)
       # ----------------------------
       - name: Patch dependencies
         run: |
@@ -38,16 +35,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-ili9341/d' {} \; || true
 
       # ----------------------------
-      # 🔥 FIX LED HEADER (CRITICAL)
-      # ----------------------------
-      - name: Fix LED header (export function)
-        run: |
-          FILE=examples/factory_demo/main/app/app_led.h
-          grep -q app_led_set_power $FILE || \
-          sed -i '/#pragma once/a void app_led_set_power(bool power);' $FILE
-
-      # ----------------------------
-      # WEB SERVER
+      # WEB SERVER (SAFE)
       # ----------------------------
       - name: Add Web UI
         run: |
@@ -62,40 +50,18 @@ jobs:
           #include "web_server.h"
           #include "esp_http_server.h"
           #include "esp_log.h"
-          #include "esp_rmaker_core.h"
-          #include "esp_rmaker_standard_params.h"
-          #include "app_led.h"
+          #include "app_led.h"   // ✅ CORRECT HEADER
 
           static const char *TAG = "WEB";
-          static esp_rmaker_device_t *light_device = NULL;
 
-          static esp_rmaker_param_t* get_power_param()
-          {
-              if (!light_device) {
-                  const esp_rmaker_node_t *node = esp_rmaker_get_node();
-                  if (!node) return NULL;
-                  light_device = esp_rmaker_node_get_device_by_name(
-                      (esp_rmaker_node_t *)node, "Light");
-              }
-              return esp_rmaker_device_get_param_by_name(
-                  light_device, ESP_RMAKER_DEF_POWER_NAME);
-          }
-
-          static bool get_light_state()
-          {
-              esp_rmaker_param_t *param = get_power_param();
-              if (!param) return false;
-              const esp_rmaker_param_val_t *val =
-                  esp_rmaker_param_get_val(param);
-              return val ? val->val.b : false;
-          }
+          static bool led_state = false;
 
           static esp_err_t status_handler(httpd_req_t *req)
           {
               char resp[64];
               snprintf(resp, sizeof(resp),
                        "{\"power\":%s}",
-                       get_light_state() ? "true" : "false");
+                       led_state ? "true" : "false");
 
               httpd_resp_set_type(req, "application/json");
               httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
@@ -104,19 +70,12 @@ jobs:
 
           static esp_err_t toggle_handler(httpd_req_t *req)
           {
-              esp_rmaker_param_t *param = get_power_param();
-              if (param) {
-                  bool new_state = !get_light_state();
+              led_state = !led_state;
 
-                  app_led_set_power(new_state);
+              // ✅ SAFE FUNCTION (exists in factory_demo)
+              app_led_set_power(led_state);
 
-                  esp_rmaker_param_update_and_report(
-                      param,
-                      esp_rmaker_bool(new_state)
-                  );
-
-                  ESP_LOGI(TAG, "Toggle → %d", new_state);
-              }
+              ESP_LOGI(TAG, "LED: %d", led_state);
 
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
@@ -125,18 +84,20 @@ jobs:
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
-              "<html><body style='font-family:sans-serif;text-align:center;'>"
+              "<html><body style='text-align:center;font-family:sans-serif;'>"
               "<h1>ESP32-S3-BOX</h1>"
               "<h2 id='state'>Loading...</h2>"
               "<button onclick='toggle()' style='font-size:20px;'>Toggle</button>"
               "<script>"
               "async function update(){"
-              " try { let r=await fetch('/status'); let j=await r.json();"
-              " document.getElementById('state').innerText = j.power ? 'ON':'OFF';"
-              " } catch(e){} }"
-              "async function toggle(){ await fetch('/toggle'); }"
-              "setInterval(update,500); update();"
-              "</script></body></html>";
+              " let r=await fetch('/status');"
+              " let j=await r.json();"
+              " document.getElementById('state').innerText=j.power?'ON':'OFF';"
+              "}"
+              "async function toggle(){await fetch('/toggle');}"
+              "setInterval(update,500);update();"
+              "</script>"
+              "</body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
@@ -149,9 +110,23 @@ jobs:
 
               if (httpd_start(&server, &config) == ESP_OK) {
 
-                  httpd_uri_t root = { .uri="/", .method=HTTP_GET, .handler=root_handler };
-                  httpd_uri_t toggle = { .uri="/toggle", .method=HTTP_GET, .handler=toggle_handler };
-                  httpd_uri_t status = { .uri="/status", .method=HTTP_GET, .handler=status_handler };
+                  httpd_uri_t root = {
+                      .uri = "/",
+                      .method = HTTP_GET,
+                      .handler = root_handler
+                  };
+
+                  httpd_uri_t toggle = {
+                      .uri = "/toggle",
+                      .method = HTTP_GET,
+                      .handler = toggle_handler
+                  };
+
+                  httpd_uri_t status = {
+                      .uri = "/status",
+                      .method = HTTP_GET,
+                      .handler = status_handler
+                  };
 
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &toggle);
@@ -163,7 +138,7 @@ jobs:
           EOF
 
       # ----------------------------
-      # AP FALLBACK
+      # AP FALLBACK (MINIMAL SAFE)
       # ----------------------------
       - name: Add AP fallback
         run: |
@@ -172,106 +147,18 @@ jobs:
           cat > ap_fallback.c << 'EOF'
           #include "esp_wifi.h"
           #include "esp_log.h"
+          #include "esp_event.h"
+          #include "nvs_flash.h"
+
+          static const char *TAG = "AP";
 
           void start_ap_fallback(void)
           {
-              wifi_config_t ap_config = {
-                  .ap = {
-                      .ssid = "ESP32-BOX",
-                      .password = "12345678",
-                      .max_connection = 4,
-                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
-                  },
-              };
+              wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+              esp_wifi_init(&cfg);
 
-              esp_wifi_set_mode(WIFI_MODE_APSTA);
-              esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-              esp_wifi_start();
+              esp_wifi_set_mode(WIFI_MODE_AP);
 
-              ESP_LOGI("AP", "Fallback AP Started");
-          }
-          EOF
-
-      # ----------------------------
-      # PATCH MAIN (SAFE)
-      # ----------------------------
-      - name: Patch main.c
-        run: |
-          FILE=examples/factory_demo/main/main.c
-
-          grep -q web_server.h $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
-
-          grep -q start_ap_fallback $FILE || \
-          sed -i '/#include "web_server.h"/a void start_ap_fallback(void);' $FILE
-
-          sed -i '/web_server_start/d' $FILE
-          sed -i '/start_ap_fallback/d' $FILE
-
-          sed -i '/app_rmaker_start()/a web_server_start();' $FILE
-          sed -i '/app_wifi_start()/a start_ap_fallback();' $FILE
-
-      # ----------------------------
-      # PATCH CMAKE
-      # ----------------------------
-      - name: Patch CMake
-        run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-
-          grep -q web_server.c $FILE || \
-          sed -i 's/"main.c"/"main.c" "web_server.c" "ap_fallback.c"/' $FILE
-
-          grep -q esp_http_server $FILE || \
-          sed -i 's/REQUIRES /REQUIRES esp_http_server /' $FILE
-
-      # ----------------------------
-      # BUILD
-      # ----------------------------
-      - name: Build firmware
-        run: |
-          . $IDF_PATH/export.sh
-          cd examples/factory_demo
-          idf.py set-target esp32s3
-          cp sdkconfig.ci.box sdkconfig
-          idf.py reconfigure
-          idf.py build
-
-      # ----------------------------
-      # MERGE
-      # ----------------------------
-      - name: Merge firmware
-        run: |
-          . $IDF_PATH/export.sh
-          cd examples/factory_demo/build
-
-          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o factory_merged.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      # ----------------------------
-      # UPLOAD
-      # ----------------------------
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32s3-box-final-fixed
-          path: examples/factory_demo/build/factory_merged.bin
-      # ----------------------------
-      # AP FALLBACK (SAFE)
-      # ----------------------------
-      - name: Add AP fallback
-        run: |
-          cd examples/factory_demo/main
-
-          cat > ap_fallback.c << 'EOF'
-          #include "esp_wifi.h"
-          #include "esp_log.h"
-
-          void start_ap_fallback(void)
-          {
               wifi_config_t ap_config = {
                   .ap = {
                       .ssid = "ESP32-BOX",
@@ -283,16 +170,15 @@ jobs:
                   },
               };
 
-              esp_wifi_set_mode(WIFI_MODE_APSTA);
               esp_wifi_set_config(WIFI_IF_AP, &ap_config);
               esp_wifi_start();
 
-              ESP_LOGI("AP", "Fallback AP Started");
+              ESP_LOGI(TAG, "AP started: ESP32-BOX");
           }
           EOF
 
       # ----------------------------
-      # PATCH MAIN (SAFE)
+      # PATCH MAIN
       # ----------------------------
       - name: Patch main.c
         run: |
@@ -305,10 +191,11 @@ jobs:
           sed -i '/#include "web_server.h"/a void start_ap_fallback(void);' $FILE
 
           sed -i '/web_server_start/d' $FILE
-          sed -i '/start_ap_fallback/d' $FILE
 
-          sed -i '/app_rmaker_start()/a web_server_start();' $FILE
-          sed -i '/app_wifi_start()/a start_ap_fallback();' $FILE
+          sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(4000));\
+          web_server_start();\
+          start_ap_fallback();' $FILE
 
       # ----------------------------
       # PATCH CMAKE
@@ -326,7 +213,7 @@ jobs:
       # ----------------------------
       # BUILD
       # ----------------------------
-      - name: Build firmware
+      - name: Build
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -342,7 +229,6 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
-
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
             -o factory_merged.bin \
@@ -356,5 +242,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-stable-final
+          name: esp32s3-box-production
           path: examples/factory_demo/build/factory_merged.bin
