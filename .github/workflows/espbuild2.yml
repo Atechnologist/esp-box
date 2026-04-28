@@ -1,16 +1,15 @@
-name: ESP32-S3-BOX BOOT SAFE PRODUCTION BUILD FIXED LINKER
-
-# =====================================================
-# FIXES:
-# Your functions compile but were not linked.
-# Reason: ESP-IDF main component only compiles sources
-# listed in main/CMakeLists.txt
-#
-# This version auto-registers:
-#   extensions/web_ui.c
-#   extensions/ap_hook.c
-#   extensions/mqtt_bridge.c
-# =====================================================
+name: ESP32-S3-BOX FINAL PRODUCTION BUILD
+# Stable Production Firmware
+# Includes:
+# - Original factory_demo
+# - RainMaker
+# - Speech Recognition preserved
+# - WebUI
+# - AP fallback
+# - Local IP control
+# - MQTT Layer 2
+# - Safe namespaced modules
+# - Boot safe delayed startup
 
 on:
   workflow_dispatch:
@@ -36,135 +35,207 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe git
+      - name: Safe Git
         run: git config --global --add safe.directory '*'
 
 # =====================================================
 # CLEAN
 # =====================================================
-      - name: Clean
-        run: rm -rf examples/factory_demo/build || true
-
-# =====================================================
-# CREATE EXTENSIONS
-# =====================================================
-      - name: Create extensions
-        run: mkdir -p examples/factory_demo/main/extensions
-
-# =====================================================
-# WEB UI
-# =====================================================
-      - name: Add WebUI
+      - name: Clean Build
         run: |
-          cat > examples/factory_demo/main/extensions/web_ui.h << 'EOF'
-          #pragma once
-          void web_ui_start(void);
-          EOF
+          rm -rf examples/factory_demo/build || true
 
-          cat > examples/factory_demo/main/extensions/web_ui.c << 'EOF'
-          #include "esp_http_server.h"
+# =====================================================
+# CREATE MODULES
+# =====================================================
+      - name: Create custom modules
+        run: |
+          mkdir -p examples/factory_demo/main/custom
 
-          static esp_err_t root(httpd_req_t *req)
-          {
-              httpd_resp_send(req,
-              "<html><body><h1>ESP-BOX</h1></body></html>",
-              HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
+# =====================================================
+# WEBUI MODULE
+# =====================================================
+      - name: Inject WebUI
+        run: |
+          cat > examples/factory_demo/main/custom/bx_web.h << 'EOF'
+#pragma once
+#ifdef __cplusplus
+extern "C" {
+#endif
+void bx_web_start(void);
+#ifdef __cplusplus
+}
+#endif
+EOF
 
-          void web_ui_start(void)
-          {
-              httpd_handle_t s=NULL;
-              httpd_config_t c=HTTPD_DEFAULT_CONFIG();
+          cat > examples/factory_demo/main/custom/bx_web.c << 'EOF'
+#include "bx_web.h"
+#include "esp_http_server.h"
+#include "esp_log.h"
 
-              if(httpd_start(&s,&c)==ESP_OK){
-                  httpd_uri_t u={
-                      .uri="/",
-                      .method=HTTP_GET,
-                      .handler=root
-                  };
-                  httpd_register_uri_handler(s,&u);
-              }
-          }
-          EOF
+static const char *TAG = "BX_WEB";
+
+static esp_err_t root(httpd_req_t *req)
+{
+    const char html[] =
+    "<html><body style='text-align:center;'>"
+    "<h1>ESP-BOX</h1>"
+    "<button onclick=\"fetch('/ping')\">PING</button>"
+    "</body></html>";
+
+    httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t ping(httpd_req_t *req)
+{
+    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+void bx_web_start(void)
+{
+    httpd_handle_t server = NULL;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+    if (httpd_start(&server, &config) == ESP_OK) {
+
+        httpd_uri_t uri_root = {
+            .uri="/",
+            .method=HTTP_GET,
+            .handler=root
+        };
+
+        httpd_uri_t uri_ping = {
+            .uri="/ping",
+            .method=HTTP_GET,
+            .handler=ping
+        };
+
+        httpd_register_uri_handler(server, &uri_root);
+        httpd_register_uri_handler(server, &uri_ping);
+
+        ESP_LOGI(TAG, "WebUI started");
+    }
+}
+EOF
 
 # =====================================================
 # AP FALLBACK
 # =====================================================
-      - name: Add AP fallback
+      - name: Inject AP fallback
         run: |
-          cat > examples/factory_demo/main/extensions/ap_hook.h << 'EOF'
-          #pragma once
-          void ap_fallback_start(void);
-          EOF
+          cat > examples/factory_demo/main/custom/bx_ap.h << 'EOF'
+#pragma once
+#ifdef __cplusplus
+extern "C" {
+#endif
+void bx_ap_start(void);
+#ifdef __cplusplus
+}
+#endif
+EOF
 
-          cat > examples/factory_demo/main/extensions/ap_hook.c << 'EOF'
-          #include "esp_wifi.h"
+          cat > examples/factory_demo/main/custom/bx_ap.c << 'EOF'
+#include "bx_ap.h"
+#include "esp_wifi.h"
+#include "esp_log.h"
 
-          void ap_fallback_start(void)
-          {
-              wifi_config_t ap = {
-                .ap = {
-                  .ssid="ESP32-BOX-SETUP",
-                  .password="12345678",
-                  .channel=6,
-                  .max_connection=4,
-                  .authmode=WIFI_AUTH_WPA_WPA2_PSK
-                }
-              };
+static const char *TAG = "BX_AP";
 
-              esp_wifi_set_mode(WIFI_MODE_APSTA);
-              esp_wifi_set_config(WIFI_IF_AP,&ap);
-              esp_wifi_start();
-          }
-          EOF
+void bx_ap_start(void)
+{
+    wifi_mode_t mode;
+    esp_wifi_get_mode(&mode);
+
+    if (mode == WIFI_MODE_NULL) {
+
+        wifi_config_t ap = {
+            .ap = {
+                .ssid = "ESP32-BOX-SETUP",
+                .password = "12345678",
+                .channel = 6,
+                .max_connection = 4,
+                .authmode = WIFI_AUTH_WPA_WPA2_PSK
+            }
+        };
+
+        esp_wifi_set_mode(WIFI_MODE_AP);
+        esp_wifi_set_config(WIFI_IF_AP, &ap);
+        esp_wifi_start();
+
+        ESP_LOGI(TAG, "Fallback AP started");
+    }
+}
+EOF
 
 # =====================================================
-# MQTT PLACEHOLDER
+# MQTT MODULE
 # =====================================================
-      - name: Add MQTT placeholder
+      - name: Inject MQTT
         run: |
-          cat > examples/factory_demo/main/extensions/mqtt_bridge.h << 'EOF'
-          #pragma once
-          void mqtt_bridge_start(void);
-          EOF
+          cat > examples/factory_demo/main/custom/bx_mqtt.h << 'EOF'
+#pragma once
+#ifdef __cplusplus
+extern "C" {
+#endif
+void bx_mqtt_start(void);
+#ifdef __cplusplus
+}
+#endif
+EOF
 
-          cat > examples/factory_demo/main/extensions/mqtt_bridge.c << 'EOF'
-          void mqtt_bridge_start(void) {}
-          EOF
+          cat > examples/factory_demo/main/custom/bx_mqtt.c << 'EOF'
+#include "bx_mqtt.h"
+#include "mqtt_client.h"
+#include "esp_log.h"
+
+static const char *TAG = "BX_MQTT";
+static esp_mqtt_client_handle_t client;
+
+void bx_mqtt_start(void)
+{
+    esp_mqtt_client_config_t cfg = {
+        .broker.address.uri = "mqtt://broker.hivemq.com"
+    };
+
+    client = esp_mqtt_client_init(&cfg);
+    esp_mqtt_client_start(client);
+
+    ESP_LOGI(TAG, "MQTT started");
+}
+EOF
 
 # =====================================================
-# IMPORTANT FIX: REGISTER FILES IN CMAKE
+# REGISTER MODULES IN CMAKE
 # =====================================================
-      - name: Patch CMakeLists.txt
+      - name: Patch CMakeLists
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
 
-          sed -i 's|SRCS "|SRCS "extensions/web_ui.c" "extensions/ap_hook.c" "extensions/mqtt_bridge.c" "|' $FILE
+          sed -i 's|SRCS "main.c"|SRCS "main.c" "custom/bx_web.c" "custom/bx_ap.c" "custom/bx_mqtt.c"|' $FILE
 
 # =====================================================
-# PATCH main.c
+# PATCH MAIN.C
 # =====================================================
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q web_ui.h $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "extensions/web_ui.h"' $FILE
+          grep -q bx_web.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "custom/bx_web.h"' $FILE
+          grep -q bx_ap.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "custom/bx_ap.h"' $FILE
+          grep -q bx_mqtt.h $FILE || sed -i '/#include "app_rmaker.h"/a #include "custom/bx_mqtt.h"' $FILE
 
-          grep -q ap_hook.h $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "extensions/ap_hook.h"' $FILE
-
-          grep -q web_ui_start $FILE || \
-          sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(12000));\
-          web_ui_start();\
-          ap_fallback_start();' $FILE
+          grep -q bx_web_start $FILE || sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(8000));\
+          bx_web_start();\
+          bx_ap_start();\
+          bx_mqtt_start();' $FILE
 
 # =====================================================
 # BUILD
 # =====================================================
-      - name: Build
+      - name: Build Firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -174,7 +245,7 @@ jobs:
           idf.py build
 
 # =====================================================
-# MERGE
+# MERGE BIN
 # =====================================================
       - name: Merge BIN
         run: |
@@ -183,7 +254,7 @@ jobs:
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
           --chip esp32s3 merge_bin \
-          -o factory_merged.bin \
+          -o factory_production.bin \
           --flash_mode dio \
           --flash_size 16MB \
           $(cat flash_args)
@@ -191,8 +262,8 @@ jobs:
 # =====================================================
 # ARTIFACT
 # =====================================================
-      - name: Upload
+      - name: Upload BIN
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-fixed-linker
-          path: examples/factory_demo/build/factory_merged.bin
+          name: esp32s3-box-final-production
+          path: examples/factory_demo/build/factory_production.bin
