@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX FINAL PRODUCTION BUILD
+name: ESP32-S3-BOX REAL FINAL BUILD
 
 on:
   workflow_dispatch:
@@ -14,30 +14,40 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # ==================================================
-      # CHECKOUT
-      # ==================================================
-      - name: Checkout ESP-BOX
+# =====================================================
+# CHECKOUT
+# =====================================================
+      - name: Checkout official ESP-BOX repo
         uses: actions/checkout@v4
         with:
           repository: espressif/esp-box
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe Git
+      - name: Safe git directory
         run: git config --global --add safe.directory '*'
 
-      # ==================================================
-      # CLEAN
-      # ==================================================
+# =====================================================
+# CLEAN
+# =====================================================
       - name: Clean build cache
         run: |
           rm -rf examples/factory_demo/build || true
 
-      # ==================================================
-      # CREATE EXTENSION FILES DIRECTLY IN main/
-      # avoids CMake linker errors
-      # ==================================================
+# =====================================================
+# FORCE ORIGINAL ESP32-S3-BOX ONLY
+# removes BOX-3 contamination
+# =====================================================
+      - name: Force original ESP32-S3-BOX BSP only
+        run: |
+          rm -rf components/esp-box-3 || true
+          rm -rf components/esp-box-lite || true
+          rm -rf managed_components/espressif__esp-box-3 || true
+          rm -rf managed_components/espressif__esp-box-lite || true
+
+# =====================================================
+# WEB UI ADDON
+# =====================================================
       - name: Inject WebUI
         run: |
           cat > examples/factory_demo/main/web_ui.h <<'EOF'
@@ -52,12 +62,12 @@ jobs:
 
           static const char *TAG = "WEBUI";
 
-          static esp_err_t root_get(httpd_req_t *req)
+          static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
-              "<html><body style='text-align:center;'>"
+              "<html><body style='text-align:center;font-family:sans-serif;'>"
               "<h1>ESP32-S3-BOX</h1>"
-              "<p>Production Build</p>"
+              "<p>Local Control Ready</p>"
               "</body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
@@ -73,14 +83,19 @@ jobs:
                   httpd_uri_t root = {
                       .uri = "/",
                       .method = HTTP_GET,
-                      .handler = root_get
+                      .handler = root_handler,
+                      .user_ctx = NULL
                   };
+
                   httpd_register_uri_handler(server, &root);
                   ESP_LOGI(TAG, "WebUI started");
               }
           }
           EOF
 
+# =====================================================
+# AP FALLBACK
+# =====================================================
       - name: Inject AP fallback
         run: |
           cat > examples/factory_demo/main/ap_fallback.h <<'EOF'
@@ -97,10 +112,11 @@ jobs:
 
           void ap_fallback_start(void)
           {
-              wifi_config_t ap_cfg = {
+              wifi_config_t cfg = {
                   .ap = {
                       .ssid = "ESP32-BOX-SETUP",
                       .password = "12345678",
+                      .ssid_len = 0,
                       .channel = 1,
                       .max_connection = 4,
                       .authmode = WIFI_AUTH_WPA_WPA2_PSK
@@ -108,17 +124,25 @@ jobs:
               };
 
               esp_wifi_set_mode(WIFI_MODE_APSTA);
-              esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+              esp_wifi_set_config(WIFI_IF_AP, &cfg);
               esp_wifi_start();
 
               ESP_LOGI(TAG, "Fallback AP enabled");
           }
           EOF
 
-      # ==================================================
-      # PATCH main.c
-      # ==================================================
-      - name: Patch main.c
+# =====================================================
+# PATCH CMAKE
+# =====================================================
+      - name: Register custom files
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          sed -i 's/main.c/main.c web_ui.c ap_fallback.c/' $FILE
+
+# =====================================================
+# PATCH MAIN.C
+# =====================================================
+      - name: Patch startup
         run: |
           FILE=examples/factory_demo/main/main.c
 
@@ -129,42 +153,45 @@ jobs:
           sed -i '/#include "app_rmaker.h"/a #include "ap_fallback.h"' $FILE
 
           grep -q 'web_ui_start();' $FILE || \
-          sed -i '/app_rmaker_start()/a \
-              vTaskDelay(pdMS_TO_TICKS(5000));\
+          sed -i '/app_rmaker_start()/a\
+              vTaskDelay(pdMS_TO_TICKS(8000));\
               web_ui_start();\
               ap_fallback_start();' $FILE
 
-      # ==================================================
-      # BUILD
-      # ==================================================
+# =====================================================
+# BUILD
+# =====================================================
       - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
+
           idf.py set-target esp32s3
-          cp sdkconfig.defaults sdkconfig || true
+          cp sdkconfig.ci.box sdkconfig
+
           idf.py reconfigure
           idf.py build
 
-      # ==================================================
-      # MERGED BIN
-      # ==================================================
-      - name: Merge binary
+# =====================================================
+# MERGE BIN
+# =====================================================
+      - name: Merge BIN
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
+
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
-            -o final-production.bin \
+            -o esp32s3box_real_final.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-      # ==================================================
-      # ARTIFACT
-      # ==================================================
+# =====================================================
+# UPLOAD
+# =====================================================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-production
-          path: examples/factory_demo/build/final-production.bin
+          name: esp32s3-box-real-final
+          path: examples/factory_demo/build/esp32s3box_real_final.bin
