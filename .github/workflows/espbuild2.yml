@@ -1,16 +1,14 @@
-name: ESP32-S3-BOX FULL LAYER 2 SAFE BUILD
-
-# ==========================================================
-# Keeps your latest WORKING firmware:
-# - WebUI
-# - Same local IP access when internet is down
+name: ESP32-S3-BOX FULL FIXED YAML
+# Stable build keeps:
+# - Factory Demo / RainMaker
+# - Working WebUI
+# - Local IP access
 # - AP fallback
-# - RainMaker
-# - Factory demo core
-#
 # Adds:
-# - MQTT Layer 2 bridge (safe)
-# ==========================================================
+# - MQTT Layer 2 safe bridge
+# FIXED:
+# - No subfolder linker issue
+# - All custom files placed in /main/
 
 on:
   workflow_dispatch:
@@ -26,9 +24,9 @@ jobs:
 
     steps:
 
-# ==========================================================
+# ==================================================
 # CHECKOUT
-# ==========================================================
+# ==================================================
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -36,89 +34,81 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe directory fix
+      - name: Safe directory
         run: git config --global --add safe.directory '*'
 
-# ==========================================================
-# CLEAN BUILD CACHE
-# ==========================================================
-      - name: Clean build cache
+# ==================================================
+# CLEAN
+# ==================================================
+      - name: Clean previous build
         run: |
           rm -rf examples/factory_demo/build || true
 
-# ==========================================================
-# CREATE EXTENSIONS FOLDER
-# ==========================================================
-      - name: Create extensions folder
-        run: |
-          mkdir -p examples/factory_demo/main/extensions
-
-# ==========================================================
+# ==================================================
 # WEB UI MODULE
-# ==========================================================
+# ==================================================
       - name: Inject WebUI
         run: |
-          cat > examples/factory_demo/main/extensions/web_ui.h << 'EOF'
+          cat > examples/factory_demo/main/web_ui.h << 'EOF'
           #pragma once
           void web_ui_start(void);
           EOF
 
-          cat > examples/factory_demo/main/extensions/web_ui.c << 'EOF'
+          cat > examples/factory_demo/main/web_ui.c << 'EOF'
+          #include "web_ui.h"
           #include "esp_http_server.h"
           #include "esp_log.h"
 
-          static const char *TAG = "WEB_UI";
+          static const char *TAG = "WEBUI";
 
-          static esp_err_t root_handler(httpd_req_t *req)
+          static esp_err_t root_get(httpd_req_t *req)
           {
               const char html[] =
-              "<html><body style='text-align:center;'>"
-              "<h1>ESP-BOX CONTROL</h1>"
-              "<button onclick=\"fetch('/toggle')\">Toggle</button>"
-              "<br><br>"
-              "<button onclick=\"fetch('/mqttstatus')\">MQTT Status</button>"
+              "<html><body style='text-align:center;font-family:sans-serif;'>"
+              "<h1>ESP32-S3-BOX</h1>"
+              "<button onclick=\"fetch('/toggle')\">Toggle</button><br><br>"
+              "<button onclick=\"fetch('/mqtt')\">MQTT</button>"
               "</body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          static esp_err_t toggle_handler(httpd_req_t *req)
+          static esp_err_t toggle_get(httpd_req_t *req)
           {
-              ESP_LOGI(TAG, "Toggle pressed");
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          static esp_err_t mqtt_handler(httpd_req_t *req)
+          static esp_err_t mqtt_get(httpd_req_t *req)
           {
-              httpd_resp_send(req, "MQTT Layer Enabled", HTTPD_RESP_USE_STRLEN);
+              httpd_resp_send(req, "MQTT READY", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
           void web_ui_start(void)
           {
-              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
               httpd_handle_t server = NULL;
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
               if (httpd_start(&server, &config) == ESP_OK) {
 
                   httpd_uri_t root = {
-                      .uri = "/",
-                      .method = HTTP_GET,
-                      .handler = root_handler
+                      .uri="/",
+                      .method=HTTP_GET,
+                      .handler=root_get
                   };
 
                   httpd_uri_t toggle = {
-                      .uri = "/toggle",
-                      .method = HTTP_GET,
-                      .handler = toggle_handler
+                      .uri="/toggle",
+                      .method=HTTP_GET,
+                      .handler=toggle_get
                   };
 
                   httpd_uri_t mqtt = {
-                      .uri = "/mqttstatus",
-                      .method = HTTP_GET,
-                      .handler = mqtt_handler
+                      .uri="/mqtt",
+                      .method=HTTP_GET,
+                      .handler=mqtt_get
                   };
 
                   httpd_register_uri_handler(server, &root);
@@ -130,21 +120,22 @@ jobs:
           }
           EOF
 
-# ==========================================================
+# ==================================================
 # AP FALLBACK
-# ==========================================================
+# ==================================================
       - name: Inject AP fallback
         run: |
-          cat > examples/factory_demo/main/extensions/ap_hook.h << 'EOF'
+          cat > examples/factory_demo/main/ap_hook.h << 'EOF'
           #pragma once
           void ap_fallback_start(void);
           EOF
 
-          cat > examples/factory_demo/main/extensions/ap_hook.c << 'EOF'
+          cat > examples/factory_demo/main/ap_hook.c << 'EOF'
+          #include "ap_hook.h"
           #include "esp_wifi.h"
           #include "esp_log.h"
 
-          static const char *TAG = "AP_FALLBACK";
+          static const char *TAG = "AP";
 
           void ap_fallback_start(void)
           {
@@ -163,7 +154,7 @@ jobs:
                       }
                   };
 
-                  esp_wifi_set_mode(WIFI_MODE_AP);
+                  esp_wifi_set_mode(WIFI_MODE_APSTA);
                   esp_wifi_set_config(WIFI_IF_AP, &ap_config);
                   esp_wifi_start();
 
@@ -172,17 +163,17 @@ jobs:
           }
           EOF
 
-# ==========================================================
-# MQTT LAYER
-# ==========================================================
-      - name: Inject MQTT Layer
+# ==================================================
+# MQTT BRIDGE
+# ==================================================
+      - name: Inject MQTT
         run: |
-          cat > examples/factory_demo/main/extensions/mqtt_bridge.h << 'EOF'
+          cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
           #pragma once
           void mqtt_bridge_start(void);
           EOF
 
-          cat > examples/factory_demo/main/extensions/mqtt_bridge.c << 'EOF'
+          cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
           #include "mqtt_bridge.h"
           #include "mqtt_client.h"
           #include "esp_log.h"
@@ -192,52 +183,27 @@ jobs:
           static const char *TAG = "MQTT";
           static esp_mqtt_client_handle_t client;
 
-          static void process_cmd(const char *topic)
+          static void mqtt_event(void *args,
+                                 esp_event_base_t base,
+                                 int32_t event_id,
+                                 void *event_data)
           {
-              ESP_LOGI(TAG, "RX %s", topic);
+              if (event_id == MQTT_EVENT_CONNECTED) {
 
-              if (strcmp(topic, "espbox/cmd/reboot") == 0) {
-                  esp_restart();
-              }
-          }
+                  esp_mqtt_client_publish(
+                      client,
+                      "espbox/status",
+                      "online",
+                      0,1,1
+                  );
 
-          static void mqtt_event_handler(void *handler_args,
-                                         esp_event_base_t base,
-                                         int32_t event_id,
-                                         void *event_data)
-          {
-              esp_mqtt_event_handle_t event = event_data;
+                  esp_mqtt_client_subscribe(
+                      client,
+                      "espbox/cmd/#",
+                      1
+                  );
 
-              switch (event_id) {
-
-                  case MQTT_EVENT_CONNECTED:
-                      ESP_LOGI(TAG, "Connected");
-
-                      esp_mqtt_client_subscribe(client,
-                                                "espbox/cmd/#",
-                                                1);
-
-                      esp_mqtt_client_publish(client,
-                                              "espbox/status",
-                                              "online",
-                                              0,
-                                              1,
-                                              1);
-                      break;
-
-                  case MQTT_EVENT_DATA: {
-                      char topic[128] = {0};
-
-                      memcpy(topic,
-                             event->topic,
-                             event->topic_len);
-
-                      process_cmd(topic);
-                      break;
-                  }
-
-                  default:
-                      break;
+                  ESP_LOGI(TAG, "Connected");
               }
           }
 
@@ -252,7 +218,7 @@ jobs:
               esp_mqtt_client_register_event(
                   client,
                   ESP_EVENT_ANY_ID,
-                  mqtt_event_handler,
+                  mqtt_event,
                   NULL
               );
 
@@ -262,21 +228,21 @@ jobs:
           }
           EOF
 
-# ==========================================================
-# PATCH MAIN.C
-# ==========================================================
+# ==================================================
+# PATCH main.c
+# ==================================================
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q 'extensions/web_ui.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "extensions/web_ui.h"' $FILE
+          grep -q 'web_ui.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "web_ui.h"' $FILE
 
-          grep -q 'extensions/ap_hook.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "extensions/ap_hook.h"' $FILE
+          grep -q 'ap_hook.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "ap_hook.h"' $FILE
 
-          grep -q 'extensions/mqtt_bridge.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "extensions/mqtt_bridge.h"' $FILE
+          grep -q 'mqtt_bridge.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "mqtt_bridge.h"' $FILE
 
           grep -q 'web_ui_start();' $FILE || \
           sed -i '/app_rmaker_start()/a web_ui_start();' $FILE
@@ -287,36 +253,38 @@ jobs:
           grep -q 'mqtt_bridge_start();' $FILE || \
           sed -i '/ap_fallback_start();/a mqtt_bridge_start();' $FILE
 
-# ==========================================================
+# ==================================================
 # BUILD
-# ==========================================================
+# ==================================================
       - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
           idf.py reconfigure
           idf.py build
 
-# ==========================================================
+# ==================================================
 # MERGE BIN
-# ==========================================================
+# ==================================================
       - name: Merge BIN
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
-          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o esp32s3-box-layer2.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
 
-# ==========================================================
-# UPLOAD
-# ==========================================================
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+          --chip esp32s3 merge_bin \
+          -o factory_full_fixed.bin \
+          --flash_mode dio \
+          --flash_size 16MB \
+          $(cat flash_args)
+
+# ==================================================
+# ARTIFACT
+# ==================================================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-layer2-safe
-          path: examples/factory_demo/build/esp32s3-box-layer2.bin
+          name: esp32s3-box-full-fixed
+          path: examples/factory_demo/build/factory_full_fixed.bin
