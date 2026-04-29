@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX FINAL FIXED YAML
+name: ESP32-S3-BOX FINAL V2 STABLE YAML
 
 on:
   workflow_dispatch:
@@ -14,9 +14,9 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-      # -------------------------------------------------
-      # Checkout
-      # -------------------------------------------------
+# ==========================================================
+# CHECKOUT
+# ==========================================================
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -27,123 +27,161 @@ jobs:
       - name: Safe Git
         run: git config --global --add safe.directory '*'
 
-      # -------------------------------------------------
-      # Clean previous build
-      # -------------------------------------------------
-      - name: Clean
+# ==========================================================
+# CLEAN
+# ==========================================================
+      - name: Clean Build
         run: |
           rm -rf examples/factory_demo/build || true
 
-      # -------------------------------------------------
-      # Inject WebUI (SAFE)
-      # -------------------------------------------------
-      - name: Create WebUI files
+# ==========================================================
+# WEB UI FILES
+# ==========================================================
+      - name: Inject WebUI
         run: |
-          mkdir -p examples/factory_demo/main
+          cat > examples/factory_demo/main/web_ui.h << 'EOF'
+#pragma once
+void web_ui_start(void);
+EOF
 
-          cat > examples/factory_demo/main/web_ui.h <<'EOF'
-          #pragma once
-          void web_ui_start(void);
-          EOF
+          cat > examples/factory_demo/main/web_ui.c << 'EOF'
+#include "web_ui.h"
+#include "esp_http_server.h"
+#include "esp_log.h"
+#include "app_indicator.h"
 
-          cat > examples/factory_demo/main/web_ui.c <<'EOF'
-          #include "web_ui.h"
-          #include "esp_http_server.h"
-          #include "esp_log.h"
+static const char *TAG = "WEBUI";
+static bool led_state = false;
 
-          static const char *TAG = "WEBUI";
+static esp_err_t root_get(httpd_req_t *req)
+{
+    const char html[] =
+    "<html><body style='text-align:center;font-family:sans-serif;'>"
+    "<h1>ESP-BOX CONTROL</h1>"
+    "<p><button onclick=\"fetch('/on')\">LIGHT ON</button></p>"
+    "<p><button onclick=\"fetch('/off')\">LIGHT OFF</button></p>"
+    "<p><button onclick=\"fetch('/reboot')\">REBOOT</button></p>"
+    "<p><button onclick=\"fetch('/mqtt')\">MQTT STATUS</button></p>"
+    "</body></html>";
 
-          static esp_err_t root_handler(httpd_req_t *req)
-          {
-              const char resp[] =
-                  "<html><body style='text-align:center;'>"
-                  "<h1>ESP-BOX</h1>"
-                  "<p>WebUI Running</p>"
-                  "</body></html>";
+    httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
 
-              httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
+static esp_err_t led_on(httpd_req_t *req)
+{
+    led_state = true;
+    app_indicator_set(true);
+    httpd_resp_sendstr(req, "LIGHT ON");
+    return ESP_OK;
+}
 
-          void web_ui_start(void)
-          {
-              httpd_handle_t server = NULL;
-              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+static esp_err_t led_off(httpd_req_t *req)
+{
+    led_state = false;
+    app_indicator_set(false);
+    httpd_resp_sendstr(req, "LIGHT OFF");
+    return ESP_OK;
+}
 
-              if (httpd_start(&server, &config) == ESP_OK) {
-                  httpd_uri_t root = {
-                      .uri = "/",
-                      .method = HTTP_GET,
-                      .handler = root_handler
-                  };
+static esp_err_t reboot(httpd_req_t *req)
+{
+    httpd_resp_sendstr(req, "REBOOTING");
+    esp_restart();
+    return ESP_OK;
+}
 
-                  httpd_register_uri_handler(server, &root);
-                  ESP_LOGI(TAG, "WebUI started");
-              }
-          }
-          EOF
+static esp_err_t mqtt(httpd_req_t *req)
+{
+    httpd_resp_sendstr(req, "MQTT ENABLED");
+    return ESP_OK;
+}
 
-      # -------------------------------------------------
-      # Inject MQTT Layer 2 SAFE
-      # -------------------------------------------------
-      - name: Create MQTT files
+void web_ui_start(void)
+{
+    httpd_handle_t server = NULL;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+    if (httpd_start(&server, &config) == ESP_OK) {
+
+        httpd_uri_t uri_root = { .uri="/", .method=HTTP_GET, .handler=root_get };
+        httpd_uri_t uri_on = { .uri="/on", .method=HTTP_GET, .handler=led_on };
+        httpd_uri_t uri_off = { .uri="/off", .method=HTTP_GET, .handler=led_off };
+        httpd_uri_t uri_reboot = { .uri="/reboot", .method=HTTP_GET, .handler=reboot };
+        httpd_uri_t uri_mqtt = { .uri="/mqtt", .method=HTTP_GET, .handler=mqtt };
+
+        httpd_register_uri_handler(server, &uri_root);
+        httpd_register_uri_handler(server, &uri_on);
+        httpd_register_uri_handler(server, &uri_off);
+        httpd_register_uri_handler(server, &uri_reboot);
+        httpd_register_uri_handler(server, &uri_mqtt);
+
+        ESP_LOGI(TAG, "WebUI Started");
+    }
+}
+EOF
+
+# ==========================================================
+# MQTT SAFE DELAYED START
+# ==========================================================
+      - name: Inject MQTT
         run: |
-          cat > examples/factory_demo/main/mqtt_layer.h <<'EOF'
-          #pragma once
-          void mqtt_layer_start(void);
-          EOF
+          cat > examples/factory_demo/main/mqtt_layer.h << 'EOF'
+#pragma once
+void mqtt_layer_start(void);
+EOF
 
-          cat > examples/factory_demo/main/mqtt_layer.c <<'EOF'
-          #include "mqtt_layer.h"
-          #include "mqtt_client.h"
-          #include "esp_log.h"
+          cat > examples/factory_demo/main/mqtt_layer.c << 'EOF'
+#include "mqtt_layer.h"
+#include "mqtt_client.h"
+#include "esp_log.h"
 
-          static const char *TAG = "MQTT";
+static const char *TAG = "MQTT";
 
-          static void mqtt_event_handler(void *handler_args,
-                                         esp_event_base_t base,
-                                         int32_t event_id,
-                                         void *event_data)
-          {
-              if (event_id == MQTT_EVENT_CONNECTED) {
-                  ESP_LOGI(TAG, "MQTT Connected");
-              }
-          }
+static void event_handler(void *arg,
+                          esp_event_base_t event_base,
+                          int32_t event_id,
+                          void *event_data)
+{
+    if (event_id == MQTT_EVENT_CONNECTED) {
+        ESP_LOGI(TAG, "Connected");
+    }
+}
 
-          void mqtt_layer_start(void)
-          {
-              esp_mqtt_client_config_t cfg = {
-                  .broker.address.uri = "mqtt://broker.hivemq.com"
-              };
+void mqtt_layer_start(void)
+{
+    esp_mqtt_client_config_t cfg = {
+        .broker.address.uri = "mqtt://broker.hivemq.com"
+    };
 
-              esp_mqtt_client_handle_t client =
-                  esp_mqtt_client_init(&cfg);
+    esp_mqtt_client_handle_t client =
+        esp_mqtt_client_init(&cfg);
 
-              esp_mqtt_client_register_event(
-                  client,
-                  ESP_EVENT_ANY_ID,
-                  mqtt_event_handler,
-                  NULL);
+    esp_mqtt_client_register_event(
+        client,
+        ESP_EVENT_ANY_ID,
+        event_handler,
+        NULL
+    );
 
-              esp_mqtt_client_start(client);
+    esp_mqtt_client_start(client);
 
-              ESP_LOGI(TAG, "MQTT started");
-          }
-          EOF
+    ESP_LOGI(TAG, "MQTT Started");
+}
+EOF
 
-      # -------------------------------------------------
-      # Register new source files
-      # -------------------------------------------------
+# ==========================================================
+# PATCH CMAKE
+# ==========================================================
       - name: Patch CMakeLists
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
-
           grep -q web_ui.c $FILE || \
           sed -i 's/main.c/main.c web_ui.c mqtt_layer.c/' $FILE
 
-      # -------------------------------------------------
-      # Patch main.c safely
-      # -------------------------------------------------
+# ==========================================================
+# PATCH MAIN
+# ==========================================================
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
@@ -158,11 +196,12 @@ jobs:
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(5000));\
           web_ui_start();\
+          vTaskDelay(pdMS_TO_TICKS(5000));\
           mqtt_layer_start();' $FILE
 
-      # -------------------------------------------------
-      # Build
-      # -------------------------------------------------
+# ==========================================================
+# BUILD
+# ==========================================================
       - name: Build Firmware
         run: |
           . $IDF_PATH/export.sh
@@ -172,26 +211,26 @@ jobs:
           idf.py reconfigure
           idf.py build
 
-      # -------------------------------------------------
-      # Merge BIN
-      # -------------------------------------------------
+# ==========================================================
+# MERGE BIN
+# ==========================================================
       - name: Merge BIN
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o final_merged.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
+          --chip esp32s3 merge_bin \
+          -o final_v2.bin \
+          --flash_mode dio \
+          --flash_size 16MB \
+          $(cat flash_args)
 
-      # -------------------------------------------------
-      # Upload Artifact
-      # -------------------------------------------------
+# ==========================================================
+# UPLOAD
+# ==========================================================
       - name: Upload BIN
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-bin
-          path: examples/factory_demo/build/final_merged.bin
+          name: esp32s3-box-final-v2
+          path: examples/factory_demo/build/final_v2.bin
