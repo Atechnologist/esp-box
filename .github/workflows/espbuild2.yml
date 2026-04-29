@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX REAL FINAL BUILD
+name: ESP32-S3-BOX BOOT SAFE SR FULL BUILD
 
 on:
   workflow_dispatch:
@@ -17,36 +17,25 @@ jobs:
 # =====================================================
 # CHECKOUT
 # =====================================================
-      - name: Checkout official ESP-BOX repo
+      - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
           repository: espressif/esp-box
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe git directory
+      - name: Safe Git
         run: git config --global --add safe.directory '*'
 
 # =====================================================
 # CLEAN
 # =====================================================
-      - name: Clean build cache
+      - name: Clean old build
         run: |
           rm -rf examples/factory_demo/build || true
 
 # =====================================================
-# FORCE ORIGINAL ESP32-S3-BOX ONLY
-# removes BOX-3 contamination
-# =====================================================
-      - name: Force original ESP32-S3-BOX BSP only
-        run: |
-          rm -rf components/esp-box-3 || true
-          rm -rf components/esp-box-lite || true
-          rm -rf managed_components/espressif__esp-box-3 || true
-          rm -rf managed_components/espressif__esp-box-lite || true
-
-# =====================================================
-# WEB UI ADDON
+# WEB UI MODULE
 # =====================================================
       - name: Inject WebUI
         run: |
@@ -65,9 +54,9 @@ jobs:
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
-              "<html><body style='text-align:center;font-family:sans-serif;'>"
+              "<html><body style='text-align:center;'>"
               "<h1>ESP32-S3-BOX</h1>"
-              "<p>Local Control Ready</p>"
+              "<p>Boot Safe SR Build</p>"
               "</body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
@@ -77,14 +66,15 @@ jobs:
           void web_ui_start(void)
           {
               httpd_handle_t server = NULL;
-              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
 
-              if (httpd_start(&server, &config) == ESP_OK) {
+              cfg.stack_size = 4096;
+
+              if (httpd_start(&server, &cfg) == ESP_OK) {
                   httpd_uri_t root = {
                       .uri = "/",
                       .method = HTTP_GET,
-                      .handler = root_handler,
-                      .user_ctx = NULL
+                      .handler = root_handler
                   };
 
                   httpd_register_uri_handler(server, &root);
@@ -94,7 +84,7 @@ jobs:
           EOF
 
 # =====================================================
-# AP FALLBACK
+# AP FALLBACK MODULE
 # =====================================================
       - name: Inject AP fallback
         run: |
@@ -116,7 +106,6 @@ jobs:
                   .ap = {
                       .ssid = "ESP32-BOX-SETUP",
                       .password = "12345678",
-                      .ssid_len = 0,
                       .channel = 1,
                       .max_connection = 4,
                       .authmode = WIFI_AUTH_WPA_WPA2_PSK
@@ -127,36 +116,83 @@ jobs:
               esp_wifi_set_config(WIFI_IF_AP, &cfg);
               esp_wifi_start();
 
-              ESP_LOGI(TAG, "Fallback AP enabled");
+              ESP_LOGI(TAG, "Fallback AP started");
           }
           EOF
 
 # =====================================================
-# PATCH CMAKE
+# DELAYED STARTUP
 # =====================================================
-      - name: Register custom files
+      - name: Inject delayed services
         run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-          sed -i 's/main.c/main.c web_ui.c ap_fallback.c/' $FILE
+          cat > examples/factory_demo/main/late_start.h <<'EOF'
+          #pragma once
+          void late_services_start(void);
+          EOF
+
+          cat > examples/factory_demo/main/late_start.c <<'EOF'
+          #include "late_start.h"
+          #include "web_ui.h"
+          #include "ap_fallback.h"
+
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
+          #include "esp_log.h"
+
+          static const char *TAG = "LATE";
+
+          static void late_task(void *arg)
+          {
+              ESP_LOGI(TAG, "Waiting for speech recognition init");
+
+              vTaskDelay(pdMS_TO_TICKS(20000));
+
+              web_ui_start();
+
+              vTaskDelay(pdMS_TO_TICKS(5000));
+
+              ap_fallback_start();
+
+              ESP_LOGI(TAG, "Late services started");
+
+              vTaskDelete(NULL);
+          }
+
+          void late_services_start(void)
+          {
+              xTaskCreate(
+                  late_task,
+                  "late_task",
+                  4096,
+                  NULL,
+                  5,
+                  NULL
+              );
+          }
+          EOF
 
 # =====================================================
-# PATCH MAIN.C
+# PATCH CMakeLists
 # =====================================================
-      - name: Patch startup
+      - name: Patch CMakeLists
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+
+          sed -i 's/main.c/main.c web_ui.c ap_fallback.c late_start.c/' $FILE
+
+# =====================================================
+# PATCH main.c
+# =====================================================
+      - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q 'web_ui.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "web_ui.h"' $FILE
+          grep -q 'late_start.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "late_start.h"' $FILE
 
-          grep -q 'ap_fallback.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "ap_fallback.h"' $FILE
-
-          grep -q 'web_ui_start();' $FILE || \
+          grep -q 'late_services_start();' $FILE || \
           sed -i '/app_rmaker_start()/a\
-              vTaskDelay(pdMS_TO_TICKS(8000));\
-              web_ui_start();\
-              ap_fallback_start();' $FILE
+              late_services_start();' $FILE
 
 # =====================================================
 # BUILD
@@ -164,6 +200,7 @@ jobs:
       - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
+
           cd examples/factory_demo
 
           idf.py set-target esp32s3
@@ -175,23 +212,24 @@ jobs:
 # =====================================================
 # MERGE BIN
 # =====================================================
-      - name: Merge BIN
+      - name: Create merged BIN
         run: |
           . $IDF_PATH/export.sh
+
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
-            -o esp32s3box_real_final.bin \
+            -o esp32s3box_bootsafe_sr.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
 # =====================================================
-# UPLOAD
+# UPLOAD BIN
 # =====================================================
-      - name: Upload firmware
+      - name: Upload firmware BIN
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-real-final
-          path: examples/factory_demo/build/esp32s3box_real_final.bin
+          name: esp32s3-box-bootsafe-sr-bin
+          path: examples/factory_demo/build/esp32s3box_bootsafe_sr.bin
