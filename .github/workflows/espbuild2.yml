@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX ZERO-ERROR FINAL BUILD
+name: ESP32-S3-BOX ZERO-ERROR FINAL BUILD (MERGED BIN)
 
 on:
   workflow_dispatch:
@@ -34,16 +34,15 @@ jobs:
         run: rm -rf examples/factory_demo/build || true
 
 # =====================================================
-# CREATE LOCAL COMPONENT (THIS FIXES LINKER ERRORS)
+# CREATE LOCAL COMPONENT
 # =====================================================
       - name: Create custom component
-        run: |
-          mkdir -p examples/factory_demo/components/custom_ext
+        run: mkdir -p examples/factory_demo/components/custom_ext
 
 # =====================================================
 # COMPONENT CMAKE
 # =====================================================
-      - name: Create component CMakeLists
+      - name: Create component files
         run: |
           cat > examples/factory_demo/components/custom_ext/CMakeLists.txt << 'EOF'
           idf_component_register(
@@ -52,18 +51,10 @@ jobs:
                   "ap_hook.c"
                   "mqtt_bridge.c"
               INCLUDE_DIRS "."
-              REQUIRES
-                  esp_http_server
-                  esp_wifi
-                  mqtt
+              REQUIRES esp_http_server esp_wifi mqtt
           )
           EOF
 
-# =====================================================
-# HEADER FILES
-# =====================================================
-      - name: Create headers
-        run: |
           cat > examples/factory_demo/components/custom_ext/web_ui.h << 'EOF'
           #pragma once
           void web_ui_start(void);
@@ -80,18 +71,15 @@ jobs:
           EOF
 
 # =====================================================
-# WEBUI SOURCE
+# WEBUI
 # =====================================================
       - name: Create web_ui.c
         run: |
           cat > examples/factory_demo/components/custom_ext/web_ui.c << 'EOF'
           #include "web_ui.h"
           #include "esp_http_server.h"
-          #include "esp_log.h"
 
-          static const char *TAG = "WEBUI";
-
-          static esp_err_t root_handler(httpd_req_t *req)
+          static esp_err_t root(httpd_req_t *req)
           {
               const char html[] =
               "<html><body style='text-align:center;'>"
@@ -109,29 +97,24 @@ jobs:
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
               if (httpd_start(&server, &config) == ESP_OK) {
-                  httpd_uri_t root = {
-                      .uri = "/",
-                      .method = HTTP_GET,
-                      .handler = root_handler
+                  httpd_uri_t uri = {
+                      .uri="/",
+                      .method=HTTP_GET,
+                      .handler=root
                   };
-
-                  httpd_register_uri_handler(server, &root);
-                  ESP_LOGI(TAG, "WebUI started");
+                  httpd_register_uri_handler(server, &uri);
               }
           }
           EOF
 
 # =====================================================
-# AP SOURCE
+# AP FALLBACK
 # =====================================================
       - name: Create ap_hook.c
         run: |
           cat > examples/factory_demo/components/custom_ext/ap_hook.c << 'EOF'
           #include "ap_hook.h"
           #include "esp_wifi.h"
-          #include "esp_log.h"
-
-          static const char *TAG = "AP";
 
           void ap_fallback_start(void)
           {
@@ -148,42 +131,19 @@ jobs:
               esp_wifi_set_mode(WIFI_MODE_AP);
               esp_wifi_set_config(WIFI_IF_AP, &ap);
               esp_wifi_start();
-
-              ESP_LOGI(TAG, "Fallback AP started");
           }
           EOF
 
 # =====================================================
-# MQTT SOURCE
+# MQTT
 # =====================================================
       - name: Create mqtt_bridge.c
         run: |
           cat > examples/factory_demo/components/custom_ext/mqtt_bridge.c << 'EOF'
           #include "mqtt_bridge.h"
           #include "mqtt_client.h"
-          #include "esp_log.h"
 
-          static const char *TAG = "MQTT";
           static esp_mqtt_client_handle_t client;
-
-          static void mqtt_event(
-              void *handler_args,
-              esp_event_base_t base,
-              int32_t event_id,
-              void *event_data)
-          {
-              if (event_id == MQTT_EVENT_CONNECTED) {
-                  ESP_LOGI(TAG, "MQTT connected");
-                  esp_mqtt_client_publish(
-                      client,
-                      "espbox/status",
-                      "online",
-                      0,
-                      1,
-                      1
-                  );
-              }
-          }
 
           void mqtt_bridge_start(void)
           {
@@ -192,20 +152,12 @@ jobs:
               };
 
               client = esp_mqtt_client_init(&cfg);
-
-              esp_mqtt_client_register_event(
-                  client,
-                  ESP_EVENT_ANY_ID,
-                  mqtt_event,
-                  NULL
-              );
-
               esp_mqtt_client_start(client);
           }
           EOF
 
 # =====================================================
-# PATCH main.c ONLY
+# PATCH MAIN
 # =====================================================
       - name: Patch main.c
         run: |
@@ -237,51 +189,31 @@ jobs:
           . $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
           idf.py fullclean
           idf.py reconfigure
           idf.py build
 
 # =====================================================
-# ARTIFACT
+# MERGE FULL BIN
 # =====================================================
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32s3-box-zero-error-final
-          path: examples/factory_demo/build
-# =====================================================
-# PATCH main.c BOOT ORDER
-# =====================================================
-      - name: Add startup calls
-        run: |
-          FILE=examples/factory_demo/main/main.c
-
-          grep -q web_ui_start $FILE || \
-          sed -i '/app_rmaker_start()/a web_ui_start();' $FILE
-
-          grep -q ap_fallback_start $FILE || \
-          sed -i '/web_ui_start();/a ap_fallback_start();' $FILE
-
-          grep -q mqtt_bridge_start $FILE || \
-          sed -i '/ap_fallback_start();/a vTaskDelay(pdMS_TO_TICKS(5000)); mqtt_bridge_start();' $FILE
-
-# =====================================================
-# BUILD
-# =====================================================
-      - name: Build firmware
+      - name: Create merged firmware bin
         run: |
           . $IDF_PATH/export.sh
-          cd examples/factory_demo
-          idf.py set-target esp32s3
-          idf.py fullclean
-          idf.py reconfigure
-          idf.py build
+          cd examples/factory_demo/build
+
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o factory_merged.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
 
 # =====================================================
-# ARTIFACT
+# UPLOAD ONLY FULL BIN
 # =====================================================
-      - name: Upload firmware
+      - name: Upload merged firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final-bootsafe-layer2
-          path: examples/factory_demo/build
+          name: esp32s3-box-full-firmware-bin
+          path: examples/factory_demo/build/factory_merged.bin
