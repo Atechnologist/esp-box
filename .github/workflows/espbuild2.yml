@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX BOOT SAFE SR FULL BUILD
+name: ESP32-S3-BOX FINAL FIXED YAML
 
 on:
   workflow_dispatch:
@@ -14,9 +14,9 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-# =====================================================
-# CHECKOUT
-# =====================================================
+      # -------------------------------------------------
+      # Checkout
+      # -------------------------------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -27,18 +27,20 @@ jobs:
       - name: Safe Git
         run: git config --global --add safe.directory '*'
 
-# =====================================================
-# CLEAN
-# =====================================================
-      - name: Clean old build
+      # -------------------------------------------------
+      # Clean previous build
+      # -------------------------------------------------
+      - name: Clean
         run: |
           rm -rf examples/factory_demo/build || true
 
-# =====================================================
-# WEB UI MODULE
-# =====================================================
-      - name: Inject WebUI
+      # -------------------------------------------------
+      # Inject WebUI (SAFE)
+      # -------------------------------------------------
+      - name: Create WebUI files
         run: |
+          mkdir -p examples/factory_demo/main
+
           cat > examples/factory_demo/main/web_ui.h <<'EOF'
           #pragma once
           void web_ui_start(void);
@@ -53,24 +55,22 @@ jobs:
 
           static esp_err_t root_handler(httpd_req_t *req)
           {
-              const char html[] =
-              "<html><body style='text-align:center;'>"
-              "<h1>ESP32-S3-BOX</h1>"
-              "<p>Boot Safe SR Build</p>"
-              "</body></html>";
+              const char resp[] =
+                  "<html><body style='text-align:center;'>"
+                  "<h1>ESP-BOX</h1>"
+                  "<p>WebUI Running</p>"
+                  "</body></html>";
 
-              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
           void web_ui_start(void)
           {
               httpd_handle_t server = NULL;
-              httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
-              cfg.stack_size = 4096;
-
-              if (httpd_start(&server, &cfg) == ESP_OK) {
+              if (httpd_start(&server, &config) == ESP_OK) {
                   httpd_uri_t root = {
                       .uri = "/",
                       .method = HTTP_GET,
@@ -83,153 +83,115 @@ jobs:
           }
           EOF
 
-# =====================================================
-# AP FALLBACK MODULE
-# =====================================================
-      - name: Inject AP fallback
+      # -------------------------------------------------
+      # Inject MQTT Layer 2 SAFE
+      # -------------------------------------------------
+      - name: Create MQTT files
         run: |
-          cat > examples/factory_demo/main/ap_fallback.h <<'EOF'
+          cat > examples/factory_demo/main/mqtt_layer.h <<'EOF'
           #pragma once
-          void ap_fallback_start(void);
+          void mqtt_layer_start(void);
           EOF
 
-          cat > examples/factory_demo/main/ap_fallback.c <<'EOF'
-          #include "ap_fallback.h"
-          #include "esp_wifi.h"
+          cat > examples/factory_demo/main/mqtt_layer.c <<'EOF'
+          #include "mqtt_layer.h"
+          #include "mqtt_client.h"
           #include "esp_log.h"
 
-          static const char *TAG = "AP";
+          static const char *TAG = "MQTT";
 
-          void ap_fallback_start(void)
+          static void mqtt_event_handler(void *handler_args,
+                                         esp_event_base_t base,
+                                         int32_t event_id,
+                                         void *event_data)
           {
-              wifi_config_t cfg = {
-                  .ap = {
-                      .ssid = "ESP32-BOX-SETUP",
-                      .password = "12345678",
-                      .channel = 1,
-                      .max_connection = 4,
-                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
-                  }
+              if (event_id == MQTT_EVENT_CONNECTED) {
+                  ESP_LOGI(TAG, "MQTT Connected");
+              }
+          }
+
+          void mqtt_layer_start(void)
+          {
+              esp_mqtt_client_config_t cfg = {
+                  .broker.address.uri = "mqtt://broker.hivemq.com"
               };
 
-              esp_wifi_set_mode(WIFI_MODE_APSTA);
-              esp_wifi_set_config(WIFI_IF_AP, &cfg);
-              esp_wifi_start();
+              esp_mqtt_client_handle_t client =
+                  esp_mqtt_client_init(&cfg);
 
-              ESP_LOGI(TAG, "Fallback AP started");
+              esp_mqtt_client_register_event(
+                  client,
+                  ESP_EVENT_ANY_ID,
+                  mqtt_event_handler,
+                  NULL);
+
+              esp_mqtt_client_start(client);
+
+              ESP_LOGI(TAG, "MQTT started");
           }
           EOF
 
-# =====================================================
-# DELAYED STARTUP
-# =====================================================
-      - name: Inject delayed services
-        run: |
-          cat > examples/factory_demo/main/late_start.h <<'EOF'
-          #pragma once
-          void late_services_start(void);
-          EOF
-
-          cat > examples/factory_demo/main/late_start.c <<'EOF'
-          #include "late_start.h"
-          #include "web_ui.h"
-          #include "ap_fallback.h"
-
-          #include "freertos/FreeRTOS.h"
-          #include "freertos/task.h"
-          #include "esp_log.h"
-
-          static const char *TAG = "LATE";
-
-          static void late_task(void *arg)
-          {
-              ESP_LOGI(TAG, "Waiting for speech recognition init");
-
-              vTaskDelay(pdMS_TO_TICKS(20000));
-
-              web_ui_start();
-
-              vTaskDelay(pdMS_TO_TICKS(5000));
-
-              ap_fallback_start();
-
-              ESP_LOGI(TAG, "Late services started");
-
-              vTaskDelete(NULL);
-          }
-
-          void late_services_start(void)
-          {
-              xTaskCreate(
-                  late_task,
-                  "late_task",
-                  4096,
-                  NULL,
-                  5,
-                  NULL
-              );
-          }
-          EOF
-
-# =====================================================
-# PATCH CMakeLists
-# =====================================================
+      # -------------------------------------------------
+      # Register new source files
+      # -------------------------------------------------
       - name: Patch CMakeLists
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
 
-          sed -i 's/main.c/main.c web_ui.c ap_fallback.c late_start.c/' $FILE
+          grep -q web_ui.c $FILE || \
+          sed -i 's/main.c/main.c web_ui.c mqtt_layer.c/' $FILE
 
-# =====================================================
-# PATCH main.c
-# =====================================================
+      # -------------------------------------------------
+      # Patch main.c safely
+      # -------------------------------------------------
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q 'late_start.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "late_start.h"' $FILE
+          grep -q web_ui.h $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "web_ui.h"' $FILE
 
-          grep -q 'late_services_start();' $FILE || \
-          sed -i '/app_rmaker_start()/a\
-              late_services_start();' $FILE
+          grep -q mqtt_layer.h $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "mqtt_layer.h"' $FILE
 
-# =====================================================
-# BUILD
-# =====================================================
-      - name: Build firmware
+          grep -q web_ui_start $FILE || \
+          sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(5000));\
+          web_ui_start();\
+          mqtt_layer_start();' $FILE
+
+      # -------------------------------------------------
+      # Build
+      # -------------------------------------------------
+      - name: Build Firmware
         run: |
           . $IDF_PATH/export.sh
-
           cd examples/factory_demo
-
           idf.py set-target esp32s3
           cp sdkconfig.ci.box sdkconfig
-
           idf.py reconfigure
           idf.py build
 
-# =====================================================
-# MERGE BIN
-# =====================================================
-      - name: Create merged BIN
+      # -------------------------------------------------
+      # Merge BIN
+      # -------------------------------------------------
+      - name: Merge BIN
         run: |
           . $IDF_PATH/export.sh
-
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
-            -o esp32s3box_bootsafe_sr.bin \
+            -o final_merged.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-# =====================================================
-# UPLOAD BIN
-# =====================================================
-      - name: Upload firmware BIN
+      # -------------------------------------------------
+      # Upload Artifact
+      # -------------------------------------------------
+      - name: Upload BIN
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-bootsafe-sr-bin
-          path: examples/factory_demo/build/esp32s3box_bootsafe_sr.bin
+          name: esp32s3-box-final-bin
+          path: examples/factory_demo/build/final_merged.bin
