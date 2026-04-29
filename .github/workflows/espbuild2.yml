@@ -159,12 +159,20 @@ jobs:
           }
           SOURCE
 
-      - name: Update CMakeLists.txt
+      - name: Create proper CMakeLists.txt
         run: |
-          CMAKELISTS=examples/factory_demo/main/CMakeLists.txt
-          if ! grep -q "extensions/web_ui.c"; then
-            sed -i '/^idf_component_register/i\    "extensions/web_ui.c"\n    "extensions/ap_hook.c"\n    "extensions/mqtt_bridge.c"' "$CMAKELISTS"
-          fi
+          cat > examples/factory_demo/main/CMakeLists.txt << 'CMAKE'
+          idf_component_register(
+              SRCS
+                "main.c"
+                "extensions/web_ui.c"
+                "extensions/ap_hook.c"
+                "extensions/mqtt_bridge.c"
+              INCLUDE_DIRS
+                "."
+                "extensions"
+          )
+          CMAKE
 
       - name: Add includes to main.c
         run: |
