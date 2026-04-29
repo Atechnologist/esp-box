@@ -13,9 +13,6 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-# =====================================================
-# CHECKOUT
-# =====================================================
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -26,45 +23,32 @@ jobs:
       - name: Safe directory fix
         run: git config --global --add safe.directory '*'
 
-# =====================================================
-# CLEAN BUILD STATE
-# =====================================================
       - name: Clean build artifacts
-        run: |
-          rm -rf examples/factory_demo/build || true
+        run: rm -rf examples/factory_demo/build || true
 
-# =====================================================
-# CREATE EXTENSIONS STRUCTURE
-# =====================================================
       - name: Create extension folders
+        run: mkdir -p examples/factory_demo/main/extensions
+
+      - name: Inject WebUI header
         run: |
-          mkdir -p examples/factory_demo/main/extensions
-
-# =====================================================
-# WEB UI MODULE (SAFE FILE ISOLATION)
-# =====================================================
-      - name: Inject WebUI
-        run: >
-          cat > examples/factory_demo/main/extensions/web_ui.h << 'EOF'
+          cat > examples/factory_demo/main/extensions/web_ui.h << 'HEADER'
           #pragma once
-
           #ifdef __cplusplus
           extern "C" {
           #endif
-
           void web_ui_start(void);
-
           #ifdef __cplusplus
           }
           #endif
-          EOF
+          HEADER
 
-          cat > examples/factory_demo/main/extensions/web_ui.c << 'EOF'
+      - name: Inject WebUI source
+        run: |
+          cat > examples/factory_demo/main/extensions/web_ui.c << 'SOURCE'
           #include "esp_http_server.h"
           #include "esp_log.h"
-
+          #include "web_ui.h"
           static const char *TAG = "WEBUI";
-
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
@@ -72,42 +56,45 @@ jobs:
               "<h1>ESP-BOX CONTROL</h1>"
               "<button onclick=\"fetch('/toggle')\">Toggle</button>"
               "</body></html>";
-
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
-
           void web_ui_start(void)
           {
               httpd_handle_t server = NULL;
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-
               if (httpd_start(&server, &config) == ESP_OK) {
-
                   httpd_uri_t root = {
                       .uri = "/",
                       .method = HTTP_GET,
                       .handler = root_handler
                   };
-
                   httpd_register_uri_handler(server, &root);
-
                   ESP_LOGI(TAG, "WebUI started");
               }
           }
-          EOF
+          SOURCE
 
-# =====================================================
-# AP FALLBACK (SAFE OFFLINE MODE)
-# =====================================================
-      - name: Inject AP fallback
-        run: >
-          cat > examples/factory_demo/main/extensions/ap_hook.c << 'EOF'
+      - name: Inject AP fallback header
+        run: |
+          cat > examples/factory_demo/main/extensions/ap_hook.h << 'HEADER'
+          #pragma once
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          void ap_fallback_start(void);
+          #ifdef __cplusplus
+          }
+          #endif
+          HEADER
+
+      - name: Inject AP fallback source
+        run: |
+          cat > examples/factory_demo/main/extensions/ap_hook.c << 'SOURCE'
           #include "esp_wifi.h"
           #include "esp_log.h"
-
+          #include "ap_hook.h"
           static const char *TAG = "AP";
-
           void ap_fallback_start(void)
           {
               wifi_config_t ap = {
@@ -119,28 +106,35 @@ jobs:
                       .authmode = WIFI_AUTH_WPA_WPA2_PSK
                   }
               };
-
               esp_wifi_set_mode(WIFI_MODE_AP);
               esp_wifi_set_config(WIFI_IF_AP, &ap);
               esp_wifi_start();
-
               ESP_LOGI(TAG, "AP fallback active");
           }
-          EOF
+          SOURCE
 
-# =====================================================
-# MQTT LAYER 2 (STABLE MINIMAL BRIDGE)
-# =====================================================
-      - name: Inject MQTT bridge
-        run: >
-          cat > examples/factory_demo/main/extensions/mqtt_bridge.c << 'EOF'
+      - name: Inject MQTT bridge header
+        run: |
+          cat > examples/factory_demo/main/extensions/mqtt_bridge.h << 'HEADER'
+          #pragma once
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          void mqtt_bridge_start(void);
+          #ifdef __cplusplus
+          }
+          #endif
+          HEADER
+
+      - name: Inject MQTT bridge source
+        run: |
+          cat > examples/factory_demo/main/extensions/mqtt_bridge.c << 'SOURCE'
           #include "mqtt_client.h"
           #include "esp_log.h"
+          #include "mqtt_bridge.h"
           #include <string.h>
-
           static const char *TAG = "MQTT";
           static esp_mqtt_client_handle_t client;
-
           static void mqtt_event(void *handler_args, esp_event_base_t base,
                                  int32_t event_id, void *event_data)
           {
@@ -149,56 +143,52 @@ jobs:
                   esp_mqtt_client_publish(client, "espbox/status", "online", 0, 1, 1);
               }
           }
-
           void mqtt_bridge_start(void)
           {
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.hivemq.com"
               };
-
               client = esp_mqtt_client_init(&cfg);
-
               esp_mqtt_client_register_event(
                   client,
                   ESP_EVENT_ANY_ID,
                   mqtt_event,
                   NULL
               );
-
               esp_mqtt_client_start(client);
           }
-          EOF
+          SOURCE
 
-# =====================================================
-# SAFE PATCH MAIN.C (NO INLINE CODE)
-# =====================================================
-      - name: Patch main.c safely
+      - name: Update CMakeLists.txt
+        run: |
+          CMAKELISTS=examples/factory_demo/main/CMakeLists.txt
+          if ! grep -q "extensions/web_ui.c"; then
+            sed -i '/^idf_component_register/i\    "extensions/web_ui.c"\n    "extensions/ap_hook.c"\n    "extensions/mqtt_bridge.c"' "$CMAKELISTS"
+          fi
+
+      - name: Add includes to main.c
         run: |
           FILE=examples/factory_demo/main/main.c
+          if ! grep -q "web_ui.h"; then
+            sed -i '/#include/a #include "extensions/web_ui.h"\n#include "extensions/ap_hook.h"\n#include "extensions/mqtt_bridge.h"' "$FILE"
+          fi
 
-          grep -q web_ui_start $FILE || \
-          sed -i '/app_rmaker_start()/a web_ui_start();' $FILE
+      - name: Add function calls to main.c
+        run: |
+          FILE=examples/factory_demo/main/main.c
+          if ! grep -q "web_ui_start()"; then
+            sed -i '/app_rmaker_start()/a \    web_ui_start();\n    ap_fallback_start();\n    mqtt_bridge_start();' "$FILE"
+          fi
 
-          grep -q ap_fallback_start $FILE || \
-          sed -i '/web_ui_start();/a ap_fallback_start();' $FILE
-
-          grep -q mqtt_bridge_start $FILE || \
-          sed -i '/ap_fallback_start();/a mqtt_bridge_start();' $FILE
-
-# =====================================================
-# BUILD STEP (HARDENED)
-# =====================================================
       - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
+          idf.py fullclean
           idf.py reconfigure
           idf.py build
 
-# =====================================================
-# ARTIFACT
-# =====================================================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
