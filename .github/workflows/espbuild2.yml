@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX GOLDEN STABLE (FIXED YAML SAFE)
+name: ESP32-S3-BOX ZERO YAML BUILD (SR SAFE + WEBUI + MQTT)
 
 on:
   workflow_dispatch:
@@ -14,168 +14,168 @@ jobs:
 
     steps:
 
-# =========================
+# =====================================================
 # CHECKOUT
-# =========================
+# =====================================================
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
           repository: espressif/esp-box
           submodules: recursive
+          fetch-depth: 0
 
-      - name: Safe git directory
+      - name: Safe git fix
         run: git config --global --add safe.directory '*'
 
-# =========================
+# =====================================================
 # CLEAN
-# =========================
+# =====================================================
       - name: Clean build
-        run: rm -rf examples/factory_demo/build
+        run: rm -rf examples/factory_demo/build || true
 
-# =========================
-# FIX MAIN INCLUDE ISSUE
-# =========================
-      - name: Remove broken include
-        run: |
-          sed -i '/bsp_storage.h/d' examples/factory_demo/main/main.c
-
-# =========================
-# CREATE EXTENSIONS
-# =========================
+# =====================================================
+# CREATE EXTENSIONS FOLDER
+# =====================================================
       - name: Create folders
         run: mkdir -p examples/factory_demo/main/extensions
 
-# =========================
-# WEBUI
-# =========================
+# =====================================================
+# WEBUI (HEREDOC)
+# =====================================================
       - name: Inject WebUI
         run: |
-          cat > examples/factory_demo/main/extensions/web_ui.h << 'EOF'
-#pragma once
-#ifdef __cplusplus
-extern "C" {
-#endif
-void web_ui_start(void);
-#ifdef __cplusplus
-}
-#endif
-EOF
-
           cat > examples/factory_demo/main/extensions/web_ui.c << 'EOF'
-#include "esp_http_server.h"
-#include "esp_log.h"
-#include "web_ui.h"
+          #include "esp_http_server.h"
+          #include "esp_log.h"
+          
+          static const char *TAG = "WEBUI";
+          
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const char html[] =
+              "<html><body><h1>ESP32-S3-BOX</h1></body></html>";
+          
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+          
+          void web_ui_start(void)
+          {
+              httpd_handle_t server = NULL;
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+          
+              if (httpd_start(&server, &config) == ESP_OK) {
+                  httpd_uri_t root = {
+                      .uri = "/",
+                      .method = HTTP_GET,
+                      .handler = root_handler
+                  };
+          
+                  httpd_register_uri_handler(server, &root);
+                  ESP_LOGI(TAG, "WebUI started");
+              }
+          }
+          EOF
 
-static const char *TAG = "WEBUI";
-
-void web_ui_start(void)
-{
-    httpd_handle_t server = NULL;
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-
-    if (httpd_start(&server, &config) == ESP_OK) {
-        ESP_LOGI(TAG, "WebUI started");
-    }
-}
-EOF
-
-# =========================
-# AP FALLBACK
-# =========================
+# =====================================================
+# AP FALLBACK (HEREDOC)
+# =====================================================
       - name: Inject AP fallback
         run: |
           cat > examples/factory_demo/main/extensions/ap_hook.c << 'EOF'
-#include "esp_wifi.h"
-#include "esp_log.h"
+          #include "esp_wifi.h"
+          #include "esp_log.h"
+          
+          static const char *TAG = "AP";
+          
+          void ap_fallback_start(void)
+          {
+              wifi_config_t ap = {
+                  .ap = {
+                      .ssid = "ESP32-BOX-SETUP",
+                      .password = "12345678",
+                      .channel = 6,
+                      .max_connection = 4,
+                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
+                  }
+              };
+          
+              esp_wifi_set_mode(WIFI_MODE_AP);
+              esp_wifi_set_config(WIFI_IF_AP, &ap);
+              esp_wifi_start();
+          
+              ESP_LOGI(TAG, "AP fallback active");
+          }
+          EOF
 
-void ap_fallback_start(void)
-{
-    wifi_config_t ap = {
-        .ap = {
-            .ssid = "ESP32-BOX",
-            .password = "12345678",
-            .channel = 6,
-            .max_connection = 4,
-            .authmode = WIFI_AUTH_WPA_WPA2_PSK
-        }
-    };
-
-    esp_wifi_set_mode(WIFI_MODE_AP);
-    esp_wifi_set_config(WIFI_IF_AP, &ap);
-    esp_wifi_start();
-}
-EOF
-
-# =========================
-# MQTT
-# =========================
-      - name: Inject MQTT
+# =====================================================
+# MQTT BRIDGE (HEREDOC)
+# =====================================================
+      - name: Inject MQTT bridge
         run: |
           cat > examples/factory_demo/main/extensions/mqtt_bridge.c << 'EOF'
-#include "mqtt_client.h"
-#include "esp_log.h"
+          #include "mqtt_client.h"
+          #include "esp_log.h"
+          
+          static const char *TAG = "MQTT";
+          static esp_mqtt_client_handle_t client;
+          
+          void mqtt_bridge_start(void)
+          {
+              esp_mqtt_client_config_t cfg = {
+                  .broker.address.uri = "mqtt://broker.hivemq.com"
+              };
+          
+              client = esp_mqtt_client_init(&cfg);
+              esp_mqtt_client_start(client);
+              ESP_LOGI(TAG, "MQTT started");
+          }
+          EOF
 
-static esp_mqtt_client_handle_t client;
-
-void mqtt_bridge_start(void)
-{
-    esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = "mqtt://broker.hivemq.com"
-    };
-
-    client = esp_mqtt_client_init(&cfg);
-    esp_mqtt_client_start(client);
-}
-EOF
-
-# =========================
-# FIX CMAKE (CRITICAL)
-# =========================
-      - name: Fix CMakeLists
-        run: |
-          cat > examples/factory_demo/main/CMakeLists.txt << 'EOF'
-idf_component_register(
-    SRCS
-        "main.c"
-        "extensions/web_ui.c"
-        "extensions/ap_hook.c"
-        "extensions/mqtt_bridge.c"
-    INCLUDE_DIRS
-        "."
-        "extensions"
-    REQUIRES
-        esp_http_server
-        esp_wifi
-        mqtt
-)
-EOF
-
-# =========================
-# PATCH MAIN.C CALLS
-# =========================
-      - name: Patch main calls
+# =====================================================
+# PATCH MAIN (SAFE ONLY FUNCTION CALLS)
+# =====================================================
+      - name: Patch main.c safely
         run: |
           FILE=examples/factory_demo/main/main.c
-          grep -q web_ui_start $FILE || echo '#include "extensions/web_ui.h"' >> $FILE
-          grep -q ap_fallback_start $FILE || echo '#include "extensions/ap_hook.h"' >> $FILE
-          grep -q mqtt_bridge_start $FILE || echo '#include "extensions/mqtt_bridge.h"' >> $FILE
 
-# =========================
+          grep -q web_ui_start $FILE || \
+          sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(4000));\
+          web_ui_start();\
+          ap_fallback_start();\
+          mqtt_bridge_start();' $FILE
+
+# =====================================================
 # BUILD
-# =========================
+# =====================================================
       - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
           idf.py fullclean
+          idf.py reconfigure
           idf.py build
 
-# =========================
+# =====================================================
+# MERGE BIN
+# =====================================================
+      - name: Merge firmware
+        run: |
+          cd examples/factory_demo/build
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o factory_merged.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
+
+# =====================================================
 # ARTIFACT
-# =========================
+# =====================================================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-stable
-          path: examples/factory_demo/build
+          name: esp32s3-box-zero-yaml-safe
+          path: examples/factory_demo/build/factory_merged.bin
