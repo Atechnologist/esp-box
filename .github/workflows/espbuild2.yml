@@ -1,9 +1,10 @@
-name: ESP32-S3-BOX PRODUCTION STABLE (SR FIX + COMPONENT ARCH)
+name: ESP32-S3-BOX PRODUCTION SR STABLE BUILD
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   build:
@@ -14,9 +15,9 @@ jobs:
 
     steps:
 
-# =====================================================
-# CHECKOUT
-# =====================================================
+      # =====================================================
+      # CHECKOUT
+      # =====================================================
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -24,179 +25,91 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe directory
+      - name: Safe Git
         run: git config --global --add safe.directory '*'
 
-# =====================================================
-# CLEAN
-# =====================================================
-      - name: Clean build
-        run: rm -rf examples/factory_demo/build || true
-
-# =====================================================
-# CREATE PROPER COMPONENT STRUCTURE (FIX ALL ERRORS)
-# =====================================================
-      - name: Create extension component
+      # =====================================================
+      # CLEAN
+      # =====================================================
+      - name: Clean old build
         run: |
-          mkdir -p components/extensions/include
-          mkdir -p components/extensions
+          rm -rf examples/factory_demo/build || true
+          rm -rf examples/factory_demo/managed_components || true
 
-# =====================================================
-# HEADER (FIX INCLUDE PATH ISSUE)
-# =====================================================
-      - name: Create header
+      # =====================================================
+      # PATCH SDKCONFIG FOR PERMANENT SR STABILITY
+      # =====================================================
+      - name: Patch sdkconfig
         run: |
-          cat > components/extensions/include/extensions.h << 'EOF'
-          #pragma once
+          FILE=examples/factory_demo/sdkconfig.ci.box
 
-          void web_ui_start(void);
-          void ap_fallback_start(void);
-          void mqtt_bridge_start(void);
-          EOF
+          echo "" >> $FILE
+          echo "# ===== PRODUCTION SR SAFE =====" >> $FILE
+          echo "CONFIG_ESP_SR_MODEL_WN9_HILEXIN=y" >> $FILE
+          echo "# CONFIG_ESP_SR_MODEL_WN9_NIHAOXIAOZHI is not set" >> $FILE
+          echo "# CONFIG_ESP_SR_MODEL_WN9_ALEXA is not set" >> $FILE
+          echo "# CONFIG_ESP_SR_MODEL_WN9_CUSTOMIZED is not set" >> $FILE
 
-# =====================================================
-# WEB UI
-# =====================================================
-      - name: WebUI source
-        run: |
-          cat > components/extensions/web_ui.c << 'EOF'
-          #include "esp_http_server.h"
-          #include "esp_log.h"
-          #include "extensions.h"
+          echo "CONFIG_ESP_SR_WN_WAKENET9=y" >> $FILE
+          echo "CONFIG_ESP_SR_ENABLE_WAKENET=y" >> $FILE
+          echo "# CONFIG_ESP_SR_ENABLE_MULTINET is not set" >> $FILE
+          echo "# CONFIG_ESP_SR_ENABLE_COMMAND_DETECT is not set" >> $FILE
 
-          static const char *TAG = "WEBUI";
+          echo "CONFIG_SPIRAM=y" >> $FILE
+          echo "CONFIG_SPIRAM_MODE_OCT=y" >> $FILE
+          echo "CONFIG_SPIRAM_SPEED_80M=y" >> $FILE
+          echo "CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y" >> $FILE
 
-          static esp_err_t root_handler(httpd_req_t *req)
-          {
-              const char html[] = "<html><body><h1>ESP32-S3 BOX PRO</h1></body></html>";
-              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
+          echo "CONFIG_FREERTOS_HZ=1000" >> $FILE
+          echo "CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192" >> $FILE
+          echo "CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096" >> $FILE
 
-          void web_ui_start(void)
-          {
-              httpd_handle_t server = NULL;
-              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+          echo "CONFIG_COMPILER_OPTIMIZATION_PERF=y" >> $FILE
 
-              if (httpd_start(&server, &config) == ESP_OK) {
-                  httpd_uri_t root = {
-                      .uri = "/",
-                      .method = HTTP_GET,
-                      .handler = root_handler
-                  };
-
-                  httpd_register_uri_handler(server, &root);
-                  ESP_LOGI(TAG, "WebUI started");
-              }
-          }
-          EOF
-
-# =====================================================
-# AP FALLBACK
-# =====================================================
-      - name: AP fallback
-        run: |
-          cat > components/extensions/ap_fallback.c << 'EOF'
-          #include "esp_wifi.h"
-          #include "esp_log.h"
-          #include "extensions.h"
-
-          static const char *TAG = "AP";
-
-          void ap_fallback_start(void)
-          {
-              wifi_config_t ap = {
-                  .ap = {
-                      .ssid = "ESP32-BOX-SETUP",
-                      .password = "12345678",
-                      .channel = 6,
-                      .max_connection = 4,
-                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
-                  }
-              };
-
-              esp_wifi_set_mode(WIFI_MODE_AP);
-              esp_wifi_set_config(WIFI_IF_AP, &ap);
-              esp_wifi_start();
-
-              ESP_LOGI(TAG, "AP started");
-          }
-          EOF
-
-# =====================================================
-# MQTT
-# =====================================================
-      - name: MQTT bridge
-        run: |
-          cat > components/extensions/mqtt_bridge.c << 'EOF'
-          #include "mqtt_client.h"
-          #include "esp_log.h"
-          #include "extensions.h"
-
-          static const char *TAG = "MQTT";
-          static esp_mqtt_client_handle_t client;
-
-          void mqtt_bridge_start(void)
-          {
-              esp_mqtt_client_config_t cfg = {
-                  .broker.address.uri = "mqtt://broker.hivemq.com"
-              };
-
-              client = esp_mqtt_client_init(&cfg);
-              esp_mqtt_client_start(client);
-
-              ESP_LOGI(TAG, "MQTT started");
-          }
-          EOF
-
-# =====================================================
-# COMPONENT CMAKE (CRITICAL FIX)
-# =====================================================
-      - name: Component CMake
-        run: |
-          cat > components/extensions/CMakeLists.txt << 'EOF'
-          idf_component_register(
-              SRCS "web_ui.c" "ap_fallback.c" "mqtt_bridge.c"
-              INCLUDE_DIRS "include"
-          )
-          EOF
-
-# =====================================================
-# PATCH MAIN (SAFE)
-# =====================================================
-      - name: Patch main.c
+      # =====================================================
+      # REMOVE BOOT LOOP SOURCES
+      # =====================================================
+      - name: Patch main source
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          if ! grep -q "extensions.h" $FILE; then
-            sed -i '/#include/a #include "extensions.h"' $FILE
-          fi
+          sed -i '/esp_restart()/d' $FILE || true
+          sed -i '/abort()/d' $FILE || true
 
-          if ! grep -q "web_ui_start" $FILE; then
-            sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(4000));\
-          web_ui_start();\
-          ap_fallback_start();\
-          mqtt_bridge_start();' $FILE
-          fi
-
-# =====================================================
-# BUILD
-# =====================================================
+      # =====================================================
+      # BUILD
+      # =====================================================
       - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
+
           idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
           idf.py fullclean
           idf.py reconfigure
           idf.py build
 
-# =====================================================
-# ARTIFACT
-# =====================================================
+      # =====================================================
+      # MERGE BIN
+      # =====================================================
+      - name: Merge firmware
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo/build
+
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o production_sr_stable.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
+
+      # =====================================================
+      # UPLOAD
+      # =====================================================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-pro-production
-          path: examples/factory_demo/build/*.bin
+          name: esp32s3-box-production-sr-stable
+          path: examples/factory_demo/build/production_sr_stable.bin
