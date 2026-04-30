@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX ZERO-ERROR FINAL BUILD (MERGED BIN)
+name: ESP32-S3-BOX SR PRIORITY FINAL YAML
 
 on:
   workflow_dispatch:
@@ -13,7 +13,6 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-
 # =====================================================
 # CHECKOUT
 # =====================================================
@@ -34,24 +33,24 @@ jobs:
         run: rm -rf examples/factory_demo/build || true
 
 # =====================================================
-# CREATE LOCAL COMPONENT
+# CREATE CUSTOM COMPONENT
 # =====================================================
       - name: Create custom component
         run: mkdir -p examples/factory_demo/components/custom_ext
 
 # =====================================================
-# COMPONENT CMAKE
+# CUSTOM COMPONENT FILES
 # =====================================================
       - name: Create component files
         run: |
           cat > examples/factory_demo/components/custom_ext/CMakeLists.txt << 'EOF'
           idf_component_register(
-              SRCS
-                  "web_ui.c"
-                  "ap_hook.c"
-                  "mqtt_bridge.c"
-              INCLUDE_DIRS "."
-              REQUIRES esp_http_server esp_wifi mqtt
+            SRCS
+              "web_ui.c"
+              "mqtt_bridge.c"
+              "ap_hook.c"
+            INCLUDE_DIRS "."
+            REQUIRES esp_http_server esp_wifi mqtt esp_netif
           )
           EOF
 
@@ -60,18 +59,18 @@ jobs:
           void web_ui_start(void);
           EOF
 
-          cat > examples/factory_demo/components/custom_ext/ap_hook.h << 'EOF'
-          #pragma once
-          void ap_fallback_start(void);
-          EOF
-
           cat > examples/factory_demo/components/custom_ext/mqtt_bridge.h << 'EOF'
           #pragma once
           void mqtt_bridge_start(void);
           EOF
 
+          cat > examples/factory_demo/components/custom_ext/ap_hook.h << 'EOF'
+          #pragma once
+          void ap_fallback_check_start(void);
+          EOF
+
 # =====================================================
-# WEBUI
+# WEB UI
 # =====================================================
       - name: Create web_ui.c
         run: |
@@ -83,54 +82,30 @@ jobs:
           {
               const char html[] =
               "<html><body style='text-align:center;'>"
-              "<h1>ESP-BOX</h1>"
-              "<button onclick=\"fetch('/toggle')\">Light</button>"
+              "<h1>ESP-BOX CONTROL</h1>"
+              "<button onclick=\"fetch('/ping')\">Alive</button>"
               "</body></html>";
-
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          static esp_err_t ping(httpd_req_t *req)
+          {
+              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
           void web_ui_start(void)
           {
               httpd_handle_t server = NULL;
-              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
 
-              if (httpd_start(&server, &config) == ESP_OK) {
-                  httpd_uri_t uri = {
-                      .uri="/",
-                      .method=HTTP_GET,
-                      .handler=root
-                  };
-                  httpd_register_uri_handler(server, &uri);
+              if (httpd_start(&server, &cfg) == ESP_OK) {
+                  httpd_uri_t a = {.uri="/", .method=HTTP_GET, .handler=root};
+                  httpd_uri_t b = {.uri="/ping", .method=HTTP_GET, .handler=ping};
+                  httpd_register_uri_handler(server, &a);
+                  httpd_register_uri_handler(server, &b);
               }
-          }
-          EOF
-
-# =====================================================
-# AP FALLBACK
-# =====================================================
-      - name: Create ap_hook.c
-        run: |
-          cat > examples/factory_demo/components/custom_ext/ap_hook.c << 'EOF'
-          #include "ap_hook.h"
-          #include "esp_wifi.h"
-
-          void ap_fallback_start(void)
-          {
-              wifi_config_t ap = {
-                  .ap = {
-                      .ssid = "ESP32-BOX-SETUP",
-                      .password = "12345678",
-                      .channel = 6,
-                      .max_connection = 4,
-                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
-                  }
-              };
-
-              esp_wifi_set_mode(WIFI_MODE_AP);
-              esp_wifi_set_config(WIFI_IF_AP, &ap);
-              esp_wifi_start();
           }
           EOF
 
@@ -152,12 +127,46 @@ jobs:
               };
 
               client = esp_mqtt_client_init(&cfg);
-              esp_mqtt_client_start(client);
+              if (client) {
+                  esp_mqtt_client_start(client);
+              }
           }
           EOF
 
 # =====================================================
-# PATCH MAIN
+# AP FALLBACK ONLY IF WIFI FAILS
+# =====================================================
+      - name: Create ap_hook.c
+        run: |
+          cat > examples/factory_demo/components/custom_ext/ap_hook.c << 'EOF'
+          #include "ap_hook.h"
+          #include "esp_wifi.h"
+
+          void ap_fallback_check_start(void)
+          {
+              wifi_mode_t mode;
+              esp_wifi_get_mode(&mode);
+
+              if (mode == WIFI_MODE_NULL) {
+                  wifi_config_t ap = {
+                      .ap = {
+                          .ssid = "ESP32-BOX-SETUP",
+                          .password = "12345678",
+                          .channel = 6,
+                          .max_connection = 4,
+                          .authmode = WIFI_AUTH_WPA_WPA2_PSK
+                      }
+                  };
+
+                  esp_wifi_set_mode(WIFI_MODE_AP);
+                  esp_wifi_set_config(WIFI_IF_AP, &ap);
+                  esp_wifi_start();
+              }
+          }
+          EOF
+
+# =====================================================
+# PATCH MAIN.C
 # =====================================================
       - name: Patch main.c
         run: |
@@ -166,20 +175,18 @@ jobs:
           grep -q web_ui.h $FILE || \
           sed -i '/#include "app_rmaker.h"/a #include "web_ui.h"' $FILE
 
-          grep -q ap_hook.h $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "ap_hook.h"' $FILE
-
           grep -q mqtt_bridge.h $FILE || \
           sed -i '/#include "app_rmaker.h"/a #include "mqtt_bridge.h"' $FILE
 
+          grep -q ap_hook.h $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "ap_hook.h"' $FILE
+
           grep -q web_ui_start $FILE || \
-          sed -i '/app_rmaker_start()/a web_ui_start();' $FILE
-
-          grep -q ap_fallback_start $FILE || \
-          sed -i '/web_ui_start();/a ap_fallback_start();' $FILE
-
-          grep -q mqtt_bridge_start $FILE || \
-          sed -i '/ap_fallback_start();/a vTaskDelay(pdMS_TO_TICKS(5000)); mqtt_bridge_start();' $FILE
+          sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(25000));\
+          web_ui_start();\
+          mqtt_bridge_start();\
+          ap_fallback_check_start();' $FILE
 
 # =====================================================
 # BUILD
@@ -195,9 +202,9 @@ jobs:
           idf.py build
 
 # =====================================================
-# MERGE FULL BIN
+# MERGED BIN
 # =====================================================
-      - name: Create merged firmware bin
+      - name: Merge full firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
@@ -210,10 +217,10 @@ jobs:
             $(cat flash_args)
 
 # =====================================================
-# UPLOAD ONLY FULL BIN
+# ARTIFACT
 # =====================================================
-      - name: Upload merged firmware
+      - name: Upload merged bin
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-full-firmware-bin
+          name: esp32s3-box-sr-priority-bin
           path: examples/factory_demo/build/factory_merged.bin
