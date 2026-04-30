@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX PRODUCTION SR STABLE BUILD
+name: ESP32-S3-BOX PRODUCTION SR STABLE BUILD (WEBUI + RainMaker + SR SAFE)
 
 on:
   workflow_dispatch:
@@ -31,51 +31,163 @@ jobs:
       # =====================================================
       # CLEAN
       # =====================================================
-      - name: Clean old build
+      - name: Clean build folders
         run: |
           rm -rf examples/factory_demo/build || true
           rm -rf examples/factory_demo/managed_components || true
 
       # =====================================================
-      # PATCH SDKCONFIG FOR PERMANENT SR STABILITY
+      # PREPARE DEPENDENCIES
+      # =====================================================
+      - name: Prepare components
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py reconfigure || true
+
+      # =====================================================
+      # FIX RAINMAKER GCC12 strncpy ERROR
+      # =====================================================
+      - name: Patch RainMaker warning-as-error
+        run: |
+          FILE=examples/factory_demo/managed_components/espressif__esp_rainmaker/src/core/esp_rmaker_schedule.c
+
+          if [ -f "$FILE" ]; then
+            sed -i 's/strncpy(\*info, _info, strlen(_info));/strcpy(*info, _info);/g' $FILE
+          fi
+
+      # =====================================================
+      # CREATE WEBUI COMPONENT (INSIDE PROJECT)
+      # =====================================================
+      - name: Create WebUI component
+        run: |
+          mkdir -p examples/factory_demo/components/webui
+
+          cat > examples/factory_demo/components/webui/web_ui.c << 'EOF'
+          #include "esp_http_server.h"
+          #include "esp_log.h"
+
+          static const char *TAG = "WEBUI";
+
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const char html[] =
+              "<!DOCTYPE html><html><head>"
+              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+              "<title>ESP32-S3-BOX</title>"
+              "</head><body style='font-family:Arial;text-align:center;padding:30px;'>"
+              "<h1>ESP32-S3-BOX</h1>"
+              "<p>Production Stable Firmware</p>"
+              "<p>RainMaker + Voice + WebUI</p>"
+              "</body></html>";
+
+              httpd_resp_set_type(req, "text/html");
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          void web_ui_start(void)
+          {
+              httpd_handle_t server = NULL;
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+              config.server_port = 80;
+              config.max_uri_handlers = 8;
+
+              if (httpd_start(&server, &config) == ESP_OK) {
+                  httpd_uri_t root = {
+                      .uri = "/",
+                      .method = HTTP_GET,
+                      .handler = root_handler,
+                      .user_ctx = NULL
+                  };
+
+                  httpd_register_uri_handler(server, &root);
+                  ESP_LOGI(TAG, "WebUI started");
+              } else {
+                  ESP_LOGE(TAG, "WebUI failed");
+              }
+          }
+          EOF
+
+          cat > examples/factory_demo/components/webui/web_ui.h << 'EOF'
+          #pragma once
+          void web_ui_start(void);
+          EOF
+
+          cat > examples/factory_demo/components/webui/CMakeLists.txt << 'EOF'
+          idf_component_register(
+              SRCS "web_ui.c"
+              INCLUDE_DIRS "."
+              REQUIRES esp_http_server
+          )
+          EOF
+
+      # =====================================================
+      # PATCH MAIN.C
+      # =====================================================
+      - name: Patch main.c for WebUI startup
+        run: |
+          FILE=examples/factory_demo/main/main.c
+
+          grep -q 'web_ui.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "web_ui.h"' $FILE
+
+          grep -q 'web_ui_start();' $FILE || \
+          sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(5000));\
+          web_ui_start();' $FILE
+
+      # =====================================================
+      # PATCH SDKCONFIG FOR STABILITY
       # =====================================================
       - name: Patch sdkconfig
         run: |
           FILE=examples/factory_demo/sdkconfig.ci.box
 
           echo "" >> $FILE
-          echo "# ===== PRODUCTION SR SAFE =====" >> $FILE
-          echo "CONFIG_ESP_SR_MODEL_WN9_HILEXIN=y" >> $FILE
-          echo "# CONFIG_ESP_SR_MODEL_WN9_NIHAOXIAOZHI is not set" >> $FILE
-          echo "# CONFIG_ESP_SR_MODEL_WN9_ALEXA is not set" >> $FILE
-          echo "# CONFIG_ESP_SR_MODEL_WN9_CUSTOMIZED is not set" >> $FILE
-
-          echo "CONFIG_ESP_SR_WN_WAKENET9=y" >> $FILE
-          echo "CONFIG_ESP_SR_ENABLE_WAKENET=y" >> $FILE
-          echo "# CONFIG_ESP_SR_ENABLE_MULTINET is not set" >> $FILE
-          echo "# CONFIG_ESP_SR_ENABLE_COMMAND_DETECT is not set" >> $FILE
-
-          echo "CONFIG_SPIRAM=y" >> $FILE
-          echo "CONFIG_SPIRAM_MODE_OCT=y" >> $FILE
-          echo "CONFIG_SPIRAM_SPEED_80M=y" >> $FILE
-          echo "CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y" >> $FILE
-
-          echo "CONFIG_FREERTOS_HZ=1000" >> $FILE
           echo "CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192" >> $FILE
-          echo "CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096" >> $FILE
-
-          echo "CONFIG_COMPILER_OPTIMIZATION_PERF=y" >> $FILE
+          echo "CONFIG_SPIRAM=y" >> $FILE
+          echo "CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024" >> $FILE
+          echo "CONFIG_HTTPD_MAX_URI_LEN=512" >> $FILE
 
       # =====================================================
-      # REMOVE BOOT LOOP SOURCES
+      # BUILD
       # =====================================================
-      - name: Patch main source
+      - name: Build firmware
         run: |
-          FILE=examples/factory_demo/main/main.c
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
 
-          sed -i '/esp_restart()/d' $FILE || true
-          sed -i '/abort()/d' $FILE || true
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+          idf.py fullclean
+          idf.py reconfigure
+          idf.py build
 
+      # =====================================================
+      # MERGE BIN
+      # =====================================================
+      - name: Merge firmware
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo/build
+
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o esp32s3_box_webui_sr_stable.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
+
+      # =====================================================
+      # UPLOAD
+      # =====================================================
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-box-webui-sr-stable
+          path: examples/factory_demo/build/esp32s3_box_webui_sr_stable.bin
       # =====================================================
       # BUILD
       # =====================================================
