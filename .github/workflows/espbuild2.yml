@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX PRODUCTION SR STABLE BUILD
+name: ESP32-S3-BOX PRODUCTION STABLE (SR FIX + COMPONENT ARCH)
 
 on:
   workflow_dispatch:
@@ -28,22 +28,23 @@ jobs:
         run: git config --global --add safe.directory '*'
 
 # =====================================================
-# CLEAN BUILD
+# CLEAN
 # =====================================================
-      - name: Clean
+      - name: Clean build
         run: rm -rf examples/factory_demo/build || true
 
 # =====================================================
-# CREATE PROPER COMPONENT STRUCTURE
+# CREATE PROPER COMPONENT STRUCTURE (FIX ALL ERRORS)
 # =====================================================
-      - name: Create components
+      - name: Create extension component
         run: |
           mkdir -p components/extensions/include
+          mkdir -p components/extensions
 
 # =====================================================
-# HEADER (CRITICAL FIX)
+# HEADER (FIX INCLUDE PATH ISSUE)
 # =====================================================
-      - name: Extensions header
+      - name: Create header
         run: |
           cat > components/extensions/include/extensions.h << 'EOF'
           #pragma once
@@ -51,23 +52,23 @@ jobs:
           void web_ui_start(void);
           void ap_fallback_start(void);
           void mqtt_bridge_start(void);
-          void esp_sr_start(void);
           EOF
 
 # =====================================================
-# WEBUI COMPONENT
+# WEB UI
 # =====================================================
-      - name: WebUI
+      - name: WebUI source
         run: |
-          cat > components/extensions/webui.c << 'EOF'
+          cat > components/extensions/web_ui.c << 'EOF'
           #include "esp_http_server.h"
           #include "esp_log.h"
+          #include "extensions.h"
 
           static const char *TAG = "WEBUI";
 
-          static esp_err_t root(httpd_req_t *req)
+          static esp_err_t root_handler(httpd_req_t *req)
           {
-              const char html[] = "<html><body><h1>ESP32-S3-BOX PRO</h1></body></html>";
+              const char html[] = "<html><body><h1>ESP32-S3 BOX PRO</h1></body></html>";
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
@@ -78,13 +79,13 @@ jobs:
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
               if (httpd_start(&server, &config) == ESP_OK) {
-                  httpd_uri_t uri = {
+                  httpd_uri_t root = {
                       .uri = "/",
                       .method = HTTP_GET,
-                      .handler = root
+                      .handler = root_handler
                   };
 
-                  httpd_register_uri_handler(server, &uri);
+                  httpd_register_uri_handler(server, &root);
                   ESP_LOGI(TAG, "WebUI started");
               }
           }
@@ -95,9 +96,10 @@ jobs:
 # =====================================================
       - name: AP fallback
         run: |
-          cat > components/extensions/ap.c << 'EOF'
+          cat > components/extensions/ap_fallback.c << 'EOF'
           #include "esp_wifi.h"
           #include "esp_log.h"
+          #include "extensions.h"
 
           static const char *TAG = "AP";
 
@@ -117,20 +119,22 @@ jobs:
               esp_wifi_set_config(WIFI_IF_AP, &ap);
               esp_wifi_start();
 
-              ESP_LOGI(TAG, "AP fallback started");
+              ESP_LOGI(TAG, "AP started");
           }
           EOF
 
 # =====================================================
-# MQTT SAFE BRIDGE
+# MQTT
 # =====================================================
       - name: MQTT bridge
         run: |
-          cat > components/extensions/mqtt.c << 'EOF'
+          cat > components/extensions/mqtt_bridge.c << 'EOF'
           #include "mqtt_client.h"
           #include "esp_log.h"
+          #include "extensions.h"
 
           static const char *TAG = "MQTT";
+          static esp_mqtt_client_handle_t client;
 
           void mqtt_bridge_start(void)
           {
@@ -138,48 +142,46 @@ jobs:
                   .broker.address.uri = "mqtt://broker.hivemq.com"
               };
 
-              esp_mqtt_client_handle_t client = esp_mqtt_client_init(&cfg);
+              client = esp_mqtt_client_init(&cfg);
               esp_mqtt_client_start(client);
 
-              ESP_LOGI(TAG, "MQTT started safely");
+              ESP_LOGI(TAG, "MQTT started");
           }
           EOF
 
 # =====================================================
-# COMPONENT CMake (FIX LINKING)
+# COMPONENT CMAKE (CRITICAL FIX)
 # =====================================================
-      - name: CMake component
+      - name: Component CMake
         run: |
           cat > components/extensions/CMakeLists.txt << 'EOF'
           idf_component_register(
-              SRCS "webui.c" "ap.c" "mqtt.c"
+              SRCS "web_ui.c" "ap_fallback.c" "mqtt_bridge.c"
               INCLUDE_DIRS "include"
           )
           EOF
 
 # =====================================================
-# PATCH MAIN.C (CRITICAL BOOT FIX)
+# PATCH MAIN (SAFE)
 # =====================================================
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          sed -i '/extensions.h/d' $FILE || true
+          if ! grep -q "extensions.h" $FILE; then
+            sed -i '/#include/a #include "extensions.h"' $FILE
+          fi
 
-          grep -q "extensions.h" $FILE || \
-          sed -i '/#include/a #include "extensions/extensions.h"' $FILE
-
-          grep -q "BOOT_SEQUENCE" $FILE || \
-          sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(8000));\
+          if ! grep -q "web_ui_start" $FILE; then
+            sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(4000));\
           web_ui_start();\
-          vTaskDelay(pdMS_TO_TICKS(2000));\
           ap_fallback_start();\
-          vTaskDelay(pdMS_TO_TICKS(2000));\
           mqtt_bridge_start();' $FILE
+          fi
 
 # =====================================================
-# BUILD SYSTEM
+# BUILD
 # =====================================================
       - name: Build firmware
         run: |
@@ -191,18 +193,10 @@ jobs:
           idf.py build
 
 # =====================================================
-# OUTPUT BIN ONLY
-# =====================================================
-      - name: Collect firmware
-        run: |
-          mkdir -p output
-          cp examples/factory_demo/build/*.bin output/ || true
-
-# =====================================================
 # ARTIFACT
 # =====================================================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-production-sr-stable
-          path: output/
+          name: esp32s3-box-pro-production
+          path: examples/factory_demo/build/*.bin
