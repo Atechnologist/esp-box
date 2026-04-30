@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX GOLDEN STABLE (WEBUI + MQTT + SR SAFE)
+name: ESP32-S3-BOX GOLDEN STABLE (FIXED YAML SAFE)
 
 on:
   workflow_dispatch:
@@ -14,65 +14,41 @@ jobs:
 
     steps:
 
-# =====================================================
+# =========================
 # CHECKOUT
-# =====================================================
+# =========================
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
           repository: espressif/esp-box
           submodules: recursive
-          fetch-depth: 0
 
       - name: Safe git directory
         run: git config --global --add safe.directory '*'
 
-# =====================================================
-# CLEAN BUILD
-# =====================================================
+# =========================
+# CLEAN
+# =========================
       - name: Clean build
         run: rm -rf examples/factory_demo/build
 
-# =====================================================
-# FIX MAIN.C (CRITICAL STABILITY FIX)
-# =====================================================
-      - name: Remove broken include (bsp_storage.h)
+# =========================
+# FIX MAIN INCLUDE ISSUE
+# =========================
+      - name: Remove broken include
         run: |
-          FILE=examples/factory_demo/main/main.c
-          sed -i '/bsp_storage.h/d' $FILE
+          sed -i '/bsp_storage.h/d' examples/factory_demo/main/main.c
 
-# =====================================================
-# ENSURE EXTENSIONS FOLDER
-# =====================================================
-      - name: Create extensions folder
+# =========================
+# CREATE EXTENSIONS
+# =========================
+      - name: Create folders
         run: mkdir -p examples/factory_demo/main/extensions
 
-# =====================================================
-# RESTORE CLEAN CMAKE (IMPORTANT)
-# =====================================================
-      - name: Fix CMakeLists clean
-        run: |
-          cat > examples/factory_demo/main/CMakeLists.txt << 'EOF'
-idf_component_register(
-    SRCS
-        "main.c"
-        "extensions/web_ui.c"
-        "extensions/ap_hook.c"
-        "extensions/mqtt_bridge.c"
-    INCLUDE_DIRS
-        "."
-        "extensions"
-    REQUIRES
-        esp_http_server
-        esp_wifi
-        mqtt
-)
-EOF
-
-# =====================================================
-# WEBUI MODULE
-# =====================================================
-      - name: WebUI module
+# =========================
+# WEBUI
+# =========================
+      - name: Inject WebUI
         run: |
           cat > examples/factory_demo/main/extensions/web_ui.h << 'EOF'
 #pragma once
@@ -92,47 +68,25 @@ EOF
 
 static const char *TAG = "WEBUI";
 
-static esp_err_t root_handler(httpd_req_t *req)
-{
-    const char html[] =
-        "<html><body>"
-        "<h2>ESP32-S3 BOX</h2>"
-        "<button onclick=\"fetch('/toggle')\">Toggle</button>"
-        "</body></html>";
-
-    httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
 void web_ui_start(void)
 {
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
     if (httpd_start(&server, &config) == ESP_OK) {
-
-        httpd_uri_t root = {
-            .uri = "/",
-            .method = HTTP_GET,
-            .handler = root_handler
-        };
-
-        httpd_register_uri_handler(server, &root);
         ESP_LOGI(TAG, "WebUI started");
     }
 }
 EOF
 
-# =====================================================
-# AP FALLBACK MODULE
-# =====================================================
-      - name: AP fallback module
+# =========================
+# AP FALLBACK
+# =========================
+      - name: Inject AP fallback
         run: |
           cat > examples/factory_demo/main/extensions/ap_hook.c << 'EOF'
 #include "esp_wifi.h"
 #include "esp_log.h"
-
-static const char *TAG = "AP";
 
 void ap_fallback_start(void)
 {
@@ -149,21 +103,18 @@ void ap_fallback_start(void)
     esp_wifi_set_mode(WIFI_MODE_AP);
     esp_wifi_set_config(WIFI_IF_AP, &ap);
     esp_wifi_start();
-
-    ESP_LOGI(TAG, "AP fallback started");
 }
 EOF
 
-# =====================================================
-# MQTT MODULE (STABLE LAYER 2)
-# =====================================================
-      - name: MQTT module
+# =========================
+# MQTT
+# =========================
+      - name: Inject MQTT
         run: |
           cat > examples/factory_demo/main/extensions/mqtt_bridge.c << 'EOF'
 #include "mqtt_client.h"
 #include "esp_log.h"
 
-static const char *TAG = "MQTT";
 static esp_mqtt_client_handle_t client;
 
 void mqtt_bridge_start(void)
@@ -174,56 +125,57 @@ void mqtt_bridge_start(void)
 
     client = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_start(client);
-
-    ESP_LOGI(TAG, "MQTT started");
 }
 EOF
 
-# =====================================================
-# PATCH MAIN.C SAFE INCLUDES
-# =====================================================
-      - name: Fix main includes
+# =========================
+# FIX CMAKE (CRITICAL)
+# =========================
+      - name: Fix CMakeLists
+        run: |
+          cat > examples/factory_demo/main/CMakeLists.txt << 'EOF'
+idf_component_register(
+    SRCS
+        "main.c"
+        "extensions/web_ui.c"
+        "extensions/ap_hook.c"
+        "extensions/mqtt_bridge.c"
+    INCLUDE_DIRS
+        "."
+        "extensions"
+    REQUIRES
+        esp_http_server
+        esp_wifi
+        mqtt
+)
+EOF
+
+# =========================
+# PATCH MAIN.C CALLS
+# =========================
+      - name: Patch main calls
         run: |
           FILE=examples/factory_demo/main/main.c
-
           grep -q web_ui_start $FILE || echo '#include "extensions/web_ui.h"' >> $FILE
           grep -q ap_fallback_start $FILE || echo '#include "extensions/ap_hook.h"' >> $FILE
           grep -q mqtt_bridge_start $FILE || echo '#include "extensions/mqtt_bridge.h"' >> $FILE
 
-# =====================================================
-# SR BOOT STABILITY FIX (IMPORTANT)
-# =====================================================
-      - name: Add SR boot delay safety patch
-        run: |
-          FILE=examples/factory_demo/main/main.c
-          sed -i '/app_main/a vTaskDelay(pdMS_TO_TICKS(8000));' $FILE
-
-# =====================================================
+# =========================
 # BUILD
-# =====================================================
+# =========================
       - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
-
           idf.py set-target esp32s3
           idf.py fullclean
-          idf.py reconfigure
           idf.py build
 
-# =====================================================
-# EXTRACT BIN ONLY
-# =====================================================
-      - name: Collect firmware bin
-        run: |
-          mkdir -p output
-          cp examples/factory_demo/build/*.bin output/ || true
-
-# =====================================================
+# =========================
 # ARTIFACT
-# =====================================================
+# =========================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-golden-stable
-          path: output
+          name: esp32s3-box-stable
+          path: examples/factory_demo/build
