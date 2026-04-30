@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX ZERO YAML BUILD (SR SAFE + WEBUI + MQTT)
+name: ESP32-S3-BOX VOICE OS MODE (STABLE SR + MQTT + WEBUI)
 
 on:
   workflow_dispatch:
@@ -24,166 +24,166 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe git fix
+      - name: Safe directory fix
         run: git config --global --add safe.directory '*'
 
 # =====================================================
-# CLEAN
+# CLEAN BUILD
 # =====================================================
       - name: Clean build
         run: rm -rf examples/factory_demo/build || true
 
 # =====================================================
-# CREATE EXTENSIONS FOLDER
+# ENABLE COMPONENT MANAGER
 # =====================================================
-      - name: Create folders
+      - name: Enable component manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+
+# =====================================================
+# CREATE EXTENSIONS DIR
+# =====================================================
+      - name: Create extensions folder
         run: mkdir -p examples/factory_demo/main/extensions
 
 # =====================================================
-# WEBUI (HEREDOC)
+# WEBUI (SAFE)
 # =====================================================
       - name: Inject WebUI
         run: |
           cat > examples/factory_demo/main/extensions/web_ui.c << 'EOF'
           #include "esp_http_server.h"
           #include "esp_log.h"
-          
+
           static const char *TAG = "WEBUI";
-          
+
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
-              "<html><body><h1>ESP32-S3-BOX</h1></body></html>";
-          
+              "<html><body><h1>VOICE OS MODE</h1></body></html>";
+
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
-          
+
           void web_ui_start(void)
           {
               httpd_handle_t server = NULL;
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-          
+
               if (httpd_start(&server, &config) == ESP_OK) {
-                  httpd_uri_t root = {
+                  httpd_uri_t uri = {
                       .uri = "/",
                       .method = HTTP_GET,
                       .handler = root_handler
                   };
-          
-                  httpd_register_uri_handler(server, &root);
+
+                  httpd_register_uri_handler(server, &uri);
                   ESP_LOGI(TAG, "WebUI started");
               }
           }
           EOF
 
 # =====================================================
-# AP FALLBACK (HEREDOC)
+# AP FALLBACK
 # =====================================================
       - name: Inject AP fallback
         run: |
           cat > examples/factory_demo/main/extensions/ap_hook.c << 'EOF'
           #include "esp_wifi.h"
           #include "esp_log.h"
-          
+
           static const char *TAG = "AP";
-          
+
           void ap_fallback_start(void)
           {
               wifi_config_t ap = {
                   .ap = {
-                      .ssid = "ESP32-BOX-SETUP",
+                      .ssid = "VOICE-SETUP",
                       .password = "12345678",
                       .channel = 6,
                       .max_connection = 4,
                       .authmode = WIFI_AUTH_WPA_WPA2_PSK
                   }
               };
-          
+
               esp_wifi_set_mode(WIFI_MODE_AP);
               esp_wifi_set_config(WIFI_IF_AP, &ap);
               esp_wifi_start();
-          
+
               ESP_LOGI(TAG, "AP fallback active");
           }
           EOF
 
 # =====================================================
-# MQTT BRIDGE (HEREDOC)
+# MQTT BRIDGE
 # =====================================================
-      - name: Inject MQTT bridge
+      - name: Inject MQTT
         run: |
           cat > examples/factory_demo/main/extensions/mqtt_bridge.c << 'EOF'
           #include "mqtt_client.h"
           #include "esp_log.h"
-          
+
           static const char *TAG = "MQTT";
           static esp_mqtt_client_handle_t client;
-          
+
           void mqtt_bridge_start(void)
           {
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.hivemq.com"
               };
-          
+
               client = esp_mqtt_client_init(&cfg);
               esp_mqtt_client_start(client);
+
               ESP_LOGI(TAG, "MQTT started");
           }
           EOF
 
 # =====================================================
-# HEADER FILE FOR DECLARATIONS
+# HEADER FILE (CRITICAL FIX FOR LINKING)
 # =====================================================
-      - name: Create extensions header
+      - name: Create headers
         run: |
           cat > examples/factory_demo/main/extensions/extensions.h << 'EOF'
           #ifndef EXTENSIONS_H
           #define EXTENSIONS_H
-          
+
           void web_ui_start(void);
           void ap_fallback_start(void);
           void mqtt_bridge_start(void);
-          
-          #endif // EXTENSIONS_H
+
+          #endif
           EOF
 
 # =====================================================
-# PATCH CMAKELISTS.TXT
+# FIX CMAKE PROPERLY (NO GLOB, NO YAML TRICKS)
 # =====================================================
-      - name: Patch CMakeLists.txt
+      - name: Fix CMakeLists properly
         run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-          
-          # Add extension source files to compilation
-          if ! grep -q "extensions/" $FILE; then
-            sed -i '/idf_component_register(/a \
-            file(GLOB EXTENSION_SRCS "extensions/*.c")' $FILE
-            
-            sed -i 's/SRCS \(.*\)/SRCS \1 ${EXTENSION_SRCS}/' $FILE
-          fi
+          cat > examples/factory_demo/main/CMakeLists.txt << 'EOF'
+idf_component_register(
+    SRCS "main.c"
+         "extensions/web_ui.c"
+         "extensions/ap_hook.c"
+         "extensions/mqtt_bridge.c"
+    INCLUDE_DIRS "."
+)
+EOF
 
 # =====================================================
-# PATCH MAIN.C
+# PATCH MAIN.C (SAFE CALL ORDER)
 # =====================================================
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
-          
-          # Add include for extensions header
-          if ! grep -q "extensions.h" $FILE; then
-            sed -i '/#include/a \
-          #include "extensions/extensions.h"' $FILE
-          fi
-          
-          # Add function calls after app_rmaker_start()
-          if ! grep -q "web_ui_start()" $FILE; then
-            sed -i '/app_rmaker_start()/a \
-          \    vTaskDelay(pdMS_TO_TICKS(4000));\
-          \    web_ui_start();\
-          \    ap_fallback_start();\
-          \    mqtt_bridge_start();' $FILE
-          fi
+
+          grep -q "extensions.h" $FILE || sed -i '/#include/a #include "extensions/extensions.h"' $FILE
+
+          grep -q "web_ui_start" $FILE || sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(4000));\
+          web_ui_start();\
+          ap_fallback_start();\
+          mqtt_bridge_start();' $FILE
 
 # =====================================================
 # BUILD
@@ -211,10 +211,10 @@ jobs:
             $(cat flash_args)
 
 # =====================================================
-# ARTIFACT
+# ARTIFACT OUTPUT
 # =====================================================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-zero-yaml-safe
+          name: esp32s3-voice-os-mode
           path: examples/factory_demo/build/factory_merged.bin
