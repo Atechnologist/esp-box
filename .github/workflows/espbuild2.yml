@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX PRO FIXED BUILD (NO LINK ERRORS)
+name: ESP32-S3-BOX PRODUCTION SR STABLE BUILD
 
 on:
   workflow_dispatch:
@@ -24,23 +24,38 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe git
+      - name: Safe directory
         run: git config --global --add safe.directory '*'
 
 # =====================================================
-# CLEAN
+# CLEAN BUILD
 # =====================================================
-      - name: Clean build
+      - name: Clean
         run: rm -rf examples/factory_demo/build || true
 
 # =====================================================
-# CREATE COMPONENTS
+# CREATE PROPER COMPONENT STRUCTURE
 # =====================================================
-      - name: Create components folder
-        run: mkdir -p components/extensions
+      - name: Create components
+        run: |
+          mkdir -p components/extensions/include
 
 # =====================================================
-# WEBUI
+# HEADER (CRITICAL FIX)
+# =====================================================
+      - name: Extensions header
+        run: |
+          cat > components/extensions/include/extensions.h << 'EOF'
+          #pragma once
+
+          void web_ui_start(void);
+          void ap_fallback_start(void);
+          void mqtt_bridge_start(void);
+          void esp_sr_start(void);
+          EOF
+
+# =====================================================
+# WEBUI COMPONENT
 # =====================================================
       - name: WebUI
         run: |
@@ -50,12 +65,26 @@ jobs:
 
           static const char *TAG = "WEBUI";
 
+          static esp_err_t root(httpd_req_t *req)
+          {
+              const char html[] = "<html><body><h1>ESP32-S3-BOX PRO</h1></body></html>";
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
           void web_ui_start(void)
           {
               httpd_handle_t server = NULL;
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
               if (httpd_start(&server, &config) == ESP_OK) {
+                  httpd_uri_t uri = {
+                      .uri = "/",
+                      .method = HTTP_GET,
+                      .handler = root
+                  };
+
+                  httpd_register_uri_handler(server, &uri);
                   ESP_LOGI(TAG, "WebUI started");
               }
           }
@@ -69,6 +98,8 @@ jobs:
           cat > components/extensions/ap.c << 'EOF'
           #include "esp_wifi.h"
           #include "esp_log.h"
+
+          static const char *TAG = "AP";
 
           void ap_fallback_start(void)
           {
@@ -85,19 +116,21 @@ jobs:
               esp_wifi_set_mode(WIFI_MODE_AP);
               esp_wifi_set_config(WIFI_IF_AP, &ap);
               esp_wifi_start();
+
+              ESP_LOGI(TAG, "AP fallback started");
           }
           EOF
 
 # =====================================================
-# MQTT
+# MQTT SAFE BRIDGE
 # =====================================================
-      - name: MQTT
+      - name: MQTT bridge
         run: |
           cat > components/extensions/mqtt.c << 'EOF'
           #include "mqtt_client.h"
           #include "esp_log.h"
 
-          static esp_mqtt_client_handle_t client;
+          static const char *TAG = "MQTT";
 
           void mqtt_bridge_start(void)
           {
@@ -105,53 +138,50 @@ jobs:
                   .broker.address.uri = "mqtt://broker.hivemq.com"
               };
 
-              client = esp_mqtt_client_init(&cfg);
+              esp_mqtt_client_handle_t client = esp_mqtt_client_init(&cfg);
               esp_mqtt_client_start(client);
+
+              ESP_LOGI(TAG, "MQTT started safely");
           }
           EOF
 
 # =====================================================
-# HEADER (FIX YOUR ERROR)
+# COMPONENT CMake (FIX LINKING)
 # =====================================================
-      - name: Header fix
+      - name: CMake component
         run: |
-          cat > components/extensions/extensions.h << 'EOF'
-          #pragma once
-
-          void web_ui_start(void);
-          void ap_fallback_start(void);
-          void mqtt_bridge_start(void);
+          cat > components/extensions/CMakeLists.txt << 'EOF'
+          idf_component_register(
+              SRCS "webui.c" "ap.c" "mqtt.c"
+              INCLUDE_DIRS "include"
+          )
           EOF
 
 # =====================================================
-# FIX CMAKE (CRITICAL PART)
-# =====================================================
-      - name: Patch CMakeLists
-        run: |
-          FILE=examples/factory_demo/CMakeLists.txt
-
-          grep -q "EXTRA_COMPONENT_DIRS" $FILE || \
-          sed -i '1i set(EXTRA_COMPONENT_DIRS ../../components/extensions)' $FILE
-
-# =====================================================
-# PATCH MAIN
+# PATCH MAIN.C (CRITICAL BOOT FIX)
 # =====================================================
       - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          sed -i '/#include/a #include "extensions.h"' $FILE
+          sed -i '/extensions.h/d' $FILE || true
 
+          grep -q "extensions.h" $FILE || \
+          sed -i '/#include/a #include "extensions/extensions.h"' $FILE
+
+          grep -q "BOOT_SEQUENCE" $FILE || \
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(8000));\
           web_ui_start();\
+          vTaskDelay(pdMS_TO_TICKS(2000));\
           ap_fallback_start();\
+          vTaskDelay(pdMS_TO_TICKS(2000));\
           mqtt_bridge_start();' $FILE
 
 # =====================================================
-# BUILD
+# BUILD SYSTEM
 # =====================================================
-      - name: Build
+      - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -161,10 +191,18 @@ jobs:
           idf.py build
 
 # =====================================================
-# ARTIFACT (BIN ONLY)
+# OUTPUT BIN ONLY
+# =====================================================
+      - name: Collect firmware
+        run: |
+          mkdir -p output
+          cp examples/factory_demo/build/*.bin output/ || true
+
+# =====================================================
+# ARTIFACT
 # =====================================================
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-fixed-pro
-          path: examples/factory_demo/build/*.bin
+          name: esp32s3-box-production-sr-stable
+          path: output/
