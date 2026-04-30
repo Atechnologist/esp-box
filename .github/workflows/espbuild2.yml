@@ -133,18 +133,57 @@ jobs:
           EOF
 
 # =====================================================
-# PATCH MAIN (SAFE ONLY FUNCTION CALLS)
+# HEADER FILE FOR DECLARATIONS
 # =====================================================
-      - name: Patch main.c safely
+      - name: Create extensions header
+        run: |
+          cat > examples/factory_demo/main/extensions/extensions.h << 'EOF'
+          #ifndef EXTENSIONS_H
+          #define EXTENSIONS_H
+          
+          void web_ui_start(void);
+          void ap_fallback_start(void);
+          void mqtt_bridge_start(void);
+          
+          #endif // EXTENSIONS_H
+          EOF
+
+# =====================================================
+# PATCH CMAKELISTS.TXT
+# =====================================================
+      - name: Patch CMakeLists.txt
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          
+          # Add extension source files to compilation
+          if ! grep -q "extensions/" $FILE; then
+            sed -i '/idf_component_register(/a \
+            file(GLOB EXTENSION_SRCS "extensions/*.c")' $FILE
+            
+            sed -i 's/SRCS \(.*\)/SRCS \1 ${EXTENSION_SRCS}/' $FILE
+          fi
+
+# =====================================================
+# PATCH MAIN.C
+# =====================================================
+      - name: Patch main.c
         run: |
           FILE=examples/factory_demo/main/main.c
-
-          grep -q web_ui_start $FILE || \
-          sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(4000));\
-          web_ui_start();\
-          ap_fallback_start();\
-          mqtt_bridge_start();' $FILE
+          
+          # Add include for extensions header
+          if ! grep -q "extensions.h" $FILE; then
+            sed -i '/#include/a \
+          #include "extensions/extensions.h"' $FILE
+          fi
+          
+          # Add function calls after app_rmaker_start()
+          if ! grep -q "web_ui_start()" $FILE; then
+            sed -i '/app_rmaker_start()/a \
+          \    vTaskDelay(pdMS_TO_TICKS(4000));\
+          \    web_ui_start();\
+          \    ap_fallback_start();\
+          \    mqtt_bridge_start();' $FILE
+          fi
 
 # =====================================================
 # BUILD
