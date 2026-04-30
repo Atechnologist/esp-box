@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX SR PRIORITY FINAL YAML
+name: ESP32-S3-BOX WEBUI GOLDEN MQTT
 
 on:
   workflow_dispatch:
@@ -33,160 +33,97 @@ jobs:
         run: rm -rf examples/factory_demo/build || true
 
 # =====================================================
-# CREATE CUSTOM COMPONENT
+# PATCH MAIN.C ONLY
+# Keeps prior stable WebUI style + delayed MQTT
 # =====================================================
-      - name: Create custom component
-        run: mkdir -p examples/factory_demo/components/custom_ext
-
-# =====================================================
-# CUSTOM COMPONENT FILES
-# =====================================================
-      - name: Create component files
-        run: |
-          cat > examples/factory_demo/components/custom_ext/CMakeLists.txt << 'EOF'
-          idf_component_register(
-            SRCS
-              "web_ui.c"
-              "mqtt_bridge.c"
-              "ap_hook.c"
-            INCLUDE_DIRS "."
-            REQUIRES esp_http_server esp_wifi mqtt esp_netif
-          )
-          EOF
-
-          cat > examples/factory_demo/components/custom_ext/web_ui.h << 'EOF'
-          #pragma once
-          void web_ui_start(void);
-          EOF
-
-          cat > examples/factory_demo/components/custom_ext/mqtt_bridge.h << 'EOF'
-          #pragma once
-          void mqtt_bridge_start(void);
-          EOF
-
-          cat > examples/factory_demo/components/custom_ext/ap_hook.h << 'EOF'
-          #pragma once
-          void ap_fallback_check_start(void);
-          EOF
-
-# =====================================================
-# WEB UI
-# =====================================================
-      - name: Create web_ui.c
-        run: |
-          cat > examples/factory_demo/components/custom_ext/web_ui.c << 'EOF'
-          #include "web_ui.h"
-          #include "esp_http_server.h"
-
-          static esp_err_t root(httpd_req_t *req)
-          {
-              const char html[] =
-              "<html><body style='text-align:center;'>"
-              "<h1>ESP-BOX CONTROL</h1>"
-              "<button onclick=\"fetch('/ping')\">Alive</button>"
-              "</body></html>";
-              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
-
-          static esp_err_t ping(httpd_req_t *req)
-          {
-              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
-
-          void web_ui_start(void)
-          {
-              httpd_handle_t server = NULL;
-              httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-
-              if (httpd_start(&server, &cfg) == ESP_OK) {
-                  httpd_uri_t a = {.uri="/", .method=HTTP_GET, .handler=root};
-                  httpd_uri_t b = {.uri="/ping", .method=HTTP_GET, .handler=ping};
-                  httpd_register_uri_handler(server, &a);
-                  httpd_register_uri_handler(server, &b);
-              }
-          }
-          EOF
-
-# =====================================================
-# MQTT
-# =====================================================
-      - name: Create mqtt_bridge.c
-        run: |
-          cat > examples/factory_demo/components/custom_ext/mqtt_bridge.c << 'EOF'
-          #include "mqtt_bridge.h"
-          #include "mqtt_client.h"
-
-          static esp_mqtt_client_handle_t client;
-
-          void mqtt_bridge_start(void)
-          {
-              esp_mqtt_client_config_t cfg = {
-                  .broker.address.uri = "mqtt://broker.hivemq.com"
-              };
-
-              client = esp_mqtt_client_init(&cfg);
-              if (client) {
-                  esp_mqtt_client_start(client);
-              }
-          }
-          EOF
-
-# =====================================================
-# AP FALLBACK ONLY IF WIFI FAILS
-# =====================================================
-      - name: Create ap_hook.c
-        run: |
-          cat > examples/factory_demo/components/custom_ext/ap_hook.c << 'EOF'
-          #include "ap_hook.h"
-          #include "esp_wifi.h"
-
-          void ap_fallback_check_start(void)
-          {
-              wifi_mode_t mode;
-              esp_wifi_get_mode(&mode);
-
-              if (mode == WIFI_MODE_NULL) {
-                  wifi_config_t ap = {
-                      .ap = {
-                          .ssid = "ESP32-BOX-SETUP",
-                          .password = "12345678",
-                          .channel = 6,
-                          .max_connection = 4,
-                          .authmode = WIFI_AUTH_WPA_WPA2_PSK
-                      }
-                  };
-
-                  esp_wifi_set_mode(WIFI_MODE_AP);
-                  esp_wifi_set_config(WIFI_IF_AP, &ap);
-                  esp_wifi_start();
-              }
-          }
-          EOF
-
-# =====================================================
-# PATCH MAIN.C
-# =====================================================
-      - name: Patch main.c
+      - name: Inject Golden Patch
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q web_ui.h $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "web_ui.h"' $FILE
+          # -------------------------------------------------
+          # Includes
+          # -------------------------------------------------
+          grep -q esp_http_server.h $FILE || \
+          sed -i '/#include "app_rmaker.h"/a \
+          #include "esp_http_server.h"\
+          #include "mqtt_client.h"\
+          #include "esp_wifi.h"\
+          #include "freertos/task.h"' $FILE
 
-          grep -q mqtt_bridge.h $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "mqtt_bridge.h"' $FILE
+          # -------------------------------------------------
+          # WebUI + MQTT code before app_main
+          # -------------------------------------------------
+          grep -q GOLDEN_WEBUI_PATCH $FILE || \
+          sed -i '/void app_main(void)/i \
 
-          grep -q ap_hook.h $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "ap_hook.h"' $FILE
+          /* GOLDEN_WEBUI_PATCH */\
+          static httpd_handle_t server = NULL;\
+          static esp_mqtt_client_handle_t mqtt_client = NULL;\
+\
+          static esp_err_t root_handler(httpd_req_t *req)\
+          {\
+              const char html[] =\
+              "<html><body style=\"text-align:center;font-family:sans-serif;\">"\
+              "<h1>ESP32 BOX</h1>"\
+              "<button style=\"font-size:24px;padding:20px;\" onclick=\"fetch('/light')\">LIGHT</button><br><br>"\
+              "<button style=\"font-size:20px;padding:15px;\" onclick=\"fetch('/mqtt')\">MQTT</button>"\
+              "</body></html>";\
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);\
+              return ESP_OK;\
+          }\
+\
+          static esp_err_t light_handler(httpd_req_t *req)\
+          {\
+              httpd_resp_send(req, "LIGHT OK", HTTPD_RESP_USE_STRLEN);\
+              return ESP_OK;\
+          }\
+\
+          static esp_err_t mqtt_handler(httpd_req_t *req)\
+          {\
+              if (mqtt_client) {\
+                  esp_mqtt_client_publish(mqtt_client,"espbox/status","button_press",0,1,0);\
+              }\
+              httpd_resp_send(req, "MQTT SENT", HTTPD_RESP_USE_STRLEN);\
+              return ESP_OK;\
+          }\
+\
+          static void web_ui_start(void)\
+          {\
+              httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();\
+              if (httpd_start(&server, &cfg) == ESP_OK) {\
+                  httpd_uri_t r = {.uri=\"/\", .method=HTTP_GET, .handler=root_handler};\
+                  httpd_uri_t l = {.uri=\"/light\", .method=HTTP_GET, .handler=light_handler};\
+                  httpd_uri_t m = {.uri=\"/mqtt\", .method=HTTP_GET, .handler=mqtt_handler};\
+                  httpd_register_uri_handler(server,&r);\
+                  httpd_register_uri_handler(server,&l);\
+                  httpd_register_uri_handler(server,&m);\
+              }\
+          }\
+\
+          static void mqtt_start(void)\
+          {\
+              esp_mqtt_client_config_t cfg = {\
+                  .broker.address.uri = \"mqtt://broker.hivemq.com\"\
+              };\
+              mqtt_client = esp_mqtt_client_init(&cfg);\
+              if (mqtt_client) esp_mqtt_client_start(mqtt_client);\
+          }\
+\
+          static void late_services(void *p)\
+          {\
+              vTaskDelay(pdMS_TO_TICKS(90000));\
+              web_ui_start();\
+              mqtt_start();\
+              vTaskDelete(NULL);\
+          }\
+' $FILE
 
-          grep -q web_ui_start $FILE || \
+          # -------------------------------------------------
+          # Start delayed task after RainMaker
+          # -------------------------------------------------
+          grep -q late_services $FILE || \
           sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(25000));\
-          web_ui_start();\
-          mqtt_bridge_start();\
-          ap_fallback_check_start();' $FILE
+              xTaskCreate(late_services, "late_services", 4096, NULL, 1, NULL);' $FILE
 
 # =====================================================
 # BUILD
@@ -204,23 +141,23 @@ jobs:
 # =====================================================
 # MERGED BIN
 # =====================================================
-      - name: Merge full firmware
+      - name: Merge firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
-            -o factory_merged.bin \
+            -o esp32s3_box_full.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
 # =====================================================
-# ARTIFACT
+# UPLOAD
 # =====================================================
-      - name: Upload merged bin
+      - name: Upload BIN
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-sr-priority-bin
-          path: examples/factory_demo/build/factory_merged.bin
+          name: esp32s3-box-webui-golden-mqtt
+          path: examples/factory_demo/build/esp32s3_box_full.bin
