@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX WEBUI GOLDEN MQTT (ZERO ERROR)
+name: ESP32-S3-BOX GOLDEN STABLE (WEBUI + MQTT + SAFE SR)
 
 on:
   workflow_dispatch:
@@ -13,9 +13,6 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
-# =====================================================
-# CHECKOUT
-# =====================================================
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -23,120 +20,202 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe directory fix
+      - name: Safe git directory
         run: git config --global --add safe.directory '*'
 
-# =====================================================
-# CLEAN
-# =====================================================
       - name: Clean build
-        run: |
-          rm -rf examples/factory_demo/build || true
+        run: rm -rf examples/factory_demo/build || true
 
 # =====================================================
-# PATCH MAIN.C (SAFE)
+# EXTENSIONS FOLDER
 # =====================================================
-      - name: Inject WEBUI + MQTT
+      - name: Create extensions
+        run: mkdir -p examples/factory_demo/main/extensions
+
+# =====================================================
+# WEBUI (SAFE + HEADER + SOURCE)
+# =====================================================
+      - name: WebUI module
+        run: |
+          cat > examples/factory_demo/main/extensions/web_ui.h <<'EOF'
+          #pragma once
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          void web_ui_start(void);
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+
+          cat > examples/factory_demo/main/extensions/web_ui.c <<'EOF'
+          #include "esp_http_server.h"
+          #include "esp_log.h"
+          #include "web_ui.h"
+
+          static const char *TAG = "WEBUI";
+          static httpd_handle_t server = NULL;
+
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const char html[] =
+              "<html><body style='text-align:center;'>"
+              "<h1>ESP32 BOX</h1>"
+              "<button onclick=\"fetch('/toggle')\">Toggle</button>"
+              "</body></html>";
+
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          void web_ui_start(void)
+          {
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+              if (httpd_start(&server, &config) == ESP_OK) {
+
+                  httpd_uri_t root = {
+                      .uri = "/",
+                      .method = HTTP_GET,
+                      .handler = root_handler
+                  };
+
+                  httpd_register_uri_handler(server, &root);
+
+                  ESP_LOGI(TAG, "WebUI started");
+              }
+          }
+          EOF
+
+# =====================================================
+# AP FALLBACK SAFE
+# =====================================================
+      - name: AP fallback module
+        run: |
+          cat > examples/factory_demo/main/extensions/ap_hook.h <<'EOF'
+          #pragma once
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          void ap_fallback_start(void);
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+
+          cat > examples/factory_demo/main/extensions/ap_hook.c <<'EOF'
+          #include "esp_wifi.h"
+          #include "esp_log.h"
+          #include "ap_hook.h"
+
+          static const char *TAG = "AP";
+
+          void ap_fallback_start(void)
+          {
+              wifi_config_t ap = {
+                  .ap = {
+                      .ssid = "ESP32-BOX-SETUP",
+                      .password = "12345678",
+                      .channel = 6,
+                      .max_connection = 4,
+                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
+                  }
+              };
+
+              esp_wifi_set_mode(WIFI_MODE_AP);
+              esp_wifi_set_config(WIFI_IF_AP, &ap);
+              esp_wifi_start();
+
+              ESP_LOGI(TAG, "AP fallback active");
+          }
+          EOF
+
+# =====================================================
+# MQTT SAFE (NO BOOT IMPACT)
+# =====================================================
+      - name: MQTT module
+        run: |
+          cat > examples/factory_demo/main/extensions/mqtt_bridge.h <<'EOF'
+          #pragma once
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          void mqtt_bridge_start(void);
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+
+          cat > examples/factory_demo/main/extensions/mqtt_bridge.c <<'EOF'
+          #include "mqtt_client.h"
+          #include "esp_log.h"
+          #include "mqtt_bridge.h"
+
+          static const char *TAG = "MQTT";
+          static esp_mqtt_client_handle_t client;
+
+          static void mqtt_event(void *handler_args, esp_event_base_t base,
+                                 int32_t event_id, void *event_data)
+          {
+              if (event_id == MQTT_EVENT_CONNECTED) {
+                  ESP_LOGI(TAG, "MQTT connected");
+                  esp_mqtt_client_publish(client, "espbox/status", "online", 0, 1, 1);
+              }
+          }
+
+          void mqtt_bridge_start(void)
+          {
+              esp_mqtt_client_config_t cfg = {
+                  .broker.address.uri = "mqtt://broker.hivemq.com"
+              };
+
+              client = esp_mqtt_client_init(&cfg);
+
+              esp_mqtt_client_register_event(
+                  client,
+                  ESP_EVENT_ANY_ID,
+                  mqtt_event,
+                  NULL
+              );
+
+              esp_mqtt_client_start(client);
+          }
+          EOF
+
+# =====================================================
+# FIX CMAKE PROPERLY (NO YAML BREAK)
+# =====================================================
+      - name: Fix CMake properly
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+
+          grep -q extensions/web_ui.c $FILE || sed -i '/idf_component_register/a \
+          SRCS += "extensions/web_ui.c" \
+          SRCS += "extensions/ap_hook.c" \
+          SRCS += "extensions/mqtt_bridge.c"' $FILE
+
+# =====================================================
+# FIX MAIN.C (NO IMPLICIT DECLARATION CRASH)
+# =====================================================
+      - name: Fix main includes safely
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          cat > /tmp/insert_block.c <<'EOF'
-#include "esp_http_server.h"
-#include "mqtt_client.h"
+          grep -q web_ui.h $FILE || sed -i '/#include/a #include "extensions/web_ui.h"' $FILE
+          grep -q ap_hook.h $FILE || sed -i '/#include/a #include "extensions/ap_hook.h"' $FILE
+          grep -q mqtt_bridge.h $FILE || sed -i '/#include/a #include "extensions/mqtt_bridge.h"' $FILE
 
-static httpd_handle_t server = NULL;
-static esp_mqtt_client_handle_t mqtt_client = NULL;
+      - name: Safe app_main patch (NO BOOT LOOP)
+        run: |
+          FILE=examples/factory_demo/main/main.c
 
-static esp_err_t root_handler(httpd_req_t *req)
-{
-    const char html[] =
-    "<html><body style='text-align:center;font-family:sans-serif;'>"
-    "<h1>ESP32 BOX</h1>"
-    "<button onclick=\"fetch('/light')\">LIGHT</button><br><br>"
-    "<button onclick=\"fetch('/mqtt')\">MQTT</button>"
-    "</body></html>";
-
-    httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-static esp_err_t light_handler(httpd_req_t *req)
-{
-    httpd_resp_send(req, "LIGHT OK", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-static esp_err_t mqtt_handler(httpd_req_t *req)
-{
-    if (mqtt_client) {
-        esp_mqtt_client_publish(
-            mqtt_client,
-            "espbox/webui",
-            "pressed",
-            0,1,0
-        );
-    }
-
-    httpd_resp_send(req, "MQTT SENT", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-static void start_webserver(void)
-{
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-
-    if (httpd_start(&server, &config) == ESP_OK) {
-
-        httpd_uri_t root = {
-            .uri="/",
-            .method=HTTP_GET,
-            .handler=root_handler
-        };
-
-        httpd_uri_t light = {
-            .uri="/light",
-            .method=HTTP_GET,
-            .handler=light_handler
-        };
-
-        httpd_uri_t mqtt = {
-            .uri="/mqtt",
-            .method=HTTP_GET,
-            .handler=mqtt_handler
-        };
-
-        httpd_register_uri_handler(server, &root);
-        httpd_register_uri_handler(server, &light);
-        httpd_register_uri_handler(server, &mqtt);
-    }
-}
-
-static void start_mqtt(void)
-{
-    esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = "mqtt://broker.hivemq.com"
-    };
-
-    mqtt_client = esp_mqtt_client_init(&cfg);
-    esp_mqtt_client_start(mqtt_client);
-}
-EOF
-
-          awk '
-          BEGIN{done=0}
-          /#include "app_rmaker.h"/ && done==0 {
-              print
-              while ((getline line < "/tmp/insert_block.c") > 0) print line
-              done=1
-              next
-          }
-          {print}
-          ' "$FILE" > /tmp/main.new && mv /tmp/main.new "$FILE"
-
-          sed -i '/app_rmaker_start()/a\
-    start_webserver();\
-    vTaskDelay(pdMS_TO_TICKS(5000));\
-    start_mqtt();' "$FILE"
+          grep -q web_ui_start $FILE || sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(2000)); \
+          web_ui_start(); \
+          vTaskDelay(pdMS_TO_TICKS(2000)); \
+          ap_fallback_start(); \
+          vTaskDelay(pdMS_TO_TICKS(2000)); \
+          mqtt_bridge_start();' $FILE
 
 # =====================================================
 # BUILD
@@ -151,26 +230,10 @@ EOF
           idf.py build
 
 # =====================================================
-# MERGED BIN
+# ARTIFACT (.BIN ONLY)
 # =====================================================
-      - name: Create Full Firmware BIN
-        run: |
-          cd examples/factory_demo/build
-          python /opt/esp/idf/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin -o full_firmware.bin \
-            --flash_mode dio \
-            --flash_freq 80m \
-            --flash_size 16MB \
-            0x0 bootloader/bootloader.bin \
-            0x8000 partition_table/partition-table.bin \
-            0xd000 ota_data_initial.bin \
-            0x10000 factory_demo.bin
-
-# =====================================================
-# ARTIFACT
-# =====================================================
-      - name: Upload BIN
+      - name: Upload BIN only
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-webui-golden-mqtt
-          path: examples/factory_demo/build/full_firmware.bin
+          name: esp32s3-box-golden-bin
+          path: examples/factory_demo/build/*.bin
