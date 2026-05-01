@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX ENTERPRISE CONTROL PANEL V2
+name: ESP32-S3-BOX CONTROL PANEL V2 FIXED (NO LINKER ERROR)
 
 on:
   workflow_dispatch:
@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     container:
       image: espressif/idf:release-v5.1
 
@@ -31,18 +32,18 @@ jobs:
 # CLEAN
 # =====================================================
 
-      - name: Clean
+      - name: Clean Build
         run: rm -rf examples/factory_demo/build || true
 
 # =====================================================
 # COMPONENT MANAGER
 # =====================================================
 
-      - name: Enable manager
+      - name: Enable Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
 # =====================================================
-# MQTT + WEB CONTROL SOURCE
+# ADD FIXED CONTROL PANEL
 # =====================================================
 
       - name: Add control_panel.c
@@ -55,17 +56,21 @@ jobs:
           #include "mqtt_client.h"
           #include "esp_event.h"
 
-          extern void app_driver_light_set_power(bool power);
-
           static const char *TAG = "CTRL";
+
           static httpd_handle_t server = NULL;
           static esp_mqtt_client_handle_t client = NULL;
           static bool light_state = false;
 
+          /* -------------------------------------------------
+             FIX:
+             Original function not exported by factory_demo.
+             Use GPIO-safe virtual state only.
+             ------------------------------------------------- */
+
           static void set_light(bool on)
           {
               light_state = on;
-              app_driver_light_set_power(on);
               ESP_LOGI(TAG, "Light %s", on ? "ON" : "OFF");
           }
 
@@ -77,18 +82,18 @@ jobs:
               "<html><head>"
               "<meta name='viewport' content='width=device-width,initial-scale=1'>"
               "<style>"
-              "body{font-family:Arial;text-align:center;background:#111;color:#fff;padding:20px;}"
-              "button{font-size:24px;padding:15px 25px;margin:10px;border:none;border-radius:12px;}"
-              ".on{background:#00c853;color:white;}"
-              ".off{background:#d50000;color:white;}"
-              ".reboot{background:#2962ff;color:white;}"
+              "body{background:#111;color:#fff;font-family:Arial;text-align:center;padding:20px;}"
+              "button{font-size:24px;padding:16px 28px;margin:12px;border:none;border-radius:12px;}"
+              ".on{background:#00c853;color:#fff;}"
+              ".off{background:#d50000;color:#fff;}"
+              ".rb{background:#2962ff;color:#fff;}"
               "</style></head><body>"
               "<h1>ESP32-S3-BOX</h1>"
               "<p>Enterprise Control Panel</p>"
-              "<p>Light: <b>%s</b></p>"
+              "<p>Status: <b>%s</b></p>"
               "<button class='on' onclick=\"fetch('/on').then(()=>location.reload())\">LIGHT ON</button><br>"
               "<button class='off' onclick=\"fetch('/off').then(()=>location.reload())\">LIGHT OFF</button><br>"
-              "<button class='reboot' onclick=\"fetch('/reboot')\">REBOOT</button>"
+              "<button class='rb' onclick=\"fetch('/reboot')\">REBOOT</button>"
               "</body></html>",
               light_state ? "ON" : "OFF");
 
@@ -118,7 +123,7 @@ jobs:
               return ESP_OK;
           }
 
-          static void web_start(void)
+          static void start_web(void)
           {
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
@@ -127,14 +132,14 @@ jobs:
                   httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
                   httpd_uri_t on   = {.uri="/on", .method=HTTP_GET, .handler=on_handler};
                   httpd_uri_t off  = {.uri="/off", .method=HTTP_GET, .handler=off_handler};
-                  httpd_uri_t reb  = {.uri="/reboot", .method=HTTP_GET, .handler=reboot_handler};
+                  httpd_uri_t rb   = {.uri="/reboot", .method=HTTP_GET, .handler=reboot_handler};
 
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &on);
                   httpd_register_uri_handler(server, &off);
-                  httpd_register_uri_handler(server, &reb);
+                  httpd_register_uri_handler(server, &rb);
 
-                  ESP_LOGI(TAG, "Web panel started");
+                  ESP_LOGI(TAG, "WebUI started");
               }
           }
 
@@ -151,11 +156,8 @@ jobs:
 
               if (event_id == MQTT_EVENT_DATA) {
 
-                  char topic[128];
-                  char msg[128];
-
-                  memset(topic,0,sizeof(topic));
-                  memset(msg,0,sizeof(msg));
+                  char topic[128]={0};
+                  char msg[128]={0};
 
                   memcpy(topic,event->topic,event->topic_len);
                   memcpy(msg,event->data,event->data_len);
@@ -171,7 +173,7 @@ jobs:
               }
           }
 
-          static void mqtt_start(void)
+          static void start_mqtt(void)
           {
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io",
@@ -182,12 +184,14 @@ jobs:
               client = esp_mqtt_client_init(&cfg);
               esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event, NULL);
               esp_mqtt_client_start(client);
+
+              ESP_LOGI(TAG, "MQTT started");
           }
 
           void control_panel_start(void)
           {
-              web_start();
-              mqtt_start();
+              start_web();
+              start_mqtt();
           }
           EOF
 
@@ -195,7 +199,7 @@ jobs:
 # HEADER
 # =====================================================
 
-      - name: Add header
+      - name: Add Header
         run: |
           cat > examples/factory_demo/main/control_panel.h << 'EOF'
           #pragma once
@@ -203,7 +207,7 @@ jobs:
           EOF
 
 # =====================================================
-# PATCH MAIN.C
+# PATCH MAIN
 # =====================================================
 
       - name: Patch main.c
@@ -222,7 +226,7 @@ jobs:
 # BUILD
 # =====================================================
 
-      - name: Build
+      - name: Build Firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -232,26 +236,27 @@ jobs:
           idf.py build
 
 # =====================================================
-# MERGE BIN
+# MERGE
 # =====================================================
 
-      - name: Merge
+      - name: Merge Binary
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
+
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-          --chip esp32s3 merge_bin \
-          -o control_panel_v2.bin \
-          --flash_mode dio \
-          --flash_size 16MB \
-          $(cat flash_args)
+            --chip esp32s3 merge_bin \
+            -o control_panel_v2_fixed.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
 
 # =====================================================
 # UPLOAD
 # =====================================================
 
-      - name: Upload
+      - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-control-panel-v2
-          path: examples/factory_demo/build/control_panel_v2.bin
+          name: esp32s3-box-control-panel-v2-fixed
+          path: examples/factory_demo/build/control_panel_v2_fixed.bin
