@@ -48,78 +48,90 @@ jobs:
       - name: Create Services Layer
         run: |
           mkdir -p examples/factory_demo/main/services
-
-# WEBUI
+          
           cat > examples/factory_demo/main/services/webui_service.c << 'EOF'
           #include "esp_http_server.h"
           #include "device_control_service.h"
-
+          
           static httpd_handle_t server;
-
+          
           static esp_err_t toggle(httpd_req_t *req)
           {
               device_toggle_light();
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
-
+          
           void webui_service_start(void)
           {
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
               httpd_start(&server, &config);
-
+          
               httpd_uri_t uri = {
                   .uri = "/toggle",
                   .method = HTTP_GET,
                   .handler = toggle
               };
-
+          
               httpd_register_uri_handler(server, &uri);
           }
           EOF
-
-# MQTT
+          
           cat > examples/factory_demo/main/services/mqtt_service.c << 'EOF'
           #include "mqtt_client.h"
           #include "esp_netif.h"
-
+          
           static esp_mqtt_client_handle_t client;
-
+          
           void mqtt_service_start(void)
           {
               while (!esp_netif_get_default_netif()) {
                   vTaskDelay(pdMS_TO_TICKS(1000));
               }
-
+          
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io"
               };
-
+          
               client = esp_mqtt_client_init(&cfg);
               esp_mqtt_client_start(client);
           }
           EOF
-
-# DEVICE
+          
           cat > examples/factory_demo/main/services/device_control_service.c << 'EOF'
           #include "app_driver.h"
           #include <stdbool.h>
-
+          
           static bool state = false;
-
+          
           void device_toggle_light(void)
           {
               state = !state;
               app_driver_light_set_power(state);
           }
           EOF
-
-# HEADER
+          
           cat > examples/factory_demo/main/services/services.h << 'EOF'
           #pragma once
+          
           void webui_service_start(void);
           void mqtt_service_start(void);
           void device_toggle_light(void);
+          EOF
+          
+          cat > examples/factory_demo/main/services/CMakeLists.txt << 'EOF'
+          idf_component_register(
+              SRCS 
+                  "webui_service.c"
+                  "mqtt_service.c"
+                  "device_control_service.c"
+              INCLUDE_DIRS 
+                  "."
+              REQUIRES 
+                  "esp_http_server"
+                  "mqtt"
+                  "esp_netif"
+          )
           EOF
 
 # =========================
@@ -129,14 +141,14 @@ jobs:
       - name: Patch main.c safely
         run: |
           FILE=examples/factory_demo/main/main.c
-
+          
           grep -q 'services.h' $FILE || \
           sed -i '/#include "app_rmaker.h"/a #include "services.h"' $FILE
-
+          
           grep -q 'webui_service_start' $FILE || \
           sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(8000)); \
-          webui_service_start(); \
+          vTaskDelay(pdMS_TO_TICKS(8000));\
+          webui_service_start();\
           mqtt_service_start();' $FILE
 
 # =========================
