@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX CONTROL PANEL V2 FIXED (NO LINKER ERROR)
+name: ESP32-S3-BOX SR SAFE FINAL
 
 on:
   workflow_dispatch:
@@ -33,194 +33,175 @@ jobs:
 # =====================================================
 
       - name: Clean Build
-        run: rm -rf examples/factory_demo/build || true
+        run: |
+          rm -rf examples/factory_demo/build || true
 
 # =====================================================
 # COMPONENT MANAGER
 # =====================================================
 
-      - name: Enable Manager
+      - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
 # =====================================================
-# ADD FIXED CONTROL PANEL
+# LIGHTWEIGHT WEBUI (SAFE)
 # =====================================================
 
-      - name: Add control_panel.c
+      - name: Add Safe WebUI
         run: |
-          cat > examples/factory_demo/main/control_panel.c << 'EOF'
-          #include <string.h>
-          #include "esp_log.h"
-          #include "esp_system.h"
+          cat > examples/factory_demo/main/web_safe.c << 'EOF'
           #include "esp_http_server.h"
-          #include "mqtt_client.h"
-          #include "esp_event.h"
+          #include "esp_log.h"
 
-          static const char *TAG = "CTRL";
+          static const char *TAG = "WEB";
 
-          static httpd_handle_t server = NULL;
-          static esp_mqtt_client_handle_t client = NULL;
           static bool light_state = false;
 
-          /* -------------------------------------------------
-             FIX:
-             Original function not exported by factory_demo.
-             Use GPIO-safe virtual state only.
-             ------------------------------------------------- */
-
-          static void set_light(bool on)
+          static esp_err_t root(httpd_req_t *req)
           {
-              light_state = on;
-              ESP_LOGI(TAG, "Light %s", on ? "ON" : "OFF");
-          }
-
-          static esp_err_t root_handler(httpd_req_t *req)
-          {
-              char html[4096];
-
-              snprintf(html, sizeof(html),
-              "<html><head>"
-              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-              "<style>"
-              "body{background:#111;color:#fff;font-family:Arial;text-align:center;padding:20px;}"
-              "button{font-size:24px;padding:16px 28px;margin:12px;border:none;border-radius:12px;}"
-              ".on{background:#00c853;color:#fff;}"
-              ".off{background:#d50000;color:#fff;}"
-              ".rb{background:#2962ff;color:#fff;}"
-              "</style></head><body>"
-              "<h1>ESP32-S3-BOX</h1>"
-              "<p>Enterprise Control Panel</p>"
-              "<p>Status: <b>%s</b></p>"
-              "<button class='on' onclick=\"fetch('/on').then(()=>location.reload())\">LIGHT ON</button><br>"
-              "<button class='off' onclick=\"fetch('/off').then(()=>location.reload())\">LIGHT OFF</button><br>"
-              "<button class='rb' onclick=\"fetch('/reboot')\">REBOOT</button>"
-              "</body></html>",
-              light_state ? "ON" : "OFF");
+              const char *html =
+              "<html><body style='font-family:Arial;text-align:center;'>"
+              "<h2>ESP32-S3-BOX</h2>"
+              "<p>SR SAFE BUILD</p>"
+              "<button onclick=\"fetch('/on')\">ON</button>"
+              "<button onclick=\"fetch('/off')\">OFF</button>"
+              "</body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          static esp_err_t on_handler(httpd_req_t *req)
+          static esp_err_t on(httpd_req_t *req)
           {
-              set_light(true);
-              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+              light_state = true;
+              ESP_LOGI(TAG,"LIGHT ON");
+              httpd_resp_send(req,"OK",HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          static esp_err_t off_handler(httpd_req_t *req)
+          static esp_err_t off(httpd_req_t *req)
           {
-              set_light(false);
-              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+              light_state = false;
+              ESP_LOGI(TAG,"LIGHT OFF");
+              httpd_resp_send(req,"OK",HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          static esp_err_t reboot_handler(httpd_req_t *req)
+          void web_safe_start(void)
           {
-              httpd_resp_send(req, "REBOOTING", HTTPD_RESP_USE_STRLEN);
-              vTaskDelay(pdMS_TO_TICKS(1000));
-              esp_restart();
-              return ESP_OK;
-          }
-
-          static void start_web(void)
-          {
+              httpd_handle_t server = NULL;
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
-              if (httpd_start(&server, &config) == ESP_OK) {
+              if (httpd_start(&server,&config) == ESP_OK) {
 
-                  httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
-                  httpd_uri_t on   = {.uri="/on", .method=HTTP_GET, .handler=on_handler};
-                  httpd_uri_t off  = {.uri="/off", .method=HTTP_GET, .handler=off_handler};
-                  httpd_uri_t rb   = {.uri="/reboot", .method=HTTP_GET, .handler=reboot_handler};
+                  httpd_uri_t u0 = {
+                      .uri="/",
+                      .method=HTTP_GET,
+                      .handler=root
+                  };
 
-                  httpd_register_uri_handler(server, &root);
-                  httpd_register_uri_handler(server, &on);
-                  httpd_register_uri_handler(server, &off);
-                  httpd_register_uri_handler(server, &rb);
+                  httpd_uri_t u1 = {
+                      .uri="/on",
+                      .method=HTTP_GET,
+                      .handler=on
+                  };
 
-                  ESP_LOGI(TAG, "WebUI started");
+                  httpd_uri_t u2 = {
+                      .uri="/off",
+                      .method=HTTP_GET,
+                      .handler=off
+                  };
+
+                  httpd_register_uri_handler(server,&u0);
+                  httpd_register_uri_handler(server,&u1);
+                  httpd_register_uri_handler(server,&u2);
+
+                  ESP_LOGI(TAG,"SAFE WEB STARTED");
               }
           }
+          EOF
 
-          static void mqtt_event(void *arg, esp_event_base_t base,
-                                 int32_t event_id, void *data)
+# =====================================================
+# SAFE MQTT
+# =====================================================
+
+      - name: Add Safe MQTT
+        run: |
+          cat > examples/factory_demo/main/mqtt_safe.c << 'EOF'
+          #include "mqtt_client.h"
+          #include "esp_log.h"
+          #include "esp_event.h"
+
+          static const char *TAG = "MQTT";
+          static esp_mqtt_client_handle_t client = NULL;
+
+          static void event_handler(void *arg,
+                                    esp_event_base_t base,
+                                    int32_t event_id,
+                                    void *data)
           {
-              esp_mqtt_event_handle_t event = data;
-
               if (event_id == MQTT_EVENT_CONNECTED) {
-                  esp_mqtt_client_subscribe(client, "esp32/box/light", 0);
-                  esp_mqtt_client_subscribe(client, "esp32/box/reboot", 0);
-                  ESP_LOGI(TAG, "MQTT connected");
+                  ESP_LOGI(TAG,"CONNECTED");
+                  esp_mqtt_client_subscribe(client,"esp32/box/cmd",0);
               }
 
               if (event_id == MQTT_EVENT_DATA) {
-
-                  char topic[128]={0};
-                  char msg[128]={0};
-
-                  memcpy(topic,event->topic,event->topic_len);
-                  memcpy(msg,event->data,event->data_len);
-
-                  if (!strcmp(topic,"esp32/box/light")) {
-                      if (!strcmp(msg,"on")) set_light(true);
-                      if (!strcmp(msg,"off")) set_light(false);
-                  }
-
-                  if (!strcmp(topic,"esp32/box/reboot")) {
-                      esp_restart();
-                  }
+                  ESP_LOGI(TAG,"DATA RX");
               }
           }
 
-          static void start_mqtt(void)
+          void mqtt_safe_start(void)
           {
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io",
-                  .credentials.client_id = "esp32-box-v2",
+                  .credentials.client_id = "esp32-safe",
                   .network.reconnect_timeout_ms = 5000
               };
 
               client = esp_mqtt_client_init(&cfg);
-              esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event, NULL);
+              esp_mqtt_client_register_event(client,
+                                             ESP_EVENT_ANY_ID,
+                                             event_handler,
+                                             NULL);
               esp_mqtt_client_start(client);
-
-              ESP_LOGI(TAG, "MQTT started");
-          }
-
-          void control_panel_start(void)
-          {
-              start_web();
-              start_mqtt();
           }
           EOF
 
 # =====================================================
-# HEADER
+# HEADERS
 # =====================================================
 
-      - name: Add Header
+      - name: Add Headers
         run: |
-          cat > examples/factory_demo/main/control_panel.h << 'EOF'
+          cat > examples/factory_demo/main/web_safe.h << 'EOF'
           #pragma once
-          void control_panel_start(void);
+          void web_safe_start(void);
+          EOF
+
+          cat > examples/factory_demo/main/mqtt_safe.h << 'EOF'
+          #pragma once
+          void mqtt_safe_start(void);
           EOF
 
 # =====================================================
-# PATCH MAIN
+# PATCH MAIN.C
 # =====================================================
 
-      - name: Patch main.c
+      - name: Patch Main Safely
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q 'control_panel.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "control_panel.h"' $FILE
+          grep -q 'web_safe.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "web_safe.h"' $FILE
 
-          grep -q 'control_panel_start();' $FILE || \
+          grep -q 'mqtt_safe.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "mqtt_safe.h"' $FILE
+
+          grep -q 'web_safe_start();' $FILE || \
           sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(8000));\
-          control_panel_start();' $FILE
+          vTaskDelay(pdMS_TO_TICKS(15000));\
+          web_safe_start();\
+          mqtt_safe_start();' $FILE
 
 # =====================================================
 # BUILD
@@ -236,20 +217,20 @@ jobs:
           idf.py build
 
 # =====================================================
-# MERGE
+# MERGE BIN
 # =====================================================
 
-      - name: Merge Binary
+      - name: Merge Firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o control_panel_v2_fixed.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
+          --chip esp32s3 merge_bin \
+          -o sr_safe_final.bin \
+          --flash_mode dio \
+          --flash_size 16MB \
+          $(cat flash_args)
 
 # =====================================================
 # UPLOAD
@@ -258,5 +239,5 @@ jobs:
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-control-panel-v2-fixed
-          path: examples/factory_demo/build/control_panel_v2_fixed.bin
+          name: esp32s3-box-sr-safe-final
+          path: examples/factory_demo/build/sr_safe_final.bin
