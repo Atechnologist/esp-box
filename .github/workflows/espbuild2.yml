@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX ULTIMATE BUILD (Voice + RainMaker + MQTT + WebUI + OTA)
+name: ESP32-S3-BOX ENTERPRISE FINAL BUILD
 
 on:
   workflow_dispatch:
@@ -25,14 +25,14 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe git
+      - name: Safe Git
         run: git config --global --add safe.directory '*'
 
 # =====================================================
 # CLEAN
 # =====================================================
 
-      - name: Clean build
+      - name: Clean Build
         run: |
           rm -rf examples/factory_demo/build || true
 
@@ -40,31 +40,46 @@ jobs:
 # ENABLE COMPONENT MANAGER
 # =====================================================
 
-      - name: Enable manager
+      - name: Enable Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
 # =====================================================
-# FIX COMPONENT CONFLICTS
+# FIX DEPENDENCIES
 # =====================================================
 
-      - name: Fix dependencies
+      - name: Fix Components
         run: |
           find . -name "idf_component.yml" -exec sed -i '/ili9341/d' {} \; || true
           find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
 
 # =====================================================
-# AP + STA WIFI MODE
+# WIFI APSTA + MQTT EVENT START
 # =====================================================
 
-      - name: Add APSTA fallback
+      - name: Add Enterprise Network Core
         run: |
-          cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
+          cat > examples/factory_demo/main/enterprise_net.c << 'EOF'
           #include "esp_wifi.h"
+          #include "esp_event.h"
           #include "esp_log.h"
+          #include "mqtt_bridge.h"
 
-          static const char *TAG = "WIFI";
+          static const char *TAG = "NET";
 
-          void start_ap_fallback(void)
+          static void net_event(void *arg,
+                                esp_event_base_t event_base,
+                                int32_t event_id,
+                                void *event_data)
+          {
+              if (event_base == IP_EVENT &&
+                  event_id == IP_EVENT_STA_GOT_IP) {
+
+                  ESP_LOGI(TAG, "STA GOT IP -> Start MQTT");
+                  mqtt_bridge_start();
+              }
+          }
+
+          void enterprise_network_start(void)
           {
               wifi_config_t ap = {
                   .ap = {
@@ -76,11 +91,16 @@ jobs:
                   }
               };
 
+              esp_event_handler_register(IP_EVENT,
+                                         IP_EVENT_STA_GOT_IP,
+                                         &net_event,
+                                         NULL);
+
               esp_wifi_set_mode(WIFI_MODE_APSTA);
               esp_wifi_set_config(WIFI_IF_AP, &ap);
               esp_wifi_start();
 
-              ESP_LOGI(TAG, "APSTA mode started");
+              ESP_LOGI(TAG, "APSTA started");
           }
           EOF
 
@@ -96,22 +116,15 @@ jobs:
 
           static const char *TAG = "WEB";
 
-          static esp_err_t root_handler(httpd_req_t *req)
+          static esp_err_t root(httpd_req_t *req)
           {
               const char html[] =
-              "<html><body style='font-family:sans-serif;text-align:center;'>"
+              "<html><body style='text-align:center;font-family:sans-serif;'>"
               "<h1>ESP32-S3-BOX</h1>"
-              "<p>Ultimate Firmware Running</p>"
-              "<button onclick=\"fetch('/ping')\">PING</button>"
+              "<p>Enterprise Firmware Online</p>"
               "</body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
-
-          static esp_err_t ping_handler(httpd_req_t *req)
-          {
-              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
@@ -122,31 +135,23 @@ jobs:
 
               if (httpd_start(&server, &config) == ESP_OK) {
 
-                  httpd_uri_t root = {
+                  httpd_uri_t uri = {
                       .uri = "/",
                       .method = HTTP_GET,
-                      .handler = root_handler
+                      .handler = root
                   };
 
-                  httpd_uri_t ping = {
-                      .uri = "/ping",
-                      .method = HTTP_GET,
-                      .handler = ping_handler
-                  };
-
-                  httpd_register_uri_handler(server, &root);
-                  httpd_register_uri_handler(server, &ping);
-
+                  httpd_register_uri_handler(server, &uri);
                   ESP_LOGI(TAG, "WebUI started");
               }
           }
           EOF
 
 # =====================================================
-# MQTT
+# MQTT PRO
 # =====================================================
 
-      - name: Add MQTT
+      - name: Add MQTT Pro
         run: |
           cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
           #include "mqtt_client.h"
@@ -156,19 +161,26 @@ jobs:
           static const char *TAG = "MQTT";
           static esp_mqtt_client_handle_t client = NULL;
 
-          static void mqtt_event(void *handler_args,
+          static void mqtt_event(void *arg,
                                  esp_event_base_t base,
                                  int32_t event_id,
-                                 void *event_data)
+                                 void *data)
           {
               switch(event_id) {
+
                   case MQTT_EVENT_CONNECTED:
-                      ESP_LOGI(TAG, "Connected");
-                      esp_mqtt_client_subscribe(client, "esp32/box/cmd", 0);
+                      ESP_LOGI(TAG, "CONNECTED");
+                      esp_mqtt_client_subscribe(client,
+                                                "esp32/box/cmd",
+                                                0);
+                      break;
+
+                  case MQTT_EVENT_DISCONNECTED:
+                      ESP_LOGI(TAG, "DISCONNECTED");
                       break;
 
                   case MQTT_EVENT_DATA:
-                      ESP_LOGI(TAG, "Message received");
+                      ESP_LOGI(TAG, "DATA RX");
                       break;
 
                   default:
@@ -178,13 +190,21 @@ jobs:
 
           void mqtt_bridge_start(void)
           {
+              if (client != NULL) return;
+
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io",
-                  .credentials.client_id = "esp32s3-box"
+                  .credentials.client_id = "esp32s3-enterprise",
+                  .network.reconnect_timeout_ms = 5000
               };
 
               client = esp_mqtt_client_init(&cfg);
-              esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event, NULL);
+
+              esp_mqtt_client_register_event(client,
+                                             ESP_EVENT_ANY_ID,
+                                             mqtt_event,
+                                             NULL);
+
               esp_mqtt_client_start(client);
 
               ESP_LOGI(TAG, "MQTT started");
@@ -195,12 +215,12 @@ jobs:
 # HEADERS
 # =====================================================
 
-      - name: Create headers
+      - name: Headers
         run: |
 
-          cat > examples/factory_demo/main/ap_fallback.h << 'EOF'
+          cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
           #pragma once
-          void start_ap_fallback(void);
+          void mqtt_bridge_start(void);
           EOF
 
           cat > examples/factory_demo/main/web_server.h << 'EOF'
@@ -208,9 +228,9 @@ jobs:
           void web_server_start(void);
           EOF
 
-          cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
+          cat > examples/factory_demo/main/enterprise_net.h << 'EOF'
           #pragma once
-          void mqtt_bridge_start(void);
+          void enterprise_network_start(void);
           EOF
 
 # =====================================================
@@ -221,31 +241,23 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          sed -i '/web_server.c/d' $FILE || true
-          sed -i '/mqtt_bridge.c/d' $FILE || true
-          sed -i '/ap_fallback.c/d' $FILE || true
+          grep -q 'enterprise_net.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "enterprise_net.h"' $FILE
 
           grep -q 'web_server.h' $FILE || \
           sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
 
-          grep -q 'mqtt_bridge.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "mqtt_bridge.h"' $FILE
-
-          grep -q 'ap_fallback.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "ap_fallback.h"' $FILE
-
-          grep -q 'web_server_start();' $FILE || \
+          grep -q 'enterprise_network_start();' $FILE || \
           sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(8000));\
-          start_ap_fallback();\
-          web_server_start();\
-          mqtt_bridge_start();' $FILE
+          vTaskDelay(pdMS_TO_TICKS(5000));\
+          enterprise_network_start();\
+          web_server_start();' $FILE
 
 # =====================================================
 # BUILD
 # =====================================================
 
-      - name: Build firmware
+      - name: Build Firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -258,14 +270,14 @@ jobs:
 # MERGE BIN
 # =====================================================
 
-      - name: Merge firmware
+      - name: Merge Binary
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
-            -o ultimate_box.bin \
+            -o enterprise_final.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
@@ -274,8 +286,8 @@ jobs:
 # UPLOAD
 # =====================================================
 
-      - name: Upload artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-ultimate
-          path: examples/factory_demo/build/ultimate_box.bin
+          name: esp32s3-box-enterprise-final
+          path: examples/factory_demo/build/enterprise_final.bin
