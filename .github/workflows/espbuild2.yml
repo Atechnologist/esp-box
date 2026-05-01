@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX ENTERPRISE ARCH V2 (STABLE SYSTEM)
+name: ESP32-S3-BOX ENTERPRISE ARCH V2 (STABLE SYSTEM FIXED)
 
 on:
   workflow_dispatch:
@@ -14,134 +14,99 @@ jobs:
 
     steps:
 
-# =====================================================
-# CHECKOUT CORE
-# =====================================================
+# =========================
+# CHECKOUT
+# =========================
 
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
           repository: espressif/esp-box
           submodules: recursive
-          fetch-depth: 0
 
       - name: Safe Git Directory
         run: git config --global --add safe.directory '*'
 
-# =====================================================
-# CLEAN BUILD (IMPORTANT STABILITY FIX)
-# =====================================================
+# =========================
+# CLEAN
+# =========================
 
-      - name: Clean Build System
-        run: |
-          rm -rf examples/factory_demo/build || true
-          rm -rf build || true
+      - name: Clean Build
+        run: rm -rf examples/factory_demo/build || true
 
-# =====================================================
-# ENABLE COMPONENT MANAGER (NO PATCHING)
-# =====================================================
+# =========================
+# COMPONENT MANAGER
+# =========================
 
-      - name: Enable IDF Component Manager
+      - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
-# =====================================================
-# CREATE ENTERPRISE SERVICE LAYER (SAFE EXTENSION ONLY)
-# =====================================================
+# =========================
+# SERVICES LAYER
+# =========================
 
-      - name: Inject Enterprise Services Layer
+      - name: Create Services Layer
         run: |
           mkdir -p examples/factory_demo/main/services
 
-# =====================================================
-# WEB UI SERVICE
-# =====================================================
-
-      - name: Create WebUI Service
-        run: |
+# WEBUI
           cat > examples/factory_demo/main/services/webui_service.c << 'EOF'
           #include "esp_http_server.h"
-          #include "esp_log.h"
           #include "device_control_service.h"
-          
-          static const char *TAG = "WEBUI";
+
           static httpd_handle_t server;
-          
+
           static esp_err_t toggle(httpd_req_t *req)
           {
               device_toggle_light();
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
-          
+
           void webui_service_start(void)
           {
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
               httpd_start(&server, &config);
-          
+
               httpd_uri_t uri = {
                   .uri = "/toggle",
                   .method = HTTP_GET,
                   .handler = toggle
               };
-          
+
               httpd_register_uri_handler(server, &uri);
-              ESP_LOGI(TAG, "WebUI started");
           }
           EOF
 
-# =====================================================
-# MQTT SERVICE
-# =====================================================
-
-      - name: Create MQTT Service
-        run: |
+# MQTT
           cat > examples/factory_demo/main/services/mqtt_service.c << 'EOF'
           #include "mqtt_client.h"
-          #include "esp_log.h"
           #include "esp_netif.h"
-          
-          static const char *TAG = "MQTT";
+
           static esp_mqtt_client_handle_t client;
-          
-          static void event_handler(void *arg, esp_event_base_t base,
-                                    int32_t event_id, void *data)
-          {
-              if (event_id == MQTT_EVENT_CONNECTED) {
-                  esp_mqtt_client_subscribe(client, "box/cmd", 0);
-                  ESP_LOGI(TAG, "MQTT Connected");
-              }
-          }
-          
+
           void mqtt_service_start(void)
           {
               while (!esp_netif_get_default_netif()) {
                   vTaskDelay(pdMS_TO_TICKS(1000));
               }
-          
+
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io"
               };
-          
+
               client = esp_mqtt_client_init(&cfg);
-              esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, event_handler, NULL);
               esp_mqtt_client_start(client);
-          
-              ESP_LOGI(TAG, "MQTT Started");
           }
           EOF
 
-# =====================================================
-# DEVICE CONTROL SERVICE
-# =====================================================
-
-      - name: Create Device Control Service
-        run: |
+# DEVICE
           cat > examples/factory_demo/main/services/device_control_service.c << 'EOF'
           #include "app_driver.h"
           #include <stdbool.h>
-          
+
           static bool state = false;
-          
+
           void device_toggle_light(void)
           {
               state = !state;
@@ -149,76 +114,44 @@ jobs:
           }
           EOF
 
-# =====================================================
-# DEVICE CONTROL HEADER
-# =====================================================
-
-      - name: Create Device Control Header
-        run: |
-          cat > examples/factory_demo/main/services/device_control_service.h << 'EOF'
-          #pragma once
-          
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-          
-          void device_toggle_light(void);
-          
-          #ifdef __cplusplus
-          }
-          #endif
-          EOF
-
-# =====================================================
-# SERVICES HEADER FILE
-# =====================================================
-
-      - name: Create Services Header
-        run: |
+# HEADER
           cat > examples/factory_demo/main/services/services.h << 'EOF'
           #pragma once
-          
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-          
           void webui_service_start(void);
           void mqtt_service_start(void);
           void device_toggle_light(void);
-          
-          #ifdef __cplusplus
-          }
-          #endif
           EOF
 
-# =====================================================
-# PATCH MAIN.C (SAFE HOOK ONLY)
-# =====================================================
+# =========================
+# PATCH MAIN (SAFE FIX)
+# =========================
 
       - name: Patch main.c safely
         run: |
           FILE=examples/factory_demo/main/main.c
-          
+
           grep -q 'services.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "services/services.h"' $FILE
-          
+          sed -i '/#include "app_rmaker.h"/a #include "services.h"' $FILE
+
           grep -q 'webui_service_start' $FILE || \
           sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(8000));\
-          webui_service_start();\
+          vTaskDelay(pdMS_TO_TICKS(8000)); \
+          webui_service_start(); \
           mqtt_service_start();' $FILE
 
-# =====================================================
-# FIX SDK CONFIG (STABILITY)
-# =====================================================
+# =========================
+# SDKCONFIG SAFE COPY
+# =========================
 
-      - name: Fix SDK Config Safety
+      - name: Prepare SDK Config
         run: |
-          cp examples/factory_demo/sdkconfig.ci.box examples/factory_demo/sdkconfig
+          if [ -f examples/factory_demo/sdkconfig.ci.box ]; then
+            cp examples/factory_demo/sdkconfig.ci.box examples/factory_demo/sdkconfig
+          fi
 
-# =====================================================
-# BUILD SYSTEM
-# =====================================================
+# =========================
+# BUILD
+# =========================
 
       - name: Build Firmware
         run: |
@@ -228,27 +161,12 @@ jobs:
           idf.py reconfigure
           idf.py build
 
-# =====================================================
-# MERGE BINARIES
-# =====================================================
-
-      - name: Merge Firmware
-        run: |
-          . $IDF_PATH/export.sh
-          cd examples/factory_demo/build
-          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o enterprise_arch_v2.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-# =====================================================
-# ARTIFACT OUTPUT
-# =====================================================
+# =========================
+# ARTIFACT
+# =========================
 
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-enterprise-arch-v2
-          path: examples/factory_demo/build/enterprise_arch_v2.bin
+          name: enterprise-arch-v2
+          path: examples/factory_demo/build/*.bin
