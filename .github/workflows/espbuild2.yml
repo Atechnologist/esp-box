@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX ENTERPRISE FINAL BUILD
+name: ESP32-S3-BOX ENTERPRISE CONTROL PANEL V2
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     container:
       image: espressif/idf:release-v5.1
 
@@ -32,205 +31,175 @@ jobs:
 # CLEAN
 # =====================================================
 
-      - name: Clean Build
-        run: |
-          rm -rf examples/factory_demo/build || true
+      - name: Clean
+        run: rm -rf examples/factory_demo/build || true
 
 # =====================================================
-# ENABLE COMPONENT MANAGER
+# COMPONENT MANAGER
 # =====================================================
 
-      - name: Enable Manager
+      - name: Enable manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
 # =====================================================
-# FIX DEPENDENCIES
+# MQTT + WEB CONTROL SOURCE
 # =====================================================
 
-      - name: Fix Components
+      - name: Add control_panel.c
         run: |
-          find . -name "idf_component.yml" -exec sed -i '/ili9341/d' {} \; || true
-          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
-
-# =====================================================
-# WIFI APSTA + MQTT EVENT START
-# =====================================================
-
-      - name: Add Enterprise Network Core
-        run: |
-          cat > examples/factory_demo/main/enterprise_net.c << 'EOF'
-          #include "esp_wifi.h"
-          #include "esp_event.h"
+          cat > examples/factory_demo/main/control_panel.c << 'EOF'
+          #include <string.h>
           #include "esp_log.h"
-          #include "mqtt_bridge.h"
-
-          static const char *TAG = "NET";
-
-          static void net_event(void *arg,
-                                esp_event_base_t event_base,
-                                int32_t event_id,
-                                void *event_data)
-          {
-              if (event_base == IP_EVENT &&
-                  event_id == IP_EVENT_STA_GOT_IP) {
-
-                  ESP_LOGI(TAG, "STA GOT IP -> Start MQTT");
-                  mqtt_bridge_start();
-              }
-          }
-
-          void enterprise_network_start(void)
-          {
-              wifi_config_t ap = {
-                  .ap = {
-                      .ssid = "ESP32-BOX-SETUP",
-                      .password = "12345678",
-                      .channel = 6,
-                      .max_connection = 4,
-                      .authmode = WIFI_AUTH_WPA_WPA2_PSK
-                  }
-              };
-
-              esp_event_handler_register(IP_EVENT,
-                                         IP_EVENT_STA_GOT_IP,
-                                         &net_event,
-                                         NULL);
-
-              esp_wifi_set_mode(WIFI_MODE_APSTA);
-              esp_wifi_set_config(WIFI_IF_AP, &ap);
-              esp_wifi_start();
-
-              ESP_LOGI(TAG, "APSTA started");
-          }
-          EOF
-
-# =====================================================
-# WEB UI
-# =====================================================
-
-      - name: Add WebUI
-        run: |
-          cat > examples/factory_demo/main/web_server.c << 'EOF'
+          #include "esp_system.h"
           #include "esp_http_server.h"
-          #include "esp_log.h"
+          #include "mqtt_client.h"
+          #include "esp_event.h"
 
-          static const char *TAG = "WEB";
+          extern void app_driver_light_set_power(bool power);
 
-          static esp_err_t root(httpd_req_t *req)
+          static const char *TAG = "CTRL";
+          static httpd_handle_t server = NULL;
+          static esp_mqtt_client_handle_t client = NULL;
+          static bool light_state = false;
+
+          static void set_light(bool on)
           {
-              const char html[] =
-              "<html><body style='text-align:center;font-family:sans-serif;'>"
+              light_state = on;
+              app_driver_light_set_power(on);
+              ESP_LOGI(TAG, "Light %s", on ? "ON" : "OFF");
+          }
+
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              char html[4096];
+
+              snprintf(html, sizeof(html),
+              "<html><head>"
+              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+              "<style>"
+              "body{font-family:Arial;text-align:center;background:#111;color:#fff;padding:20px;}"
+              "button{font-size:24px;padding:15px 25px;margin:10px;border:none;border-radius:12px;}"
+              ".on{background:#00c853;color:white;}"
+              ".off{background:#d50000;color:white;}"
+              ".reboot{background:#2962ff;color:white;}"
+              "</style></head><body>"
               "<h1>ESP32-S3-BOX</h1>"
-              "<p>Enterprise Firmware Online</p>"
-              "</body></html>";
+              "<p>Enterprise Control Panel</p>"
+              "<p>Light: <b>%s</b></p>"
+              "<button class='on' onclick=\"fetch('/on').then(()=>location.reload())\">LIGHT ON</button><br>"
+              "<button class='off' onclick=\"fetch('/off').then(()=>location.reload())\">LIGHT OFF</button><br>"
+              "<button class='reboot' onclick=\"fetch('/reboot')\">REBOOT</button>"
+              "</body></html>",
+              light_state ? "ON" : "OFF");
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          void web_server_start(void)
+          static esp_err_t on_handler(httpd_req_t *req)
+          {
+              set_light(true);
+              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          static esp_err_t off_handler(httpd_req_t *req)
+          {
+              set_light(false);
+              httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          static esp_err_t reboot_handler(httpd_req_t *req)
+          {
+              httpd_resp_send(req, "REBOOTING", HTTPD_RESP_USE_STRLEN);
+              vTaskDelay(pdMS_TO_TICKS(1000));
+              esp_restart();
+              return ESP_OK;
+          }
+
+          static void web_start(void)
           {
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-              httpd_handle_t server = NULL;
 
               if (httpd_start(&server, &config) == ESP_OK) {
 
-                  httpd_uri_t uri = {
-                      .uri = "/",
-                      .method = HTTP_GET,
-                      .handler = root
-                  };
+                  httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
+                  httpd_uri_t on   = {.uri="/on", .method=HTTP_GET, .handler=on_handler};
+                  httpd_uri_t off  = {.uri="/off", .method=HTTP_GET, .handler=off_handler};
+                  httpd_uri_t reb  = {.uri="/reboot", .method=HTTP_GET, .handler=reboot_handler};
 
-                  httpd_register_uri_handler(server, &uri);
-                  ESP_LOGI(TAG, "WebUI started");
-              }
-          }
-          EOF
+                  httpd_register_uri_handler(server, &root);
+                  httpd_register_uri_handler(server, &on);
+                  httpd_register_uri_handler(server, &off);
+                  httpd_register_uri_handler(server, &reb);
 
-# =====================================================
-# MQTT PRO
-# =====================================================
-
-      - name: Add MQTT Pro
-        run: |
-          cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
-          #include "mqtt_client.h"
-          #include "esp_log.h"
-          #include "esp_event.h"
-
-          static const char *TAG = "MQTT";
-          static esp_mqtt_client_handle_t client = NULL;
-
-          static void mqtt_event(void *arg,
-                                 esp_event_base_t base,
-                                 int32_t event_id,
-                                 void *data)
-          {
-              switch(event_id) {
-
-                  case MQTT_EVENT_CONNECTED:
-                      ESP_LOGI(TAG, "CONNECTED");
-                      esp_mqtt_client_subscribe(client,
-                                                "esp32/box/cmd",
-                                                0);
-                      break;
-
-                  case MQTT_EVENT_DISCONNECTED:
-                      ESP_LOGI(TAG, "DISCONNECTED");
-                      break;
-
-                  case MQTT_EVENT_DATA:
-                      ESP_LOGI(TAG, "DATA RX");
-                      break;
-
-                  default:
-                      break;
+                  ESP_LOGI(TAG, "Web panel started");
               }
           }
 
-          void mqtt_bridge_start(void)
+          static void mqtt_event(void *arg, esp_event_base_t base,
+                                 int32_t event_id, void *data)
           {
-              if (client != NULL) return;
+              esp_mqtt_event_handle_t event = data;
 
+              if (event_id == MQTT_EVENT_CONNECTED) {
+                  esp_mqtt_client_subscribe(client, "esp32/box/light", 0);
+                  esp_mqtt_client_subscribe(client, "esp32/box/reboot", 0);
+                  ESP_LOGI(TAG, "MQTT connected");
+              }
+
+              if (event_id == MQTT_EVENT_DATA) {
+
+                  char topic[128];
+                  char msg[128];
+
+                  memset(topic,0,sizeof(topic));
+                  memset(msg,0,sizeof(msg));
+
+                  memcpy(topic,event->topic,event->topic_len);
+                  memcpy(msg,event->data,event->data_len);
+
+                  if (!strcmp(topic,"esp32/box/light")) {
+                      if (!strcmp(msg,"on")) set_light(true);
+                      if (!strcmp(msg,"off")) set_light(false);
+                  }
+
+                  if (!strcmp(topic,"esp32/box/reboot")) {
+                      esp_restart();
+                  }
+              }
+          }
+
+          static void mqtt_start(void)
+          {
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io",
-                  .credentials.client_id = "esp32s3-enterprise",
+                  .credentials.client_id = "esp32-box-v2",
                   .network.reconnect_timeout_ms = 5000
               };
 
               client = esp_mqtt_client_init(&cfg);
-
-              esp_mqtt_client_register_event(client,
-                                             ESP_EVENT_ANY_ID,
-                                             mqtt_event,
-                                             NULL);
-
+              esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event, NULL);
               esp_mqtt_client_start(client);
+          }
 
-              ESP_LOGI(TAG, "MQTT started");
+          void control_panel_start(void)
+          {
+              web_start();
+              mqtt_start();
           }
           EOF
 
 # =====================================================
-# HEADERS
+# HEADER
 # =====================================================
 
-      - name: Headers
+      - name: Add header
         run: |
-
-          cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
+          cat > examples/factory_demo/main/control_panel.h << 'EOF'
           #pragma once
-          void mqtt_bridge_start(void);
-          EOF
-
-          cat > examples/factory_demo/main/web_server.h << 'EOF'
-          #pragma once
-          void web_server_start(void);
-          EOF
-
-          cat > examples/factory_demo/main/enterprise_net.h << 'EOF'
-          #pragma once
-          void enterprise_network_start(void);
+          void control_panel_start(void);
           EOF
 
 # =====================================================
@@ -241,23 +210,19 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q 'enterprise_net.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "enterprise_net.h"' $FILE
+          grep -q 'control_panel.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "control_panel.h"' $FILE
 
-          grep -q 'web_server.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
-
-          grep -q 'enterprise_network_start();' $FILE || \
+          grep -q 'control_panel_start();' $FILE || \
           sed -i '/app_rmaker_start()/a \
-          vTaskDelay(pdMS_TO_TICKS(5000));\
-          enterprise_network_start();\
-          web_server_start();' $FILE
+          vTaskDelay(pdMS_TO_TICKS(8000));\
+          control_panel_start();' $FILE
 
 # =====================================================
 # BUILD
 # =====================================================
 
-      - name: Build Firmware
+      - name: Build
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -270,24 +235,23 @@ jobs:
 # MERGE BIN
 # =====================================================
 
-      - name: Merge Binary
+      - name: Merge
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
-
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o enterprise_final.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
+          --chip esp32s3 merge_bin \
+          -o control_panel_v2.bin \
+          --flash_mode dio \
+          --flash_size 16MB \
+          $(cat flash_args)
 
 # =====================================================
 # UPLOAD
 # =====================================================
 
-      - name: Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-enterprise-final
-          path: examples/factory_demo/build/enterprise_final.bin
+          name: esp32s3-box-control-panel-v2
+          path: examples/factory_demo/build/control_panel_v2.bin
