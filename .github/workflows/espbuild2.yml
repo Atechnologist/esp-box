@@ -49,18 +49,56 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/ili9341/d' {} \; || true
 
       # ---------------------------
-      # CREATE AP FALLBACK (SAFE COMPONENT)
+      # CREATE AP FALLBACK (IMPROVED - WAITS FOR WIFI TIMEOUT)
       # ---------------------------
       - name: Add AP fallback
         run: |
           cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
           #include "esp_wifi.h"
           #include "esp_log.h"
+          #include "esp_event.h"
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
           
           static const char *TAG = "AP_FALLBACK";
+          static uint8_t wifi_fail_count = 0;
+          static const uint8_t WIFI_FAIL_THRESHOLD = 5;
+          static bool ap_started = false;
+          
+          static void wifi_event_handler(void *arg, esp_event_base_t event_base,
+                                        int32_t event_id, void *event_data)
+          {
+              if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+                  wifi_fail_count++;
+                  ESP_LOGI(TAG, "WiFi disconnected, attempt %d/%d", 
+                          wifi_fail_count, WIFI_FAIL_THRESHOLD);
+                  
+                  if (wifi_fail_count >= WIFI_FAIL_THRESHOLD && !ap_started) {
+                      start_ap_fallback();
+                  }
+              } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+                  wifi_fail_count = 0;
+                  ESP_LOGI(TAG, "WiFi connected, resetting fail counter");
+              }
+          }
+          
+          void ap_fallback_init(void)
+          {
+              esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
+                                        wifi_event_handler, NULL);
+              esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, 
+                                        wifi_event_handler, NULL);
+          }
           
           void start_ap_fallback(void)
           {
+              if (ap_started) {
+                  return;
+              }
+              
+              ap_started = true;
+              ESP_LOGI(TAG, "Starting AP fallback mode");
+              
               wifi_config_t ap_config = {
                   .ap = {
                       .ssid = "ESP32-BOX-SETUP",
@@ -70,10 +108,12 @@ jobs:
                       .authmode = WIFI_AUTH_WPA_WPA2_PSK
                   }
               };
-              esp_wifi_set_mode(WIFI_MODE_AP);
+              
+              esp_wifi_set_mode(WIFI_MODE_APSTA);
               esp_wifi_set_config(WIFI_IF_AP, &ap_config);
               esp_wifi_start();
-              ESP_LOGI(TAG, "AP fallback started");
+              
+              ESP_LOGI(TAG, "AP fallback started on SSID: ESP32-BOX-SETUP");
           }
           EOF
 
@@ -96,6 +136,7 @@ jobs:
               const char html[] =
               "<html><body style='text-align:center;'>"
               "<h1>ESP32-S3-BOX</h1>"
+              "<p>WiFi: Connected</p>"
               "<button onclick=\"fetch('/toggle')\">Toggle LED</button>"
               "</body></html>";
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
@@ -127,13 +168,13 @@ jobs:
                   };
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &toggle);
-                  ESP_LOGI(TAG, "Web server started");
+                  ESP_LOGI(TAG, "Web server started on port 80");
               }
           }
           EOF
 
       # ---------------------------
-      # CREATE MQTT BRIDGE
+      # CREATE MQTT BRIDGE (IMPROVED - WAITS FOR WIFI)
       # ---------------------------
       - name: Add MQTT Bridge
         run: |
@@ -141,9 +182,12 @@ jobs:
           #include "mqtt_client.h"
           #include "esp_log.h"
           #include "esp_event.h"
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
           
           static const char *TAG = "MQTT_BRIDGE";
           static esp_mqtt_client_handle_t mqtt_client = NULL;
+          static bool mqtt_enabled = false;
           
           static void mqtt_event_handler(void *handler_args, esp_event_base_t base, 
                                         int32_t event_id, void *event_data)
@@ -151,36 +195,59 @@ jobs:
               esp_mqtt_event_handle_t event = event_data;
               switch (event->event_id) {
                   case MQTT_EVENT_CONNECTED:
-                      ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+                      ESP_LOGI(TAG, "MQTT connected, subscribing to topics");
                       esp_mqtt_client_subscribe(mqtt_client, "esp32/led", 0);
+                      esp_mqtt_client_subscribe(mqtt_client, "esp32/cmd", 0);
                       break;
                   case MQTT_EVENT_DISCONNECTED:
-                      ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+                      ESP_LOGI(TAG, "MQTT disconnected");
                       break;
                   case MQTT_EVENT_DATA:
-                      ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+                      ESP_LOGI(TAG, "MQTT data received on topic: %.*s", 
+                              event->topic_len, event->topic);
+                      break;
+                  case MQTT_EVENT_ERROR:
+                      ESP_LOGE(TAG, "MQTT error: %d", event->error_handle->error_type);
                       break;
                   default:
                       break;
               }
           }
           
-          void mqtt_bridge_start(void)
+          static void mqtt_task(void *pvParameters)
           {
-              if (mqtt_client != NULL) {
-                  return;
-              }
+              vTaskDelay(pdMS_TO_TICKS(8000));
+              
+              ESP_LOGI(TAG, "Initializing MQTT client");
               
               esp_mqtt_client_config_t mqtt_cfg = {
-                  .broker.address.uri = "mqtt://broker.hivemq.com",
-                  .credentials.client_id = "esp32-box-client"
+                  .broker.address.uri = "mqtt://broker.hivemq.com:1883",
+                  .credentials.client_id = "esp32-box-client",
+                  .network.reconnect_timeout_ms = 10000,
               };
               
               mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
-              esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, 
-                                            mqtt_event_handler, NULL);
-              esp_mqtt_client_start(mqtt_client);
-              ESP_LOGI(TAG, "MQTT bridge started");
+              
+              if (mqtt_client) {
+                  esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, 
+                                                mqtt_event_handler, NULL);
+                  esp_mqtt_client_start(mqtt_client);
+                  ESP_LOGI(TAG, "MQTT bridge started");
+              } else {
+                  ESP_LOGE(TAG, "Failed to initialize MQTT client");
+              }
+              
+              vTaskDelete(NULL);
+          }
+          
+          void mqtt_bridge_start(void)
+          {
+              if (mqtt_enabled) {
+                  return;
+              }
+              
+              mqtt_enabled = true;
+              xTaskCreatePinnedToCore(mqtt_task, "mqtt_task", 4096, NULL, 5, NULL, 1);
           }
           
           void mqtt_bridge_publish(const char *topic, const char *data)
@@ -192,9 +259,9 @@ jobs:
           EOF
 
       # ---------------------------
-      # CREATE HEADERS (FIX YOUR ERROR)
+      # CREATE HEADERS
       # ---------------------------
-      - name: Add web_server.h (FIX CRASH)
+      - name: Add web_server.h
         run: |
           cat > examples/factory_demo/main/web_server.h << 'EOF'
           #pragma once
@@ -219,6 +286,7 @@ jobs:
           extern "C" {
           #endif
           
+          void ap_fallback_init(void);
           void start_ap_fallback(void);
           
           #ifdef __cplusplus
@@ -244,33 +312,29 @@ jobs:
           EOF
 
       # ---------------------------
-      # PATCH CMakeLists.txt (PROPER WAY)
+      # PATCH CMakeLists.txt
       # ---------------------------
       - name: Patch CMakeLists.txt
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
           
-          # Add extension source files to SRCS line
           if ! grep -q "ap_fallback.c" $FILE; then
             sed -i '/SRCS.*main\.c/s/.*/& ap_fallback.c web_server.c mqtt_bridge.c/' $FILE
           fi
 
       # ---------------------------
-      # FIX main.c SAFELY (APPEND ONLY, NO INCLUDES)
+      # FIX main.c SAFELY
       # ---------------------------
-      - name: Patch main.c safely - Add includes at END of includes
+      - name: Patch main.c safely - Add includes
         run: |
           FILE=examples/factory_demo/main/main.c
           
-          # Find the last #include line and add our includes after it
           LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
           
-          # Remove any bad includes we may have added
           sed -i '/web_server.h/d' $FILE || true
           sed -i '/ap_fallback.h/d' $FILE || true
           sed -i '/mqtt_bridge.h/d' $FILE || true
           
-          # Add includes after last existing include
           sed -i "${LAST_INCLUDE}a\\
           #include \"web_server.h\"\n#include \"ap_fallback.h\"\n#include \"mqtt_bridge.h\"" $FILE
 
@@ -278,17 +342,19 @@ jobs:
         run: |
           FILE=examples/factory_demo/main/main.c
           
-          # Remove duplicate function calls if they exist
           sed -i '/web_server_start()/d' $FILE || true
           sed -i '/start_ap_fallback()/d' $FILE || true
+          sed -i '/ap_fallback_init()/d' $FILE || true
           sed -i '/mqtt_bridge_start()/d' $FILE || true
           
-          # Add function calls after app_rmaker_start()
+          grep -q 'ap_fallback_init' $FILE || \
+          sed -i '/app_rmaker_start()/i \
+          ap_fallback_init();' $FILE
+          
           grep -q 'web_server_start' $FILE || \
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(4000));\
           web_server_start();\
-          start_ap_fallback();\
           mqtt_bridge_start();' $FILE
 
       # ---------------------------
