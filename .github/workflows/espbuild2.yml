@@ -52,49 +52,57 @@ jobs:
         run: |
           mkdir -p examples/factory_demo/main/services
 
-# ---------------- WEB UI SERVICE ----------------
+# =====================================================
+# WEB UI SERVICE
+# =====================================================
 
+      - name: Create WebUI Service
+        run: |
           cat > examples/factory_demo/main/services/webui_service.c << 'EOF'
           #include "esp_http_server.h"
           #include "esp_log.h"
           #include "device_control_service.h"
-
+          
           static const char *TAG = "WEBUI";
           static httpd_handle_t server;
-
+          
           static esp_err_t toggle(httpd_req_t *req)
           {
               device_toggle_light();
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
-
+          
           void webui_service_start(void)
           {
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
               httpd_start(&server, &config);
-
+          
               httpd_uri_t uri = {
                   .uri = "/toggle",
                   .method = HTTP_GET,
                   .handler = toggle
               };
-
+          
               httpd_register_uri_handler(server, &uri);
               ESP_LOGI(TAG, "WebUI started");
           }
           EOF
 
-# ---------------- MQTT SERVICE ----------------
+# =====================================================
+# MQTT SERVICE
+# =====================================================
 
+      - name: Create MQTT Service
+        run: |
           cat > examples/factory_demo/main/services/mqtt_service.c << 'EOF'
           #include "mqtt_client.h"
           #include "esp_log.h"
           #include "esp_netif.h"
-
+          
           static const char *TAG = "MQTT";
           static esp_mqtt_client_handle_t client;
-
+          
           static void event_handler(void *arg, esp_event_base_t base,
                                     int32_t event_id, void *data)
           {
@@ -103,34 +111,37 @@ jobs:
                   ESP_LOGI(TAG, "MQTT Connected");
               }
           }
-
+          
           void mqtt_service_start(void)
           {
-              // FIX: wait for network (DNS crash fix)
               while (!esp_netif_get_default_netif()) {
                   vTaskDelay(pdMS_TO_TICKS(1000));
               }
-
+          
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io"
               };
-
+          
               client = esp_mqtt_client_init(&cfg);
               esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, event_handler, NULL);
               esp_mqtt_client_start(client);
-
+          
               ESP_LOGI(TAG, "MQTT Started");
           }
           EOF
 
-# ---------------- DEVICE CONTROL ----------------
+# =====================================================
+# DEVICE CONTROL SERVICE
+# =====================================================
 
+      - name: Create Device Control Service
+        run: |
           cat > examples/factory_demo/main/services/device_control_service.c << 'EOF'
           #include "app_driver.h"
           #include <stdbool.h>
-
+          
           static bool state = false;
-
+          
           void device_toggle_light(void)
           {
               state = !state;
@@ -138,14 +149,46 @@ jobs:
           }
           EOF
 
-# ---------------- HEADER FILE ----------------
+# =====================================================
+# DEVICE CONTROL HEADER
+# =====================================================
 
+      - name: Create Device Control Header
+        run: |
+          cat > examples/factory_demo/main/services/device_control_service.h << 'EOF'
+          #pragma once
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
+          void device_toggle_light(void);
+          
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+
+# =====================================================
+# SERVICES HEADER FILE
+# =====================================================
+
+      - name: Create Services Header
+        run: |
           cat > examples/factory_demo/main/services/services.h << 'EOF'
           #pragma once
-
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
           void webui_service_start(void);
           void mqtt_service_start(void);
           void device_toggle_light(void);
+          
+          #ifdef __cplusplus
+          }
+          #endif
           EOF
 
 # =====================================================
@@ -155,10 +198,10 @@ jobs:
       - name: Patch main.c safely
         run: |
           FILE=examples/factory_demo/main/main.c
-
+          
           grep -q 'services.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "services.h"' $FILE
-
+          sed -i '/#include "app_rmaker.h"/a #include "services/services.h"' $FILE
+          
           grep -q 'webui_service_start' $FILE || \
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(8000));\
@@ -193,7 +236,6 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
-
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
             -o enterprise_arch_v2.bin \
