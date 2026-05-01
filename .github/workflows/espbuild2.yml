@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX FACTORY STABLE (RainMaker + WebUI + MQTT + AP SAFE)
+name: ESP32-S3-BOX ENTERPRISE ARCH V2 (STABLE SYSTEM)
 
 on:
   workflow_dispatch:
@@ -12,15 +12,12 @@ jobs:
     container:
       image: espressif/idf:release-v5.1
 
-    env:
-      IDF_COMPONENT_MANAGER: "1"
-      IDF_CMAKE_WARN_UNDEFINED_VARIABLES: "0"
-
     steps:
 
-      # ---------------------------
-      # CHECKOUT CLEAN
-      # ---------------------------
+# =====================================================
+# CHECKOUT CORE
+# =====================================================
+
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -28,193 +25,188 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe directory fix
+      - name: Safe Git Directory
         run: git config --global --add safe.directory '*'
 
-      # ---------------------------
-      # HARD CLEAN (IMPORTANT STABILITY FIX)
-      # ---------------------------
-      - name: Full clean build
+# =====================================================
+# CLEAN BUILD (IMPORTANT STABILITY FIX)
+# =====================================================
+
+      - name: Clean Build System
         run: |
           rm -rf examples/factory_demo/build || true
           rm -rf build || true
 
-      # ---------------------------
-      # FIX BUILD WARNINGS → NOT ERRORS
-      # (prevents RainMaker break)
-      # ---------------------------
-      - name: Disable fatal warnings
-        run: |
-          echo "EXTRA_CFLAGS=-Wno-error=stringop-truncation -Wno-error=unused-function" >> $GITHUB_ENV
-          echo "EXTRA_CXXFLAGS=-Wno-error=stringop-truncation" >> $GITHUB_ENV
+# =====================================================
+# ENABLE COMPONENT MANAGER (NO PATCHING)
+# =====================================================
 
-      # ---------------------------
-      # ENSURE SAFE COMPONENT MODE
-      # ---------------------------
-      - name: Component manager safe mode
-        run: |
-          echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+      - name: Enable IDF Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
-      # ---------------------------
-      # PATCH SAFE CONFIG (NO MANAGED MODS)
-      # ---------------------------
-      - name: Safe config fix
-        run: |
-          find . -name "idf_component.yml" -exec sed -i '/esp-rainmaker/d' {} \; || true
+# =====================================================
+# CREATE ENTERPRISE SERVICE LAYER (SAFE EXTENSION ONLY)
+# =====================================================
 
-      # ---------------------------
-      # ADD SAFE MQTT DNS FIX (IMPORTANT)
-      # ---------------------------
-      - name: MQTT DNS fix helper
+      - name: Inject Enterprise Services Layer
         run: |
-          mkdir -p examples/factory_demo/main/app
-          cat > examples/factory_demo/main/app/net_fix.c << 'EOF'
-          #include "esp_netif.h"
-          #include "esp_log.h"
+          mkdir -p examples/factory_demo/main/services
 
-          void net_fix_init(void)
-          {
-              esp_netif_init();
-              esp_event_loop_create_default();
-              esp_netif_create_default_wifi_sta();
-          }
-          EOF
+# ---------------- WEB UI SERVICE ----------------
 
-      # ---------------------------
-      # SAFE WEB SERVER (NO BREAK RAINMAKER)
-      # ---------------------------
-      - name: WebUI (safe)
-        run: |
-          cat > examples/factory_demo/main/web_server.c << 'EOF'
+          cat > examples/factory_demo/main/services/webui_service.c << 'EOF'
           #include "esp_http_server.h"
           #include "esp_log.h"
+          #include "device_control_service.h"
 
-          static const char *TAG = "WEB";
+          static const char *TAG = "WEBUI";
+          static httpd_handle_t server;
 
-          extern void app_pwm_led_set_power(bool on);
-
-          static bool state = false;
-
-          static esp_err_t root_handler(httpd_req_t *req)
+          static esp_err_t toggle(httpd_req_t *req)
           {
-              const char html[] =
-              "<html><body><h2>ESP32-S3 BOX</h2>"
-              "<button onclick=\"fetch('/toggle')\">Toggle</button>"
-              "</body></html>";
-
-              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
-
-          static esp_err_t toggle_handler(httpd_req_t *req)
-          {
-              state = !state;
-              app_pwm_led_set_power(state);
+              device_toggle_light();
               httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          void web_server_start(void)
+          void webui_service_start(void)
           {
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-              httpd_handle_t server = NULL;
+              httpd_start(&server, &config);
 
-              if (httpd_start(&server, &config) == ESP_OK) {
-                  httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_handler};
-                  httpd_uri_t toggle = {.uri="/toggle", .method=HTTP_GET, .handler=toggle_handler};
+              httpd_uri_t uri = {
+                  .uri = "/toggle",
+                  .method = HTTP_GET,
+                  .handler = toggle
+              };
 
-                  httpd_register_uri_handler(server, &root);
-                  httpd_register_uri_handler(server, &toggle);
-
-                  ESP_LOGI(TAG, "WebUI started");
-              }
+              httpd_register_uri_handler(server, &uri);
+              ESP_LOGI(TAG, "WebUI started");
           }
           EOF
 
-      # ---------------------------
-      # SAFE MQTT (DNS FIXED)
-      # ---------------------------
-      - name: MQTT safe bridge
-        run: |
-          cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
+# ---------------- MQTT SERVICE ----------------
+
+          cat > examples/factory_demo/main/services/mqtt_service.c << 'EOF'
           #include "mqtt_client.h"
           #include "esp_log.h"
+          #include "esp_netif.h"
 
           static const char *TAG = "MQTT";
+          static esp_mqtt_client_handle_t client;
 
-          static esp_mqtt_client_handle_t client = NULL;
-
-          void mqtt_bridge_start(void)
+          static void event_handler(void *arg, esp_event_base_t base,
+                                    int32_t event_id, void *data)
           {
+              if (event_id == MQTT_EVENT_CONNECTED) {
+                  esp_mqtt_client_subscribe(client, "box/cmd", 0);
+                  ESP_LOGI(TAG, "MQTT Connected");
+              }
+          }
+
+          void mqtt_service_start(void)
+          {
+              // FIX: wait for network (DNS crash fix)
+              while (!esp_netif_get_default_netif()) {
+                  vTaskDelay(pdMS_TO_TICKS(1000));
+              }
+
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io"
               };
 
               client = esp_mqtt_client_init(&cfg);
+              esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, event_handler, NULL);
               esp_mqtt_client_start(client);
 
-              ESP_LOGI(TAG, "MQTT started");
+              ESP_LOGI(TAG, "MQTT Started");
           }
           EOF
 
-      # ---------------------------
-      # SAFE HEADER PATCHES
-      # ---------------------------
-      - name: Add missing headers
-        run: |
-          echo '#pragma once
-          void web_server_start(void);' > examples/factory_demo/main/web_server.h
+# ---------------- DEVICE CONTROL ----------------
 
-          echo '#pragma once
-          void mqtt_bridge_start(void);' > examples/factory_demo/main/mqtt_bridge.h
+          cat > examples/factory_demo/main/services/device_control_service.c << 'EOF'
+          #include "app_driver.h"
+          #include <stdbool.h>
 
-      # ---------------------------
-      # MAIN PATCH (SAFE ONLY)
-      # ---------------------------
-      - name: Patch main safely
+          static bool state = false;
+
+          void device_toggle_light(void)
+          {
+              state = !state;
+              app_driver_light_set_power(state);
+          }
+          EOF
+
+# ---------------- HEADER FILE ----------------
+
+          cat > examples/factory_demo/main/services/services.h << 'EOF'
+          #pragma once
+
+          void webui_service_start(void);
+          void mqtt_service_start(void);
+          void device_toggle_light(void);
+          EOF
+
+# =====================================================
+# PATCH MAIN.C (SAFE HOOK ONLY)
+# =====================================================
+
+      - name: Patch main.c safely
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q "web_server.h" $FILE || sed -i '/#include "app_rmaker.h"/a #include "web_server.h"' $FILE
-          grep -q "mqtt_bridge.h" $FILE || sed -i '/#include "app_rmaker.h"/a #include "mqtt_bridge.h"' $FILE
+          grep -q 'services.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "services.h"' $FILE
 
-          # SAFE call guard (avoid missing function crash)
-          grep -q "web_server_start" $FILE || sed -i '/app_rmaker_start()/a \
-          web_server_start();\
-          mqtt_bridge_start();' $FILE
+          grep -q 'webui_service_start' $FILE || \
+          sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(8000));\
+          webui_service_start();\
+          mqtt_service_start();' $FILE
 
-      # ---------------------------
-      # BUILD
-      # ---------------------------
-      - name: Build firmware
+# =====================================================
+# FIX SDK CONFIG (STABILITY)
+# =====================================================
+
+      - name: Fix SDK Config Safety
+        run: |
+          cp examples/factory_demo/sdkconfig.ci.box examples/factory_demo/sdkconfig
+
+# =====================================================
+# BUILD SYSTEM
+# =====================================================
+
+      - name: Build Firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
-          cp sdkconfig.ci.box sdkconfig
           idf.py reconfigure
           idf.py build
 
-      # ---------------------------
-      # MERGE BIN
-      # ---------------------------
-      - name: Merge firmware
+# =====================================================
+# MERGE BINARIES
+# =====================================================
+
+      - name: Merge Firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
-            -o factory_merged.bin \
+            -o enterprise_arch_v2.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
 
-      # ---------------------------
-      # ARTIFACT
-      # ---------------------------
-      - name: Upload firmware
+# =====================================================
+# ARTIFACT OUTPUT
+# =====================================================
+
+      - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-stable-factory
-          path: examples/factory_demo/build/factory_merged.bin
+          name: esp32s3-box-enterprise-arch-v2
+          path: examples/factory_demo/build/enterprise_arch_v2.bin
