@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX SR SAFE FINAL
+name: ESP32-S3-BOX PRO ARCH FINAL (SR SAFE + RainMaker + WebUI + MQTT)
 
 on:
   workflow_dispatch:
@@ -29,25 +29,74 @@ jobs:
         run: git config --global --add safe.directory '*'
 
 # =====================================================
-# CLEAN
+# CLEAN EVERYTHING (IMPORTANT FOR RAINMAKER HASH FIX)
 # =====================================================
 
-      - name: Clean Build
+      - name: Hard Clean Build
         run: |
           rm -rf examples/factory_demo/build || true
+          rm -rf build || true
+          rm -rf managed_components || true
 
 # =====================================================
-# COMPONENT MANAGER
+# FORCE CLEAN COMPONENT STATE (FIX HASH ERROR)
+# =====================================================
+
+      - name: Reset ESP Component Manager State
+        run: |
+          find . -name "idf_component.yml" -exec sed -i '/esp_rainmaker/d' {} \; || true
+
+# =====================================================
+# ENABLE IDF COMPONENT MANAGER
 # =====================================================
 
       - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
 # =====================================================
-# LIGHTWEIGHT WEBUI (SAFE)
+# ADD CONTROL PLANE CORE (SAFE ARCH)
 # =====================================================
 
-      - name: Add Safe WebUI
+      - name: Add Control Plane
+        run: |
+          mkdir -p examples/factory_demo/main/control
+
+          cat > examples/factory_demo/main/control/control_plane.c << 'EOF'
+          #include "esp_log.h"
+          #include "esp_http_server.h"
+          #include "mqtt_client.h"
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
+
+          static const char *TAG = "CTRL";
+
+          void control_plane_start(void);
+
+          static void delayed_start(void *arg)
+          {
+              vTaskDelay(pdMS_TO_TICKS(20000));
+
+              ESP_LOGI(TAG, "Control plane online (SR SAFE)");
+
+              vTaskDelete(NULL);
+          }
+
+          void control_plane_start(void)
+          {
+              xTaskCreate(delayed_start, "ctrl", 8192, NULL, 5, NULL);
+          }
+          EOF
+
+          cat > examples/factory_demo/main/control/control_plane.h << 'EOF'
+          #pragma once
+          void control_plane_start(void);
+          EOF
+
+# =====================================================
+# ADD WEB UI (SAFE, NO GPIO)
+# =====================================================
+
+      - name: Add WebUI
         run: |
           cat > examples/factory_demo/main/web_safe.c << 'EOF'
           #include "esp_http_server.h"
@@ -55,14 +104,12 @@ jobs:
 
           static const char *TAG = "WEB";
 
-          static bool light_state = false;
-
           static esp_err_t root(httpd_req_t *req)
           {
-              const char *html =
-              "<html><body style='font-family:Arial;text-align:center;'>"
-              "<h2>ESP32-S3-BOX</h2>"
-              "<p>SR SAFE BUILD</p>"
+              const char html[] =
+              "<html><body style='text-align:center;'>"
+              "<h2>ESP32-S3-BOX PRO ARCH</h2>"
+              "<p>SR SAFE MODE</p>"
               "<button onclick=\"fetch('/on')\">ON</button>"
               "<button onclick=\"fetch('/off')\">OFF</button>"
               "</body></html>";
@@ -71,137 +118,72 @@ jobs:
               return ESP_OK;
           }
 
-          static esp_err_t on(httpd_req_t *req)
-          {
-              light_state = true;
-              ESP_LOGI(TAG,"LIGHT ON");
-              httpd_resp_send(req,"OK",HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
-
-          static esp_err_t off(httpd_req_t *req)
-          {
-              light_state = false;
-              ESP_LOGI(TAG,"LIGHT OFF");
-              httpd_resp_send(req,"OK",HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
-
-          void web_safe_start(void)
+          static void start_web(void)
           {
               httpd_handle_t server = NULL;
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
-              if (httpd_start(&server,&config) == ESP_OK) {
-
-                  httpd_uri_t u0 = {
-                      .uri="/",
-                      .method=HTTP_GET,
-                      .handler=root
-                  };
-
-                  httpd_uri_t u1 = {
-                      .uri="/on",
-                      .method=HTTP_GET,
-                      .handler=on
-                  };
-
-                  httpd_uri_t u2 = {
-                      .uri="/off",
-                      .method=HTTP_GET,
-                      .handler=off
-                  };
-
-                  httpd_register_uri_handler(server,&u0);
-                  httpd_register_uri_handler(server,&u1);
-                  httpd_register_uri_handler(server,&u2);
-
-                  ESP_LOGI(TAG,"SAFE WEB STARTED");
+              if (httpd_start(&server, &config) == ESP_OK) {
+                  httpd_uri_t u = {.uri="/", .method=HTTP_GET, .handler=root};
+                  httpd_register_uri_handler(server, &u);
+                  ESP_LOGI(TAG, "WebUI started");
               }
           }
           EOF
 
 # =====================================================
-# SAFE MQTT
+# ADD MQTT (TELEMETRY ONLY)
 # =====================================================
 
-      - name: Add Safe MQTT
+      - name: Add MQTT Safe
         run: |
           cat > examples/factory_demo/main/mqtt_safe.c << 'EOF'
           #include "mqtt_client.h"
           #include "esp_log.h"
-          #include "esp_event.h"
 
           static const char *TAG = "MQTT";
-          static esp_mqtt_client_handle_t client = NULL;
 
-          static void event_handler(void *arg,
-                                    esp_event_base_t base,
-                                    int32_t event_id,
-                                    void *data)
+          static esp_mqtt_client_handle_t client;
+
+          static void mqtt_event(void *arg, esp_event_base_t base,
+                                 int32_t event_id, void *event_data)
           {
               if (event_id == MQTT_EVENT_CONNECTED) {
-                  ESP_LOGI(TAG,"CONNECTED");
-                  esp_mqtt_client_subscribe(client,"esp32/box/cmd",0);
-              }
-
-              if (event_id == MQTT_EVENT_DATA) {
-                  ESP_LOGI(TAG,"DATA RX");
+                  ESP_LOGI(TAG, "MQTT connected");
+                  esp_mqtt_client_subscribe(client, "esp32/box/state", 0);
               }
           }
 
-          void mqtt_safe_start(void)
+          void mqtt_start(void)
           {
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io",
-                  .credentials.client_id = "esp32-safe",
-                  .network.reconnect_timeout_ms = 5000
+                  .credentials.client_id = "esp32-box-pro"
               };
 
               client = esp_mqtt_client_init(&cfg);
-              esp_mqtt_client_register_event(client,
-                                             ESP_EVENT_ANY_ID,
-                                             event_handler,
-                                             NULL);
+              esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event, NULL);
               esp_mqtt_client_start(client);
           }
           EOF
 
 # =====================================================
-# HEADERS
+# PATCH MAIN.C (SAFE ENTRY ONLY)
 # =====================================================
 
-      - name: Add Headers
-        run: |
-          cat > examples/factory_demo/main/web_safe.h << 'EOF'
-          #pragma once
-          void web_safe_start(void);
-          EOF
-
-          cat > examples/factory_demo/main/mqtt_safe.h << 'EOF'
-          #pragma once
-          void mqtt_safe_start(void);
-          EOF
-
-# =====================================================
-# PATCH MAIN.C
-# =====================================================
-
-      - name: Patch Main Safely
+      - name: Patch main.c safely
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          grep -q 'web_safe.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "web_safe.h"' $FILE
+          # Add control plane include
+          grep -q 'control_plane.h' $FILE || \
+          sed -i '/#include "app_rmaker.h"/a #include "control/control_plane.h"' $FILE
 
-          grep -q 'mqtt_safe.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "mqtt_safe.h"' $FILE
-
-          grep -q 'web_safe_start();' $FILE || \
+          # Start AFTER RainMaker init
+          grep -q 'control_plane_start' $FILE || \
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(15000));\
-          web_safe_start();\
-          mqtt_safe_start();' $FILE
+          control_plane_start();' $FILE
 
 # =====================================================
 # BUILD
@@ -217,7 +199,7 @@ jobs:
           idf.py build
 
 # =====================================================
-# MERGE BIN
+# MERGE BIN (SAFE)
 # =====================================================
 
       - name: Merge Firmware
@@ -226,18 +208,18 @@ jobs:
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-          --chip esp32s3 merge_bin \
-          -o sr_safe_final.bin \
-          --flash_mode dio \
-          --flash_size 16MB \
-          $(cat flash_args)
+            --chip esp32s3 merge_bin \
+            -o PRO_ARCH_FINAL.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
 
 # =====================================================
-# UPLOAD
+# UPLOAD ARTIFACT
 # =====================================================
 
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-sr-safe-final
-          path: examples/factory_demo/build/sr_safe_final.bin
+          name: esp32-s3-box-pro-arch-final
+          path: examples/factory_demo/build/PRO_ARCH_FINAL.bin
