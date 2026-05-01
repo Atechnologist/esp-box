@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX PRO ARCH FINAL (SR SAFE + RainMaker + WebUI + MQTT)
+name: ESP32-S3-BOX STABLE FACTORY CLEAN (RainMaker SAFE + WebUI + MQTT)
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
     steps:
 
 # =====================================================
-# CHECKOUT
+# CHECKOUT (OFFICIAL ESP-BOX ONLY)
 # =====================================================
 
       - name: Checkout ESP-BOX
@@ -25,100 +25,61 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe Git
+      - name: Safe Git Directory
         run: git config --global --add safe.directory '*'
 
 # =====================================================
-# CLEAN EVERYTHING (IMPORTANT FOR RAINMAKER HASH FIX)
+# SAFE CLEAN (DO NOT BREAK RAINMAKER)
 # =====================================================
 
-      - name: Hard Clean Build
+      - name: Clean build only
         run: |
           rm -rf examples/factory_demo/build || true
           rm -rf build || true
-          rm -rf managed_components || true
+          find examples/factory_demo/main -name "*.o" -delete || true
 
 # =====================================================
-# FORCE CLEAN COMPONENT STATE (FIX HASH ERROR)
+# DO NOT TOUCH managed_components ❌
 # =====================================================
 
-      - name: Reset ESP Component Manager State
+      - name: Preserve RainMaker integrity
         run: |
-          find . -name "idf_component.yml" -exec sed -i '/esp_rainmaker/d' {} \; || true
+          echo "Keeping managed_components intact (IMPORTANT)"
 
 # =====================================================
-# ENABLE IDF COMPONENT MANAGER
+# ADD SAFE EXTENSIONS (NO ESP_RMAKER EDITS)
 # =====================================================
 
-      - name: Enable Component Manager
-        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
-
-# =====================================================
-# ADD CONTROL PLANE CORE (SAFE ARCH)
-# =====================================================
-
-      - name: Add Control Plane
+      - name: Add factory extensions folder
         run: |
-          mkdir -p examples/factory_demo/main/control
-
-          cat > examples/factory_demo/main/control/control_plane.c << 'EOF'
-          #include "esp_log.h"
-          #include "esp_http_server.h"
-          #include "mqtt_client.h"
-          #include "freertos/FreeRTOS.h"
-          #include "freertos/task.h"
-
-          static const char *TAG = "CTRL";
-
-          void control_plane_start(void);
-
-          static void delayed_start(void *arg)
-          {
-              vTaskDelay(pdMS_TO_TICKS(20000));
-
-              ESP_LOGI(TAG, "Control plane online (SR SAFE)");
-
-              vTaskDelete(NULL);
-          }
-
-          void control_plane_start(void)
-          {
-              xTaskCreate(delayed_start, "ctrl", 8192, NULL, 5, NULL);
-          }
-          EOF
-
-          cat > examples/factory_demo/main/control/control_plane.h << 'EOF'
-          #pragma once
-          void control_plane_start(void);
-          EOF
+          mkdir -p examples/factory_demo/main/extensions
 
 # =====================================================
-# ADD WEB UI (SAFE, NO GPIO)
+# WEBUI (SAFE, NO GPIO)
 # =====================================================
 
-      - name: Add WebUI
+      - name: WebUI module
         run: |
-          cat > examples/factory_demo/main/web_safe.c << 'EOF'
+          cat > examples/factory_demo/main/extensions/webui.c << 'EOF'
           #include "esp_http_server.h"
           #include "esp_log.h"
 
-          static const char *TAG = "WEB";
+          static const char *TAG = "WEBUI";
 
           static esp_err_t root(httpd_req_t *req)
           {
               const char html[] =
-              "<html><body style='text-align:center;'>"
-              "<h2>ESP32-S3-BOX PRO ARCH</h2>"
-              "<p>SR SAFE MODE</p>"
-              "<button onclick=\"fetch('/on')\">ON</button>"
-              "<button onclick=\"fetch('/off')\">OFF</button>"
+              "<html><body style='text-align:center;font-family:Arial'>"
+              "<h2>ESP32-S3-BOX STABLE FACTORY</h2>"
+              "<p>RainMaker Controlled System</p>"
+              "<p>WebUI SAFE MODE</p>"
               "</body></html>";
 
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          static void start_web(void)
+          void factory_webui_start(void)
           {
               httpd_handle_t server = NULL;
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -126,23 +87,22 @@ jobs:
               if (httpd_start(&server, &config) == ESP_OK) {
                   httpd_uri_t u = {.uri="/", .method=HTTP_GET, .handler=root};
                   httpd_register_uri_handler(server, &u);
-                  ESP_LOGI(TAG, "WebUI started");
+                  ESP_LOGI(TAG, "WebUI started SAFE");
               }
           }
           EOF
 
 # =====================================================
-# ADD MQTT (TELEMETRY ONLY)
+# MQTT (TELEMETRY ONLY)
 # =====================================================
 
-      - name: Add MQTT Safe
+      - name: MQTT module
         run: |
-          cat > examples/factory_demo/main/mqtt_safe.c << 'EOF'
+          cat > examples/factory_demo/main/extensions/mqtt.c << 'EOF'
           #include "mqtt_client.h"
           #include "esp_log.h"
 
           static const char *TAG = "MQTT";
-
           static esp_mqtt_client_handle_t client;
 
           static void mqtt_event(void *arg, esp_event_base_t base,
@@ -150,46 +110,79 @@ jobs:
           {
               if (event_id == MQTT_EVENT_CONNECTED) {
                   ESP_LOGI(TAG, "MQTT connected");
-                  esp_mqtt_client_subscribe(client, "esp32/box/state", 0);
+                  esp_mqtt_client_publish(client, "esp32/box/status", "online", 0, 1, 0);
               }
           }
 
-          void mqtt_start(void)
+          void factory_mqtt_start(void)
           {
               esp_mqtt_client_config_t cfg = {
                   .broker.address.uri = "mqtt://broker.emqx.io",
-                  .credentials.client_id = "esp32-box-pro"
+                  .credentials.client_id = "esp32-box-stable"
               };
 
               client = esp_mqtt_client_init(&cfg);
               esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event, NULL);
               esp_mqtt_client_start(client);
+
+              ESP_LOGI(TAG, "MQTT started SAFE");
           }
           EOF
 
 # =====================================================
-# PATCH MAIN.C (SAFE ENTRY ONLY)
+# CONTROL LAYER STARTER (SR SAFE DELAY)
+# =====================================================
+
+      - name: Control plane starter
+        run: |
+          cat > examples/factory_demo/main/extensions/control.c << 'EOF'
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
+          #include "esp_log.h"
+
+          extern void factory_webui_start(void);
+          extern void factory_mqtt_start(void);
+
+          static const char *TAG = "CTRL";
+
+          static void delayed_start(void *arg)
+          {
+              vTaskDelay(pdMS_TO_TICKS(20000));
+
+              ESP_LOGI(TAG, "Starting SAFE extensions...");
+
+              factory_webui_start();
+              factory_mqtt_start();
+
+              ESP_LOGI(TAG, "All systems ONLINE SAFE");
+
+              vTaskDelete(NULL);
+          }
+
+          void factory_control_start(void)
+          {
+              xTaskCreate(delayed_start, "ctrl", 8192, NULL, 5, NULL);
+          }
+          EOF
+
+# =====================================================
+# PATCH MAIN.C SAFELY
 # =====================================================
 
       - name: Patch main.c safely
         run: |
           FILE=examples/factory_demo/main/main.c
 
-          # Add control plane include
-          grep -q 'control_plane.h' $FILE || \
-          sed -i '/#include "app_rmaker.h"/a #include "control/control_plane.h"' $FILE
-
-          # Start AFTER RainMaker init
-          grep -q 'control_plane_start' $FILE || \
+          grep -q 'factory_control_start' $FILE || \
           sed -i '/app_rmaker_start()/a \
           vTaskDelay(pdMS_TO_TICKS(15000));\
-          control_plane_start();' $FILE
+          factory_control_start();' $FILE
 
 # =====================================================
-# BUILD
+# BUILD FIRMWARE
 # =====================================================
 
-      - name: Build Firmware
+      - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo
@@ -199,17 +192,17 @@ jobs:
           idf.py build
 
 # =====================================================
-# MERGE BIN (SAFE)
+# MERGE BIN
 # =====================================================
 
-      - name: Merge Firmware
+      - name: Merge firmware
         run: |
           . $IDF_PATH/export.sh
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
-            -o PRO_ARCH_FINAL.bin \
+            -o STABLE_FACTORY.bin \
             --flash_mode dio \
             --flash_size 16MB \
             $(cat flash_args)
@@ -218,8 +211,8 @@ jobs:
 # UPLOAD ARTIFACT
 # =====================================================
 
-      - name: Upload Firmware
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-s3-box-pro-arch-final
-          path: examples/factory_demo/build/PRO_ARCH_FINAL.bin
+          name: esp32-s3-box-stable-factory
+          path: examples/factory_demo/build/STABLE_FACTORY.bin
