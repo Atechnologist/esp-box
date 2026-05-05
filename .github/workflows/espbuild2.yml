@@ -49,7 +49,7 @@ jobs:
           find . -name "idf_component.yml" -exec sed -i '/ili9341/d' {} \; || true
 
       # ---------------------------
-      # CREATE AP FALLBACK (FIXED - FORWARD DECLARATION)
+      # CREATE AP FALLBACK
       # ---------------------------
       - name: Add AP fallback
         run: |
@@ -122,7 +122,7 @@ jobs:
           EOF
 
       # ---------------------------
-      # CREATE WEB SERVER
+      # CREATE WEB SERVER (FIXED)
       # ---------------------------
       - name: Add Web Server
         run: |
@@ -130,13 +130,11 @@ jobs:
           #include "esp_http_server.h"
           #include "esp_log.h"
           #include "esp_wifi.h"
+          #include "app_led.h"
           #include <string.h>
           #include <stdio.h>
           
           static const char *TAG = "WEB_SERVER";
-          extern void app_pwm_led_set_power(bool on);
-          
-          static bool led_state = false;
           static httpd_handle_t server = NULL;
           
           static esp_err_t status_handler(httpd_req_t *req)
@@ -144,9 +142,11 @@ jobs:
               wifi_ap_record_t wifidata;
               esp_wifi_sta_get_ap_info(&wifidata);
               
-              char response[512];
+              bool led_state = app_pwm_led_get_state();
+              
+              char response[256];
               snprintf(response, sizeof(response),
-                  "{\"status\":\"ok\",\"led\":%s,\"wifi_rssi\":%d,\"version\":\"1.0\"}",
+                  "{\"status\":\"ok\",\"led\":%s,\"wifi_rssi\":%d}",
                   led_state ? "true" : "false", wifidata.rssi);
               
               httpd_resp_set_type(req, "application/json");
@@ -154,30 +154,21 @@ jobs:
               return ESP_OK;
           }
           
-          static esp_err_t led_handler(httpd_req_t *req)
+          static esp_err_t led_on_handler(httpd_req_t *req)
           {
-              char buf[10] = {0};
-              int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
-              
-              if (ret <= 0) {
-                  httpd_resp_send(req, "{\"error\":\"no data\"}", HTTPD_RESP_USE_STRLEN);
-                  return ESP_OK;
-              }
-              
-              if (strstr(buf, "on") != NULL) {
-                  led_state = true;
-                  app_pwm_led_set_power(true);
-                  httpd_resp_set_type(req, "application/json");
-                  httpd_resp_send(req, "{\"led\":\"on\"}", HTTPD_RESP_USE_STRLEN);
-              } else if (strstr(buf, "off") != NULL) {
-                  led_state = false;
-                  app_pwm_led_set_power(false);
-                  httpd_resp_set_type(req, "application/json");
-                  httpd_resp_send(req, "{\"led\":\"off\"}", HTTPD_RESP_USE_STRLEN);
-              } else {
-                  httpd_resp_set_type(req, "application/json");
-                  httpd_resp_send(req, "{\"error\":\"invalid\"}", HTTPD_RESP_USE_STRLEN);
-              }
+              ESP_LOGI(TAG, "LED ON requested");
+              app_pwm_led_set_power(true);
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, "{\"result\":\"on\"}", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+          
+          static esp_err_t led_off_handler(httpd_req_t *req)
+          {
+              ESP_LOGI(TAG, "LED OFF requested");
+              app_pwm_led_set_power(false);
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, "{\"result\":\"off\"}", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
           
@@ -186,18 +177,39 @@ jobs:
               const char html[] =
               "<!DOCTYPE html>"
               "<html><head><title>ESP32-S3-BOX</title>"
-              "<style>body{font-family:Arial;margin:20px;}"
-              ".btn{padding:10px 20px;margin:5px;cursor:pointer;}"
+              "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+              "<style>"
+              "body{font-family:Arial;margin:20px;background:#f0f0f0;}"
+              ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);}"
+              "h1{color:#333;text-align:center;}"
+              ".btn{padding:12px 24px;margin:10px 5px;font-size:16px;cursor:pointer;border:none;border-radius:4px;transition:0.3s;}"
+              ".btn-on{background:#4CAF50;color:white;}"
+              ".btn-off{background:#f44336;color:white;}"
+              ".btn:hover{opacity:0.8;}"
+              "#status{margin-top:20px;padding:10px;background:#e3f2fd;border-left:4px solid #2196F3;}"
               "</style></head>"
-              "<body><h1>ESP32-S3-BOX Control</h1>"
-              "<button class='btn' onclick=\"fetch('/led?cmd=on')\">LED ON</button>"
-              "<button class='btn' onclick=\"fetch('/led?cmd=off')\">LED OFF</button>"
-              "<p id='status'>Loading...</p>"
+              "<body>"
+              "<div class='container'>"
+              "<h1>ESP32-S3-BOX Control</h1>"
+              "<div style='text-align:center;'>"
+              "<button class='btn btn-on' onclick=\"ledOn()\">LED ON</button>"
+              "<button class='btn btn-off' onclick=\"ledOff()\">LED OFF</button>"
+              "</div>"
+              "<div id='status'>Status: Loading...</div>"
+              "</div>"
               "<script>"
-              "setInterval(function(){fetch('/status').then(r=>r.json())"
-              ".then(d=>document.getElementById('status')"
-              ".innerHTML='LED: '+d.led+' | RSSI: '+d.wifi_rssi);},1000);"
-              "</script></body></html>";
+              "function ledOn(){fetch('/led/on').then(()=>updateStatus());}"
+              "function ledOff(){fetch('/led/off').then(()=>updateStatus());}"
+              "function updateStatus(){"
+              "fetch('/status').then(r=>r.json()).then(d=>{"
+              "document.getElementById('status').innerHTML="
+              "'<b>LED:</b> '+(d.led?'ON':'OFF')+' | <b>WiFi RSSI:</b> '+d.wifi_rssi+'dBm';"
+              "});"
+              "}"
+              "setInterval(updateStatus,2000);"
+              "updateStatus();"
+              "</script>"
+              "</body></html>";
               
               httpd_resp_set_type(req, "text/html");
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
@@ -210,6 +222,7 @@ jobs:
               
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
               config.stack_size = 8192;
+              config.max_uri_handlers = 10;
               
               if (httpd_start(&server, &config) == ESP_OK) {
                   httpd_uri_t root = {
@@ -224,16 +237,23 @@ jobs:
                       .handler = status_handler,
                       .user_ctx = NULL
                   };
-                  httpd_uri_t led = {
-                      .uri = "/led",
+                  httpd_uri_t led_on = {
+                      .uri = "/led/on",
                       .method = HTTP_GET,
-                      .handler = led_handler,
+                      .handler = led_on_handler,
+                      .user_ctx = NULL
+                  };
+                  httpd_uri_t led_off = {
+                      .uri = "/led/off",
+                      .method = HTTP_GET,
+                      .handler = led_off_handler,
                       .user_ctx = NULL
                   };
                   
                   httpd_register_uri_handler(server, &root);
                   httpd_register_uri_handler(server, &status);
-                  httpd_register_uri_handler(server, &led);
+                  httpd_register_uri_handler(server, &led_on);
+                  httpd_register_uri_handler(server, &led_off);
                   
                   ESP_LOGI(TAG, "Web server started on port 80");
               } else {
