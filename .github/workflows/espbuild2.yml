@@ -65,7 +65,6 @@ jobs:
           static const uint8_t WIFI_FAIL_THRESHOLD = 5;
           static bool ap_started = false;
           
-          // Forward declaration
           void start_ap_fallback(void);
           
           static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -122,7 +121,7 @@ jobs:
           EOF
 
       # ---------------------------
-      # CREATE WEB SERVER (FIXED)
+      # CREATE WEB SERVER
       # ---------------------------
       - name: Add Web Server
         run: |
@@ -179,23 +178,24 @@ jobs:
               "<html><head><title>ESP32-S3-BOX</title>"
               "<meta name='viewport' content='width=device-width, initial-scale=1'>"
               "<style>"
-              "body{font-family:Arial;margin:20px;background:#f0f0f0;}"
-              ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);}"
-              "h1{color:#333;text-align:center;}"
-              ".btn{padding:12px 24px;margin:10px 5px;font-size:16px;cursor:pointer;border:none;border-radius:4px;transition:0.3s;}"
+              "body{font-family:Arial;margin:0;background:#f0f0f0;}"
+              ".container{max-width:500px;margin:20px auto;background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);}"
+              "h1{color:#333;text-align:center;margin:0 0 20px 0;}"
+              ".btn{padding:12px 24px;margin:10px 5px;font-size:16px;cursor:pointer;border:none;border-radius:4px;transition:0.3s;font-weight:bold;}"
               ".btn-on{background:#4CAF50;color:white;}"
               ".btn-off{background:#f44336;color:white;}"
-              ".btn:hover{opacity:0.8;}"
-              "#status{margin-top:20px;padding:10px;background:#e3f2fd;border-left:4px solid #2196F3;}"
+              ".btn:hover{opacity:0.8;transform:scale(1.05);}"
+              "#status{margin-top:20px;padding:15px;background:#e3f2fd;border-left:4px solid #2196F3;border-radius:4px;font-size:14px;}"
+              ".controls{text-align:center;}"
               "</style></head>"
               "<body>"
               "<div class='container'>"
-              "<h1>ESP32-S3-BOX Control</h1>"
-              "<div style='text-align:center;'>"
-              "<button class='btn btn-on' onclick=\"ledOn()\">LED ON</button>"
-              "<button class='btn btn-off' onclick=\"ledOff()\">LED OFF</button>"
+              "<h1>🎚️ ESP32-S3-BOX</h1>"
+              "<div class='controls'>"
+              "<button class='btn btn-on' onclick=\"ledOn()\">💡 LED ON</button>"
+              "<button class='btn btn-off' onclick=\"ledOff()\">🌙 LED OFF</button>"
               "</div>"
-              "<div id='status'>Status: Loading...</div>"
+              "<div id='status'><b>Status:</b> Loading...</div>"
               "</div>"
               "<script>"
               "function ledOn(){fetch('/led/on').then(()=>updateStatus());}"
@@ -203,8 +203,8 @@ jobs:
               "function updateStatus(){"
               "fetch('/status').then(r=>r.json()).then(d=>{"
               "document.getElementById('status').innerHTML="
-              "'<b>LED:</b> '+(d.led?'ON':'OFF')+' | <b>WiFi RSSI:</b> '+d.wifi_rssi+'dBm';"
-              "});"
+              "'<b>LED:</b> '+(d.led?'✅ ON':'❌ OFF')+' | <b>WiFi:</b> '+d.wifi_rssi+'dBm';"
+              "}).catch(e=>console.log('Error:',e));"
               "}"
               "setInterval(updateStatus,2000);"
               "updateStatus();"
@@ -492,11 +492,50 @@ jobs:
           echo "ARTIFACT_NAME=esp32s3-box-mqtt-$TIMESTAMP" >> $GITHUB_ENV
 
       # ---------------------------
+      # BUILD INFO
+      # ---------------------------
+      - name: Create build info
+        run: |
+          cat > build_info.txt << 'EOF'
+          ESP32-S3-BOX Production Build
+          ==============================
+          Build Date: $(date)
+          
+          Features Included:
+          ✅ RainMaker Integration (Smart Home Control)
+          ✅ Web UI (LED Control via HTTP)
+          ✅ MQTT Bridge (HiveMQ Public Broker)
+          ✅ AP Fallback Mode (WiFi Failover)
+          ✅ WiFi Event Handlers
+          
+          Access Points:
+          - Web UI: http://<device-ip>/
+          - MQTT: broker.hivemq.com:1883
+          - AP Fallback: ESP32-BOX-SETUP (pwd: 12345678)
+          
+          Endpoints:
+          GET  /              - Web UI Dashboard
+          GET  /status        - JSON Status (LED state, WiFi RSSI)
+          GET  /led/on        - Turn LED ON
+          GET  /led/off       - Turn LED OFF
+          
+          MQTT Topics:
+          Subscribe:   esp32/led, esp32/cmd
+          Publish:     esp32/status
+          
+          Default Credentials:
+          WiFi: Configure via RainMaker or AP mode
+          MQTT: Public broker (no auth required)
+          EOF
+
+      # ---------------------------
       # ARTIFACT (UNIQUE NAME)
       # ---------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: examples/factory_demo/build/factory_merged.bin
+          path: |
+            examples/factory_demo/build/factory_merged.bin
+            build_info.txt
           retention-days: 30
