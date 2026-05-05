@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX PRODUCTION BUILD (RainMaker + WebUI + AP + MQTT + SYSTEM CORE)
+name: ESP32-S3-BOX PRODUCTION BUILD (RainMaker + WebUI + AP + MQTT + SYSTEM)
 
 on:
   workflow_dispatch:
@@ -13,247 +13,239 @@ jobs:
       image: espressif/idf:release-v5.1
 
     steps:
+    # ---------------------------
+    # CHECKOUT
+    # ---------------------------
+    - name: Checkout ESP-BOX
+      uses: actions/checkout@v4
+      with:
+        repository: espressif/esp-box
+        submodules: recursive
+        fetch-depth: 0
 
-      # ---------------------------
-      # CHECKOUT
-      # ---------------------------
-      - name: Checkout ESP-BOX
-        uses: actions/checkout@v4
-        with:
-          repository: espressif/esp-box
-          submodules: recursive
-          fetch-depth: 0
+    - run: git config --global --add safe.directory '*'
 
-      - name: Safe directory fix
-        run: git config --global --add safe.directory '*'
+    # ---------------------------
+    # CLEAN
+    # ---------------------------
+    - run: |
+        rm -rf examples/factory_demo/build || true
+        rm -rf build || true
 
-      # ---------------------------
-      # CLEAN
-      # ---------------------------
-      - name: Clean build
-        run: |
-          rm -rf examples/factory_demo/build || true
+    - run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
-      # ---------------------------
-      # ENABLE COMPONENT MANAGER
-      # ---------------------------
-      - name: Enable Component Manager
-        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+    # ---------------------------
+    # FIX COMPONENTS
+    # ---------------------------
+    - run: |
+        find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
+        find . -name "idf_component.yml" -exec sed -i '/ili9341/d' {} \; || true
 
-      # ---------------------------
-      # SYSTEM STATE CORE (NEW)
-      # ---------------------------
-      - name: Add system core
-        run: |
-          cat > examples/factory_demo/main/system_state.c << 'EOF'
-          #include "esp_log.h"
+    # ---------------------------
+    # SYSTEM STATE (FIXED)
+    # ---------------------------
+    - name: Add system_state
+      run: |
+        cat > examples/factory_demo/main/system_state.c << 'EOF'
+        #include <stdbool.h>
+        #include "esp_log.h"
+        #include "system_state.h"
 
-          static const char *TAG = "SYSTEM";
-          static bool started = false;
+        static bool started = false;
 
-          void system_start_services(void)
-          {
-              if (started) return;
-              started = true;
+        bool system_is_started(void)
+        {
+            return started;
+        }
 
-              ESP_LOGI(TAG, "Starting core services...");
+        void system_start_services(void)
+        {
+            started = true;
+            ESP_LOGI("SYSTEM", "System services started");
+        }
+        EOF
 
-              extern void web_server_start(void);
-              extern void mqtt_bridge_start(void);
+        cat > examples/factory_demo/main/system_state.h << 'EOF'
+        #pragma once
+        #include <stdbool.h>
 
-              web_server_start();
-              mqtt_bridge_start();
-          }
-          EOF
+        bool system_is_started(void);
+        void system_start_services(void);
+        EOF
 
-          cat > examples/factory_demo/main/system_state.h << 'EOF'
-          #pragma once
-          void system_start_services(void);
-          EOF
+    # ---------------------------
+    # AP FALLBACK
+    # ---------------------------
+    - name: Add AP fallback
+      run: |
+        cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
+        #include "esp_wifi.h"
+        #include "esp_log.h"
+        #include "esp_event.h"
+        #include <stdbool.h>
 
-      # ---------------------------
-      # AP FALLBACK (EVENT-DRIVEN)
-      # ---------------------------
-      - name: Add AP fallback
-        run: |
-          cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
-          #include "esp_wifi.h"
-          #include "esp_log.h"
-          #include "esp_event.h"
-          #include "system_state.h"
+        static const char *TAG = "AP_FALLBACK";
+        static uint8_t fail = 0;
 
-          static const char *TAG = "AP_FALLBACK";
-          static int fail_count = 0;
+        static void handler(void *arg, esp_event_base_t base, int32_t id, void *data)
+        {
+            if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+                fail++;
+                if (fail >= 5) {
+                    wifi_config_t cfg = {
+                        .ap = {
+                            .ssid = "ESP32-BOX-SETUP",
+                            .password = "12345678",
+                            .authmode = WIFI_AUTH_WPA_WPA2_PSK
+                        }
+                    };
+                    esp_wifi_set_mode(WIFI_MODE_APSTA);
+                    esp_wifi_set_config(WIFI_IF_AP, &cfg);
+                    esp_wifi_start();
+                    ESP_LOGI(TAG, "AP fallback started");
+                }
+            }
+        }
 
-          static void wifi_event_handler(void *arg, esp_event_base_t event_base,
-                                        int32_t event_id, void *event_data)
-          {
-              if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-                  fail_count++;
-                  ESP_LOGW(TAG, "WiFi retry %d", fail_count);
-              }
+        void ap_fallback_init(void)
+        {
+            esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, handler, NULL);
+        }
+        EOF
 
-              if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-                  ESP_LOGI(TAG, "WiFi ready (IP acquired)");
-                  system_start_services();
-              }
-          }
+        cat > examples/factory_demo/main/ap_fallback.h << 'EOF'
+        #pragma once
+        void ap_fallback_init(void);
+        EOF
 
-          void ap_fallback_init(void)
-          {
-              esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
-              esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
-          }
-          EOF
+    # ---------------------------
+    # WEB SERVER
+    # ---------------------------
+    - name: Add Web Server
+      run: |
+        cat > examples/factory_demo/main/web_server.c << 'EOF'
+        #include "esp_http_server.h"
+        #include "app_led.h"
 
-      # ---------------------------
-      # WEB SERVER
-      # ---------------------------
-      - name: Add Web Server
-        run: |
-          cat > examples/factory_demo/main/web_server.c << 'EOF'
-          #include "esp_http_server.h"
-          #include "esp_log.h"
+        static httpd_handle_t server = NULL;
 
-          static const char *TAG = "WEB";
-          static httpd_handle_t server = NULL;
+        static esp_err_t root(httpd_req_t *req)
+        {
+            const char *html = "<h1>ESP32 BOX OK</h1>";
+            httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
 
-          static esp_err_t root_handler(httpd_req_t *req)
-          {
-              const char html[] =
-              "<html><body><h1>ESP32-S3-BOX READY</h1></body></html>";
-              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
+        void web_server_start(void)
+        {
+            httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
-          void web_server_start(void)
-          {
-              if (server) return;
+            if (httpd_start(&server, &config) == ESP_OK) {
+                httpd_uri_t uri = {
+                    .uri = "/",
+                    .method = HTTP_GET,
+                    .handler = root
+                };
+                httpd_register_uri_handler(server, &uri);
+            }
+        }
+        EOF
 
-              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+        cat > examples/factory_demo/main/web_server.h << 'EOF'
+        #pragma once
+        void web_server_start(void);
+        EOF
 
-              if (httpd_start(&server, &config) == ESP_OK) {
-                  httpd_uri_t root = {
-                      .uri = "/",
-                      .method = HTTP_GET,
-                      .handler = root_handler
-                  };
-                  httpd_register_uri_handler(server, &root);
-                  ESP_LOGI(TAG, "Web server started");
-              }
-          }
-          EOF
+    # ---------------------------
+    # MQTT
+    # ---------------------------
+    - name: Add MQTT
+      run: |
+        cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
+        #include "mqtt_client.h"
+        #include "esp_log.h"
 
-      # ---------------------------
-      # MQTT (NO DELAY, CLEAN)
-      # ---------------------------
-      - name: Add MQTT bridge
-        run: |
-          cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
-          #include "mqtt_client.h"
-          #include "esp_log.h"
+        static void task(void *p)
+        {
+            vTaskDelay(pdMS_TO_TICKS(8000));
 
-          static const char *TAG = "MQTT";
-          static esp_mqtt_client_handle_t client;
+            esp_mqtt_client_config_t cfg = {
+                .broker.address.uri = "mqtt://broker.hivemq.com"
+            };
 
-          static void mqtt_event_handler(void *args, esp_event_base_t base,
-                                        int32_t event_id, void *event_data)
-          {
-              if (event_id == MQTT_EVENT_CONNECTED) {
-                  ESP_LOGI(TAG, "MQTT CONNECTED");
-              } else if (event_id == MQTT_EVENT_DISCONNECTED) {
-                  ESP_LOGW(TAG, "MQTT DISCONNECTED");
-              }
-          }
+            esp_mqtt_client_handle_t c = esp_mqtt_client_init(&cfg);
+            esp_mqtt_client_start(c);
 
-          void mqtt_bridge_start(void)
-          {
-              esp_mqtt_client_config_t cfg = {
-                  .broker.address.uri = "mqtt://broker.hivemq.com",
-                  .network.reconnect_timeout_ms = 5000
-              };
+            ESP_LOGI("MQTT", "Started");
+            vTaskDelete(NULL);
+        }
 
-              client = esp_mqtt_client_init(&cfg);
-              esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-              esp_mqtt_client_start(client);
+        void mqtt_bridge_start(void)
+        {
+            xTaskCreate(task, "mqtt", 4096, NULL, 5, NULL);
+        }
+        EOF
 
-              ESP_LOGI(TAG, "MQTT started");
-          }
-          EOF
+        cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
+        #pragma once
+        void mqtt_bridge_start(void);
+        EOF
 
-      # ---------------------------
-      # HEADERS
-      # ---------------------------
-      - name: Add headers
-        run: |
-          cat > examples/factory_demo/main/web_server.h << 'EOF'
-          void web_server_start(void);
-          EOF
+    # ---------------------------
+    # PATCH CMAKE
+    # ---------------------------
+    - name: Patch CMakeLists
+      run: |
+        sed -i 's/main.c/main.c system_state.c ap_fallback.c web_server.c mqtt_bridge.c/' \
+        examples/factory_demo/main/CMakeLists.txt
 
-          cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
-          void mqtt_bridge_start(void);
-          EOF
+    # ---------------------------
+    # PATCH MAIN
+    # ---------------------------
+    - name: Patch main
+      run: |
+        FILE=examples/factory_demo/main/main.c
 
-          cat > examples/factory_demo/main/ap_fallback.h << 'EOF'
-          void ap_fallback_init(void);
-          EOF
+        sed -i '/#include "app_main.h"/a \
+        #include "system_state.h"\n#include "web_server.h"\n#include "mqtt_bridge.h"\n#include "ap_fallback.h"' $FILE
 
-      # ---------------------------
-      # PATCH CMake
-      # ---------------------------
-      - name: Patch CMakeLists
-        run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-          sed -i 's/main.c/main.c ap_fallback.c web_server.c mqtt_bridge.c system_state.c/' $FILE
+        sed -i '/app_rmaker_start()/a \
+        ap_fallback_init();\
+        system_start_services();\
+        vTaskDelay(pdMS_TO_TICKS(4000));\
+        web_server_start();\
+        mqtt_bridge_start();' $FILE
 
-      # ---------------------------
-      # PATCH MAIN
-      # ---------------------------
-      - name: Patch main.c
-        run: |
-          FILE=examples/factory_demo/main/main.c
+    # ---------------------------
+    # BUILD
+    # ---------------------------
+    - name: Build
+      run: |
+        . $IDF_PATH/export.sh
+        cd examples/factory_demo
+        idf.py set-target esp32s3
+        cp sdkconfig.ci.box sdkconfig
+        idf.py fullclean
+        idf.py build
 
-          sed -i '/web_server/d' $FILE || true
-          sed -i '/mqtt_bridge/d' $FILE || true
-          sed -i '/ap_fallback/d' $FILE || true
+    # ---------------------------
+    # MERGE BIN
+    # ---------------------------
+    - name: Merge
+      run: |
+        . $IDF_PATH/export.sh
+        cd examples/factory_demo/build
+        python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+        --chip esp32s3 merge_bin \
+        -o factory_merged.bin \
+        --flash_mode dio \
+        --flash_size 16MB \
+        $(cat flash_args)
 
-          sed -i '/#include "app_rmaker.h"/a \
-          #include "ap_fallback.h"' $FILE
-
-          sed -i '/app_rmaker_start()/i \
-          ap_fallback_init();' $FILE
-
-      # ---------------------------
-      # BUILD
-      # ---------------------------
-      - name: Build firmware
-        run: |
-          . $IDF_PATH/export.sh
-          cd examples/factory_demo
-          idf.py set-target esp32s3
-          cp sdkconfig.ci.box sdkconfig
-          idf.py fullclean
-          idf.py build
-
-      # ---------------------------
-      # MERGE BIN
-      # ---------------------------
-      - name: Merge firmware
-        run: |
-          . $IDF_PATH/export.sh
-          cd examples/factory_demo/build
-          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o factory_merged.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      # ---------------------------
-      # UPLOAD
-      # ---------------------------
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32s3-box-system-core
-          path: examples/factory_demo/build/factory_merged.bin
+    # ---------------------------
+    # UPLOAD
+    # ---------------------------
+    - uses: actions/upload-artifact@v4
+      with:
+        name: esp32s3-box-final
+        path: examples/factory_demo/build/factory_merged.bin
