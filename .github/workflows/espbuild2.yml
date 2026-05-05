@@ -1,309 +1,385 @@
 name: ESP32-S3-BOX PRODUCTION BUILD (RainMaker + WebUI + AP + MQTT)
 
 on:
-workflow_dispatch:
-push:
-branches: [ main ]
+  workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
-build:
-runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
 
-container:
-  image: espressif/idf:release-v5.1
+    container:
+      image: espressif/idf:release-v5.1
 
-steps:
-  # ---------------------------
-  # CHECKOUT
-  # ---------------------------
-  - name: Checkout ESP-BOX
-    uses: actions/checkout@v4
-    with:
-      repository: espressif/esp-box
-      submodules: recursive
-      fetch-depth: 0
+    steps:
+      # ---------------------------
+      # CHECKOUT
+      # ---------------------------
+      - name: Checkout ESP-BOX
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          submodules: recursive
+          fetch-depth: 0
 
-  - name: Safe directory fix
-    run: git config --global --add safe.directory '*'
+      - name: Safe directory fix
+        run: git config --global --add safe.directory '*'
 
-  # ---------------------------
-  # CLEAN BUILD STATE
-  # ---------------------------
-  - name: Clean ESP-IDF build cache
-    run: |
-      rm -rf examples/factory_demo/build || true
-      rm -rf build || true
+      # ---------------------------
+      # CLEAN BUILD STATE
+      # ---------------------------
+      - name: Clean ESP-IDF build cache
+        run: |
+          rm -rf examples/factory_demo/build || true
+          rm -rf build || true
 
-  # ---------------------------
-  # ENABLE COMPONENT MANAGER
-  # ---------------------------
-  - name: Enable Component Manager
-    run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+      # ---------------------------
+      # ENABLE COMPONENT MANAGER
+      # ---------------------------
+      - name: Enable Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
-  # ---------------------------
-  # FIX COMPONENT CONFLICTS
-  # ---------------------------
-  - name: Fix component conflicts
-    run: |
-      find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
-      find . -name "idf_component.yml" -exec sed -i '/ili9341/d' {} \; || true
+      # ---------------------------
+      # FIX COMPONENT CONFLICTS
+      # ---------------------------
+      - name: Fix component conflicts
+        run: |
+          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
+          find . -name "idf_component.yml" -exec sed -i '/ili9341/d' {} \; || true
 
-  # ---------------------------
-  # SYSTEM STATE MODULE
-  # ---------------------------
-  - name: Add system state module
-    run: |
-      cat > examples/factory_demo/main/system_state.c << 'EOF'
-      #include "system_state.h"
-      #include "esp_log.h"
-      #include <stdbool.h>
-
-      static const char *TAG = "SYSTEM_STATE";
-      static bool started = false;
-
-      void system_start_services(void)
-      {
-          if (started) {
-              ESP_LOGW(TAG, "Services already started");
-              return;
+      # ---------------------------
+      # SYSTEM STATE MODULE
+      # ---------------------------
+      - name: Add system state module
+        run: |
+          cat > examples/factory_demo/main/system_state.c << 'EOF'
+          #include "system_state.h"
+          #include "esp_log.h"
+          #include <stdbool.h>
+          
+          static const char *TAG = "SYSTEM_STATE";
+          static bool started = false;
+          
+          void system_start_services(void)
+          {
+              if (started) {
+                  ESP_LOGW(TAG, "Services already started");
+                  return;
+              }
+              
+              started = true;
+              ESP_LOGI(TAG, "System services started");
           }
+          
+          bool system_is_started(void)
+          {
+              return started;
+          }
+          EOF
+          
+          cat > examples/factory_demo/main/system_state.h << 'EOF'
+          #pragma once
+          #include <stdbool.h>
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
+          void system_start_services(void);
+          bool system_is_started(void);
+          
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
 
-          started = true;
-          ESP_LOGI(TAG, "System services started");
-      }
+      # ---------------------------
+      # AP FALLBACK
+      # ---------------------------
+      - name: Add AP fallback
+        run: |
+          cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
+          #include "ap_fallback.h"
+          #include "esp_wifi.h"
+          #include "esp_log.h"
+          #include "esp_event.h"
+          
+          static const char *TAG = "AP_FALLBACK";
+          
+          void ap_fallback_init(void)
+          {
+              ESP_LOGI(TAG, "AP fallback initialized");
+          }
+          
+          void start_ap_fallback(void)
+          {
+              ESP_LOGI(TAG, "Fallback AP triggered");
+          }
+          EOF
+          
+          cat > examples/factory_demo/main/ap_fallback.h << 'EOF'
+          #pragma once
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
+          void ap_fallback_init(void);
+          void start_ap_fallback(void);
+          
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
 
-      bool system_is_started(void)
-      {
-          return started;
-      }
-      EOF
+      # ---------------------------
+      # WEB SERVER
+      # ---------------------------
+      - name: Add Web Server
+        run: |
+          cat > examples/factory_demo/main/web_server.c << 'EOF'
+          #include "web_server.h"
+          #include "esp_http_server.h"
+          #include "esp_log.h"
+          #include "app_led.h"
+          #include <stdio.h>
+          #include <string.h>
+          
+          static const char *TAG = "WEB_SERVER";
+          static httpd_handle_t server = NULL;
+          
+          static esp_err_t status_handler(httpd_req_t *req)
+          {
+              bool led_state = app_pwm_led_get_state();
+              
+              char response[256];
+              snprintf(response, sizeof(response),
+                  "{\"status\":\"ok\",\"led\":%s}",
+                  led_state ? "true" : "false");
+              
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+          
+          static esp_err_t led_on_handler(httpd_req_t *req)
+          {
+              ESP_LOGI(TAG, "LED ON requested");
+              app_pwm_led_set_power(true);
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, "{\"result\":\"on\"}", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+          
+          static esp_err_t led_off_handler(httpd_req_t *req)
+          {
+              ESP_LOGI(TAG, "LED OFF requested");
+              app_pwm_led_set_power(false);
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, "{\"result\":\"off\"}", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+          
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const char html[] =
+              "<!DOCTYPE html>"
+              "<html><head><title>ESP32-S3-BOX</title>"
+              "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+              "<style>"
+              "body{font-family:Arial;margin:20px;background:#f0f0f0;}"
+              ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:8px;}"
+              "h1{color:#333;text-align:center;}"
+              ".btn{padding:12px 24px;margin:10px 5px;font-size:16px;cursor:pointer;border:none;border-radius:4px;}"
+              ".btn-on{background:#4CAF50;color:white;}"
+              ".btn-off{background:#f44336;color:white;}"
+              ".btn:hover{opacity:0.8;}"
+              "#status{margin-top:20px;padding:10px;background:#e3f2fd;border-left:4px solid #2196F3;}"
+              "</style></head>"
+              "<body>"
+              "<div class='container'>"
+              "<h1>ESP32-S3-BOX</h1>"
+              "<div style='text-align:center;'>"
+              "<button class='btn btn-on' onclick='ledOn()'>LED ON</button>"
+              "<button class='btn btn-off' onclick='ledOff()'>LED OFF</button>"
+              "</div>"
+              "<div id='status'>Status: Loading...</div>"
+              "</div>"
+              "<script>"
+              "function ledOn(){fetch('/led/on').then(()=>updateStatus());}"
+              "function ledOff(){fetch('/led/off').then(()=>updateStatus());}"
+              "function updateStatus(){"
+              "fetch('/status').then(r=>r.json()).then(d=>{"
+              "document.getElementById('status').innerHTML="
+              "'LED: '+(d.led?'ON':'OFF');"
+              "});"
+              "}"
+              "setInterval(updateStatus,2000);"
+              "updateStatus();"
+              "</script>"
+              "</body></html>";
+              
+              httpd_resp_set_type(req, "text/html");
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+          
+          void web_server_start(void)
+          {
+              if (server != NULL) return;
+              
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              config.stack_size = 8192;
+              
+              if (httpd_start(&server, &config) == ESP_OK) {
+                  httpd_uri_t root = {
+                      .uri = "/",
+                      .method = HTTP_GET,
+                      .handler = root_handler,
+                      .user_ctx = NULL
+                  };
+                  httpd_uri_t status = {
+                      .uri = "/status",
+                      .method = HTTP_GET,
+                      .handler = status_handler,
+                      .user_ctx = NULL
+                  };
+                  httpd_uri_t led_on = {
+                      .uri = "/led/on",
+                      .method = HTTP_GET,
+                      .handler = led_on_handler,
+                      .user_ctx = NULL
+                  };
+                  httpd_uri_t led_off = {
+                      .uri = "/led/off",
+                      .method = HTTP_GET,
+                      .handler = led_off_handler,
+                      .user_ctx = NULL
+                  };
+                  
+                  httpd_register_uri_handler(server, &root);
+                  httpd_register_uri_handler(server, &status);
+                  httpd_register_uri_handler(server, &led_on);
+                  httpd_register_uri_handler(server, &led_off);
+                  
+                  ESP_LOGI(TAG, "Web server started on port 80");
+              } else {
+                  ESP_LOGE(TAG, "Failed to start web server");
+              }
+          }
+          EOF
+          
+          cat > examples/factory_demo/main/web_server.h << 'EOF'
+          #pragma once
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
+          void web_server_start(void);
+          
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
 
-      cat > examples/factory_demo/main/system_state.h << 'EOF'
-      #pragma once
-      #include <stdbool.h>
+      # ---------------------------
+      # MQTT BRIDGE
+      # ---------------------------
+      - name: Add MQTT Bridge
+        run: |
+          cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
+          #include "mqtt_bridge.h"
+          #include "esp_log.h"
+          
+          static const char *TAG = "MQTT_BRIDGE";
+          
+          void mqtt_bridge_start(void)
+          {
+              ESP_LOGI(TAG, "MQTT bridge started");
+          }
+          EOF
+          
+          cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
+          #pragma once
+          #include <stdbool.h>
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
+          void mqtt_bridge_start(void);
+          
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
 
-      #ifdef __cplusplus
-      extern "C" {
-      #endif
+      # ---------------------------
+      # PATCH CMakeLists.txt
+      # ---------------------------
+      - name: Patch CMakeLists.txt
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          
+          if ! grep -q "ap_fallback.c" $FILE; then
+            sed -i '/SRCS.*main\.c/s/.*/& ap_fallback.c web_server.c mqtt_bridge.c system_state.c/' $FILE
+          fi
 
-      void system_start_services(void);
-      bool system_is_started(void);
+      # ---------------------------
+      # PATCH main.c
+      # ---------------------------
+      - name: Patch main.c
+        run: |
+          FILE=examples/factory_demo/main/main.c
+          
+          LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
+          
+          sed -i '/web_server.h/d' $FILE || true
+          sed -i '/ap_fallback.h/d' $FILE || true
+          sed -i '/mqtt_bridge.h/d' $FILE || true
+          sed -i '/system_state.h/d' $FILE || true
+          
+          sed -i "${LAST_INCLUDE}a\\
+          #include \"web_server.h\"\n#include \"ap_fallback.h\"\n#include \"mqtt_bridge.h\"\n#include \"system_state.h\"" $FILE
+          
+          sed -i '/app_rmaker_start()/a \
+          ap_fallback_init();\
+          system_start_services();\
+          web_server_start();\
+          mqtt_bridge_start();' $FILE
 
-      #ifdef __cplusplus
-      }
-      #endif
-      EOF
+      # ---------------------------
+      # BUILD
+      # ---------------------------
+      - name: Build firmware
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+          idf.py fullclean
+          idf.py reconfigure
+          idf.py build
 
-  # ---------------------------
-  # AP FALLBACK
-  # ---------------------------
-  - name: Add AP fallback
-    run: |
-      cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
-      #include "esp_wifi.h"
-      #include "esp_log.h"
-      #include "esp_event.h"
+      # ---------------------------
+      # MERGE BIN
+      # ---------------------------
+      - name: Merge firmware
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo/build
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o factory_merged.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
 
-      static const char *TAG = "AP_FALLBACK";
-
-      void ap_fallback_init(void)
-      {
-          ESP_LOGI(TAG, "AP fallback initialized");
-      }
-
-      void start_ap_fallback(void)
-      {
-          ESP_LOGI(TAG, "Fallback AP triggered");
-      }
-      EOF
-
-      cat > examples/factory_demo/main/ap_fallback.h << 'EOF'
-      #pragma once
-      #ifdef __cplusplus
-      extern "C" {
-      #endif
-
-      void ap_fallback_init(void);
-      void start_ap_fallback(void);
-
-      #ifdef __cplusplus
-      }
-      #endif
-      EOF
-
-  # ---------------------------
-  # WEB SERVER
-  # ---------------------------
-  - name: Add Web Server
-    run: |
-      cat > examples/factory_demo/main/web_server.c << 'EOF'
-      #include "web_server.h"
-      #include "esp_http_server.h"
-      #include "esp_log.h"
-
-      static const char *TAG = "WEB";
-
-      void web_server_start(void)
-      {
-          ESP_LOGI(TAG, "Web server started");
-      }
-      EOF
-
-      cat > examples/factory_demo/main/web_server.h << 'EOF'
-      #pragma once
-      #ifdef __cplusplus
-      extern "C" {
-      #endif
-
-      void web_server_start(void);
-
-      #ifdef __cplusplus
-      }
-      #endif
-      EOF
-
-  # ---------------------------
-  # MQTT BRIDGE
-  # ---------------------------
-  - name: Add MQTT Bridge
-    run: |
-      cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
-      #include "mqtt_bridge.h"
-      #include "esp_log.h"
-
-      static const char *TAG = "MQTT";
-
-      void mqtt_bridge_start(void)
-      {
-          ESP_LOGI(TAG, "MQTT started");
-      }
-      EOF
-
-      cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
-      #pragma once
-      #include <stdbool.h>
-
-      #ifdef __cplusplus
-      extern "C" {
-      #endif
-
-      void mqtt_bridge_start(void);
-
-      #ifdef __cplusplus
-      }
-      #endif
-      EOF
-
-  # ---------------------------
-  # PATCH CMakeLists.txt
-  # ---------------------------
-  - name: Patch CMakeLists.txt
-    run: |
-      FILE=examples/factory_demo/main/CMakeLists.txt
-      sed -i '/SRCS.*main\.c/s/.*/& ap_fallback.c web_server.c mqtt_bridge.c system_state.c/' $FILE
-
-  # ---------------------------
-  # PATCH main.c
-  # ---------------------------
-  - name: Patch main.c
-    run: |
-      FILE=examples/factory_demo/main/main.c
-
-      LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
-
-      sed -i "${LAST_INCLUDE}a\\
-      #include \"web_server.h\"\n\
-      #include \"ap_fallback.h\"\n\
-      #include \"mqtt_bridge.h\"\n\
-      #include \"system_state.h\"" $FILE
-
-      sed -i '/app_rmaker_start()/a \
-      ap_fallback_init();\
-      system_start_services();\
-      web_server_start();\
-      mqtt_bridge_start();' $FILE
-
-  # ---------------------------
-  # BUILD
-  # ---------------------------
-  - name: Build firmware
-    run: |
-      . $IDF_PATH/export.sh
-      cd examples/factory_demo
-      idf.py set-target esp32s3
-      cp sdkconfig.ci.box sdkconfig
-      idf.py fullclean
-      idf.py build
-
-  # ---------------------------
-  # MERGE BIN
-  # ---------------------------
-  - name: Merge firmware
-    run: |
-      . $IDF_PATH/export.sh
-      cd examples/factory_demo/build
-      python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-        --chip esp32s3 merge_bin \
-        -o factory_merged.bin \
-        --flash_mode dio \
-        --flash_size 16MB \
-        $(cat flash_args)
-
-  # ---------------------------
-  # UPLOAD
-  # ---------------------------
-  - name: Upload firmware
-    uses: actions/upload-artifact@v4
-    with:
-      name: esp32s3-box-final
-      path: examples/factory_demo/build/factory_merged.bin
-    # ---------------------------
-    # PATCH MAIN
-    # ---------------------------
-    - name: Patch main
-      run: |
-        FILE=examples/factory_demo/main/main.c
-
-        sed -i '/#include "app_main.h"/a \
-        #include "system_state.h"\n#include "web_server.h"\n#include "mqtt_bridge.h"\n#include "ap_fallback.h"' $FILE
-
-        sed -i '/app_rmaker_start()/a \
-        ap_fallback_init();\
-        system_start_services();\
-        vTaskDelay(pdMS_TO_TICKS(4000));\
-        web_server_start();\
-        mqtt_bridge_start();' $FILE
-
-    # ---------------------------
-    # BUILD
-    # ---------------------------
-    - name: Build
-      run: |
-        . $IDF_PATH/export.sh
-        cd examples/factory_demo
-        idf.py set-target esp32s3
-        cp sdkconfig.ci.box sdkconfig
-        idf.py fullclean
-        idf.py build
-
-    # ---------------------------
-    # MERGE BIN
-    # ---------------------------
-    - name: Merge
-      run: |
-        . $IDF_PATH/export.sh
-        cd examples/factory_demo/build
-        python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-        --chip esp32s3 merge_bin \
-        -o factory_merged.bin \
-        --flash_mode dio \
-        --flash_size 16MB \
-        $(cat flash_args)
-
-    # ---------------------------
-    # UPLOAD
-    # ---------------------------
-    - uses: actions/upload-artifact@v4
-      with:
-        name: esp32s3-box-final
-        path: examples/factory_demo/build/factory_merged.bin
+      # ---------------------------
+      # UPLOAD
+      # ---------------------------
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-box-final
+          path: examples/factory_demo/build/factory_merged.bin
