@@ -50,7 +50,7 @@ jobs:
           git checkout idf_component.yml 2>/dev/null || true
 
       # ---------------------------
-      # ENABLE COMPONENT MANAGER (ORIGINAL CONFIG)
+      # ENABLE COMPONENT MANAGER
       # ---------------------------
       - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
@@ -226,19 +226,128 @@ jobs:
           EOF
 
       # ---------------------------
-      # WEB SERVER (STUB)
+      # WEB SERVER (FULL IMPLEMENTATION)
       # ---------------------------
       - name: Add web server
         run: |
           cat > examples/factory_demo/main/web_server.c << 'EOF'
           #include "web_server.h"
+          #include "esp_http_server.h"
           #include "esp_log.h"
+          #include "app_led.h"
+          #include <stdio.h>
+          #include <string.h>
           
           static const char *TAG = "WEB_SERVER";
+          static httpd_handle_t server = NULL;
+          
+          static esp_err_t status_json_handler(httpd_req_t *req)
+          {
+              bool led_state = app_pwm_led_get_state();
+              char response[256];
+              snprintf(response, sizeof(response),
+                  "{\"status\":\"ok\",\"led\":%s}",
+                  led_state ? "true" : "false");
+              
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+          
+          static esp_err_t led_on_handler(httpd_req_t *req)
+          {
+              ESP_LOGI(TAG, "LED ON requested");
+              app_pwm_led_set_power(true);
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, "{\"result\":\"on\"}", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+          
+          static esp_err_t led_off_handler(httpd_req_t *req)
+          {
+              ESP_LOGI(TAG, "LED OFF requested");
+              app_pwm_led_set_power(false);
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, "{\"result\":\"off\"}", HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+          
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const char html[] = 
+              "<!DOCTYPE html><html><head><title>ESP32-S3-BOX</title>"
+              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+              "<style>body{font-family:Arial;margin:20px;}"
+              ".btn{padding:10px 20px;margin:10px;font-size:16px;cursor:pointer;border:none;border-radius:4px;}"
+              ".on{background:#4CAF50;color:white;}"
+              ".off{background:#f44336;color:white;}"
+              ".on:hover,.off:hover{opacity:0.8;}"
+              "#stat{margin-top:20px;padding:10px;background:#e3f2fd;}</style>"
+              "</head><body><h1>ESP32-S3-BOX Control</h1>"
+              "<button class='btn on' onclick='fetch(\"/led/on\").then(()=>getStatus())'>LED ON</button>"
+              "<button class='btn off' onclick='fetch(\"/led/off\").then(()=>getStatus())'>LED OFF</button>"
+              "<div id='stat'>Loading...</div>"
+              "<script>"
+              "function getStatus(){fetch('/status').then(r=>r.json()).then(d=>"
+              "document.getElementById('stat').innerHTML='LED: '+(d.led?'ON':'OFF')).catch(e=>console.log(e));}"
+              "setInterval(getStatus,2000);getStatus();"
+              "</script></body></html>";
+              
+              httpd_resp_set_type(req, "text/html");
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
           
           void web_server_start(void)
           {
-              ESP_LOGI(TAG, "Web server started");
+              if (server != NULL) {
+                  ESP_LOGW(TAG, "Web server already running");
+                  return;
+              }
+              
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              config.stack_size = 8192;
+              config.task_priority = 5;
+              
+              if (httpd_start(&server, &config) != ESP_OK) {
+                  ESP_LOGE(TAG, "Failed to start web server");
+                  return;
+              }
+              
+              httpd_uri_t root_uri = {
+                  .uri = "/",
+                  .method = HTTP_GET,
+                  .handler = root_handler,
+                  .user_ctx = NULL
+              };
+              
+              httpd_uri_t status_uri = {
+                  .uri = "/status",
+                  .method = HTTP_GET,
+                  .handler = status_json_handler,
+                  .user_ctx = NULL
+              };
+              
+              httpd_uri_t led_on_uri = {
+                  .uri = "/led/on",
+                  .method = HTTP_GET,
+                  .handler = led_on_handler,
+                  .user_ctx = NULL
+              };
+              
+              httpd_uri_t led_off_uri = {
+                  .uri = "/led/off",
+                  .method = HTTP_GET,
+                  .handler = led_off_handler,
+                  .user_ctx = NULL
+              };
+              
+              httpd_register_uri_handler(server, &root_uri);
+              httpd_register_uri_handler(server, &status_uri);
+              httpd_register_uri_handler(server, &led_on_uri);
+              httpd_register_uri_handler(server, &led_off_uri);
+              
+              ESP_LOGI(TAG, "Web server started on port 80");
           }
           EOF
           
@@ -337,6 +446,7 @@ jobs:
           ap_fallback_init();\
           system_start_services();\
           espnow_init();\
+          vTaskDelay(pdMS_TO_TICKS(2000));\
           web_server_start();\
           mqtt_bridge_start();' $FILE
 
@@ -351,7 +461,7 @@ jobs:
           cp sdkconfig.ci.box sdkconfig
           idf.py fullclean
           idf.py reconfigure
-          idf.py build 2>&1 | tee build.log
+          idf.py build
 
       # ---------------------------
       # MERGE BIN
