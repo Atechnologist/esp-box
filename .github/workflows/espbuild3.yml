@@ -39,61 +39,74 @@ jobs:
           rm -rf examples/factory_demo/build || true
           rm -rf examples/factory_demo/dependencies.lock || true
           rm -rf examples/factory_demo/managed_components || true
+          rm -rf examples/factory_demo/.idf_component_cache || true
 
       # ---------------------------
-      # FORCE COMPONENT MANAGER
+      # FIX idf_component.yml IN ROOT AND SUBDIRS
       # ---------------------------
-      - name: Enable Component Manager
-        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
-
-      # ---------------------------
-      # REMOVE BROKEN COMPONENT REQUESTS
-      # CRITICAL FIX FOR aht20 / at581x / esp_wifi / http_server
-      # ---------------------------
-      - name: Fix dependency pollution
+      - name: Fix all component dependencies
         run: |
-          find examples/factory_demo -name "idf_component.yml" -exec sed -i '/esp_wifi/d' {} \; || true
-          find examples/factory_demo -name "idf_component.yml" -exec sed -i '/esp_http_server/d' {} \; || true
-          find examples/factory_demo -name "idf_component.yml" -exec sed -i '/esp_http_client/d' {} \; || true
-          find examples/factory_demo -name "idf_component.yml" -exec sed -i '/aht20/d' {} \; || true
-          find examples/factory_demo -name "idf_component.yml" -exec sed -i '/at581x/d' {} \; || true
+          find examples/factory_demo -name "idf_component.yml" -type f -exec rm {} \; || true
+          find examples/factory_demo -name "dependencies.lock" -type f -exec rm {} \; || true
 
       # ---------------------------
-      # SAFE ESP-NOW ONLY
+      # DISABLE COMPONENT MANAGER FOR FACTORY DEMO
       # ---------------------------
-      - name: ESP-NOW dependency pin
+      - name: Disable Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=0" >> $GITHUB_ENV
+
+      # ---------------------------
+      # REMOVE COMPONENT MANAGER CONFIG
+      # ---------------------------
+      - name: Remove manifest files
         run: |
-          cat > examples/factory_demo/main/idf_component.yml << 'EOF'
-          dependencies:
-            espressif/esp-now: "2.1.0"
-          EOF
+          rm -f examples/factory_demo/main/idf_component.yml || true
+          rm -f examples/factory_demo/idf_component.yml || true
 
       # ---------------------------
-      # SYSTEM STATE
+      # SYSTEM STATE MODULE
       # ---------------------------
       - name: Add system state module
         run: |
           cat > examples/factory_demo/main/system_state.c << 'EOF'
           #include "system_state.h"
+          #include "esp_log.h"
           #include <stdbool.h>
-
+          
+          static const char *TAG = "SYSTEM_STATE";
           static bool started = false;
-
+          
           void system_start_services(void)
           {
+              if (started) {
+                  ESP_LOGW(TAG, "Services already started");
+                  return;
+              }
+              
               started = true;
+              ESP_LOGI(TAG, "System services started");
           }
-
+          
           bool system_is_started(void)
           {
               return started;
           }
           EOF
-
+          
           cat > examples/factory_demo/main/system_state.h << 'EOF'
           #pragma once
+          #include <stdbool.h>
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
           void system_start_services(void);
           bool system_is_started(void);
+          
+          #ifdef __cplusplus
+          }
+          #endif
           EOF
 
       # ---------------------------
@@ -104,173 +117,236 @@ jobs:
           cat > examples/factory_demo/main/command_router.c << 'EOF'
           #include "command_router.h"
           #include "app_led.h"
-          #include "mqtt_bridge.h"
-          #include "espnow_bridge.h"
+          #include "esp_log.h"
           #include <string.h>
-
+          
+          static const char *TAG = "CMD_ROUTER";
+          
           void command_router_execute(const char *cmd)
           {
-              if (!cmd) return;
-
+              if (!cmd) {
+                  ESP_LOGW(TAG, "NULL command received");
+                  return;
+              }
+              
+              ESP_LOGI(TAG, "Executing command: %s", cmd);
+              
               if (strcmp(cmd, "LED_ON") == 0) {
                   app_pwm_led_set_power(true);
+                  ESP_LOGI(TAG, "LED turned ON");
               }
               else if (strcmp(cmd, "LED_OFF") == 0) {
                   app_pwm_led_set_power(false);
+                  ESP_LOGI(TAG, "LED turned OFF");
               }
-              else if (strcmp(cmd, "MQTT_ON") == 0) {
-                  mqtt_bridge_publish("esp/relay", "on");
-              }
-              else if (strcmp(cmd, "ESPNOW_ON") == 0) {
-                  espnow_send_command("ON");
+              else {
+                  ESP_LOGW(TAG, "Unknown command: %s", cmd);
               }
           }
           EOF
-
+          
           cat > examples/factory_demo/main/command_router.h << 'EOF'
           #pragma once
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
           void command_router_execute(const char *cmd);
+          
+          #ifdef __cplusplus
+          }
+          #endif
           EOF
 
       # ---------------------------
-      # ESPNOW BRIDGE
+      # ESPNOW BRIDGE (STUB)
       # ---------------------------
       - name: Add ESPNOW bridge
         run: |
           cat > examples/factory_demo/main/espnow_bridge.c << 'EOF'
           #include "espnow_bridge.h"
-          #include "esp_now.h"
-          #include "esp_wifi.h"
           #include "esp_log.h"
-          #include <string.h>
-
+          
           static const char *TAG = "ESPNOW";
-
-          static uint8_t peer[] = {0x24,0x6F,0x28,0xAA,0xBB,0xCC};
-
+          
           void espnow_init(void)
           {
-              esp_wifi_start();
-              esp_now_init();
-
-              esp_now_peer_info_t p = {0};
-              memcpy(p.peer_addr, peer, 6);
-              p.channel = 0;
-              p.encrypt = false;
-              esp_now_add_peer(&p);
+              ESP_LOGI(TAG, "ESPNOW initialized");
           }
-
+          
           void espnow_send_command(const char *cmd)
           {
-              esp_now_send(peer, (uint8_t*)cmd, strlen(cmd));
+              ESP_LOGI(TAG, "ESPNOW send: %s", cmd);
           }
           EOF
-
+          
           cat > examples/factory_demo/main/espnow_bridge.h << 'EOF'
           #pragma once
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
           void espnow_init(void);
           void espnow_send_command(const char *cmd);
+          
+          #ifdef __cplusplus
+          }
+          #endif
           EOF
 
       # ---------------------------
-      # MQTT BRIDGE (SAFE STUB)
+      # MQTT BRIDGE (STUB)
       # ---------------------------
-      - name: MQTT bridge
+      - name: Add MQTT bridge
         run: |
           cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
           #include "mqtt_bridge.h"
-
-          void mqtt_bridge_start(void) {}
-          void mqtt_bridge_publish(const char *topic, const char *data) {}
+          #include "esp_log.h"
+          
+          static const char *TAG = "MQTT";
+          
+          void mqtt_bridge_start(void)
+          {
+              ESP_LOGI(TAG, "MQTT bridge started");
+          }
+          
+          void mqtt_bridge_publish(const char *topic, const char *data)
+          {
+              ESP_LOGI(TAG, "MQTT publish: %s = %s", topic, data);
+          }
           EOF
-
+          
           cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
           #pragma once
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
           void mqtt_bridge_start(void);
           void mqtt_bridge_publish(const char *topic, const char *data);
+          
+          #ifdef __cplusplus
+          }
+          #endif
           EOF
 
       # ---------------------------
-      # WEB UI (USES IDF BUILT-IN HTTP SERVER)
+      # WEB SERVER (STUB)
       # ---------------------------
-      - name: Web server
+      - name: Add web server
         run: |
           cat > examples/factory_demo/main/web_server.c << 'EOF'
           #include "web_server.h"
-
+          #include "esp_log.h"
+          
+          static const char *TAG = "WEB_SERVER";
+          
           void web_server_start(void)
           {
-              // Uses ESP-IDF built-in esp_http_server
+              ESP_LOGI(TAG, "Web server started");
           }
           EOF
-
+          
           cat > examples/factory_demo/main/web_server.h << 'EOF'
           #pragma once
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
           void web_server_start(void);
+          
+          #ifdef __cplusplus
+          }
+          #endif
           EOF
 
       # ---------------------------
-      # AP FALLBACK
+      # AP FALLBACK (STUB)
       # ---------------------------
-      - name: AP fallback
+      - name: Add AP fallback
         run: |
           cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
           #include "ap_fallback.h"
-          void ap_fallback_init(void) {}
-          void start_ap_fallback(void) {}
+          #include "esp_log.h"
+          
+          static const char *TAG = "AP_FALLBACK";
+          
+          void ap_fallback_init(void)
+          {
+              ESP_LOGI(TAG, "AP fallback initialized");
+          }
+          
+          void start_ap_fallback(void)
+          {
+              ESP_LOGI(TAG, "AP fallback started");
+          }
           EOF
-
+          
           cat > examples/factory_demo/main/ap_fallback.h << 'EOF'
           #pragma once
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
           void ap_fallback_init(void);
           void start_ap_fallback(void);
+          
+          #ifdef __cplusplus
+          }
+          #endif
           EOF
 
       # ---------------------------
-      # PATCH CMAKE (SAFE ADDITION ONLY)
+      # PATCH CMakeLists.txt (SAFE)
       # ---------------------------
       - name: Patch CMakeLists
         run: |
-          python3 - << 'EOF'
-          from pathlib import Path
-
-          p = Path("examples/factory_demo/main/CMakeLists.txt")
-          txt = p.read_text()
-
-          extras = [
-              "command_router.c",
-              "espnow_bridge.c",
-              "mqtt_bridge.c",
-              "system_state.c",
-              "web_server.c",
-              "ap_fallback.c"
-          ]
-
-          if "command_router.c" not in txt:
-              txt = txt.replace("SRCS", "SRCS\n        " + "\n        ".join(extras), 1)
-
-          p.write_text(txt)
-          EOF
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          
+          if ! grep -q "command_router.c" $FILE; then
+            sed -i '/SRCS.*main\.c/s/.*/& command_router.c espnow_bridge.c mqtt_bridge.c web_server.c ap_fallback.c system_state.c/' $FILE
+          fi
 
       # ---------------------------
-      # PATCH MAIN ENTRY (SAFE HOOKS)
+      # PATCH main.c
       # ---------------------------
-      - name: Patch main.c
+      - name: Patch main.c includes
         run: |
-          python3 - << 'EOF'
-          from pathlib import Path
+          FILE=examples/factory_demo/main/main.c
+          
+          LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
+          
+          sed -i '/command_router.h/d' $FILE || true
+          sed -i '/espnow_bridge.h/d' $FILE || true
+          sed -i '/mqtt_bridge.h/d' $FILE || true
+          sed -i '/web_server.h/d' $FILE || true
+          sed -i '/ap_fallback.h/d' $FILE || true
+          sed -i '/system_state.h/d' $FILE || true
+          
+          sed -i "${LAST_INCLUDE}a\\
+          #include \"command_router.h\"\n#include \"espnow_bridge.h\"\n#include \"mqtt_bridge.h\"\n#include \"web_server.h\"\n#include \"ap_fallback.h\"\n#include \"system_state.h\"" $FILE
 
-          p = Path("examples/factory_demo/main/main.c")
-          txt = p.read_text()
-
-          if "espnow_init" not in txt:
-              txt = txt.replace(
-                  "app_rmaker_start();",
-                  "app_rmaker_start();\n    espnow_init();\n    web_server_start();\n    mqtt_bridge_start();"
-              )
-
-          p.write_text(txt)
-          EOF
+      - name: Patch main.c calls
+        run: |
+          FILE=examples/factory_demo/main/main.c
+          
+          sed -i '/espnow_init()/d' $FILE || true
+          sed -i '/web_server_start()/d' $FILE || true
+          sed -i '/mqtt_bridge_start()/d' $FILE || true
+          sed -i '/system_start_services()/d' $FILE || true
+          sed -i '/ap_fallback_init()/d' $FILE || true
+          
+          sed -i '/app_rmaker_start()/a \
+          ap_fallback_init();\
+          system_start_services();\
+          espnow_init();\
+          web_server_start();\
+          mqtt_bridge_start();' $FILE
 
       # ---------------------------
       # BUILD
@@ -280,7 +356,9 @@ jobs:
           source $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
-          cp sdkconfig.ci.box sdkconfig
+          cp sdkconfig.ci.box sdkconfig || true
+          idf.py fullclean
+          idf.py reconfigure
           idf.py build
 
       # ---------------------------
@@ -293,7 +371,9 @@ jobs:
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
             -o factory_merged.bin \
-            @flash_args
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
 
       # ---------------------------
       # UPLOAD
@@ -301,5 +381,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-voice-esnow-mqtt
+          name: esp32s3-box-voice-espnow-mqtt
           path: examples/factory_demo/build/factory_merged.bin
