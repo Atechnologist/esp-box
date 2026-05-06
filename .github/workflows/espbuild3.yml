@@ -42,26 +42,18 @@ jobs:
           rm -rf examples/factory_demo/.idf_component_cache || true
 
       # ---------------------------
-      # FIX idf_component.yml IN ROOT AND SUBDIRS
+      # RESTORE ORIGINAL DEPENDENCIES
       # ---------------------------
-      - name: Fix all component dependencies
+      - name: Restore original idf_component.yml
         run: |
-          find examples/factory_demo -name "idf_component.yml" -type f -exec rm {} \; || true
-          find examples/factory_demo -name "dependencies.lock" -type f -exec rm {} \; || true
+          cd examples/factory_demo
+          git checkout idf_component.yml 2>/dev/null || true
 
       # ---------------------------
-      # DISABLE COMPONENT MANAGER FOR FACTORY DEMO
+      # ENABLE COMPONENT MANAGER (ORIGINAL CONFIG)
       # ---------------------------
-      - name: Disable Component Manager
-        run: echo "IDF_COMPONENT_MANAGER=0" >> $GITHUB_ENV
-
-      # ---------------------------
-      # REMOVE COMPONENT MANAGER CONFIG
-      # ---------------------------
-      - name: Remove manifest files
-        run: |
-          rm -f examples/factory_demo/main/idf_component.yml || true
-          rm -f examples/factory_demo/idf_component.yml || true
+      - name: Enable Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ---------------------------
       # SYSTEM STATE MODULE
@@ -356,10 +348,10 @@ jobs:
           source $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
-          cp sdkconfig.ci.box sdkconfig || true
+          cp sdkconfig.ci.box sdkconfig
           idf.py fullclean
           idf.py reconfigure
-          idf.py build
+          idf.py build 2>&1 | tee build.log
 
       # ---------------------------
       # MERGE BIN
