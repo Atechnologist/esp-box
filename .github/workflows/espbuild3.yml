@@ -70,7 +70,7 @@ jobs:
           EOF
 
       # ---------------------------
-      # COMMAND ROUTER (NEW)
+      # COMMAND ROUTER
       # ---------------------------
       - name: Add command router
         run: |
@@ -104,7 +104,10 @@ jobs:
           EOF
 
       # ---------------------------
-      # ESPNOW BRIDGE (NEW)
+      # ESPNOW BRIDGE
+      # WiFi must be started before esp_now_init().
+      # espnow_init() calls esp_wifi_start() as a guard,
+      # which is safe to call even if WiFi is already up.
       # ---------------------------
       - name: Add ESPNOW bridge
         run: |
@@ -112,25 +115,45 @@ jobs:
           #include "espnow_bridge.h"
           #include "esp_now.h"
           #include "esp_wifi.h"
+          #include "esp_log.h"
           #include <string.h>
 
-          uint8_t peer_mac[] = {0x24,0x6F,0x28,0xAA,0xBB,0xCC};
+          static const char *TAG = "espnow_bridge";
+
+          static uint8_t peer_mac[] = {0x24, 0x6F, 0x28, 0xAA, 0xBB, 0xCC};
 
           void espnow_init(void)
           {
-              esp_now_init();
+              /* WiFi must be initialised and started before ESP-NOW */
+              esp_err_t err = esp_wifi_start();
+              if (err != ESP_OK && err != ESP_ERR_WIFI_CONN) {
+                  ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(err));
+                  return;
+              }
+
+              err = esp_now_init();
+              if (err != ESP_OK) {
+                  ESP_LOGE(TAG, "esp_now_init failed: %s", esp_err_to_name(err));
+                  return;
+              }
 
               esp_now_peer_info_t peer = {0};
               memcpy(peer.peer_addr, peer_mac, 6);
               peer.channel = 0;
               peer.encrypt = false;
 
-              esp_now_add_peer(&peer);
+              err = esp_now_add_peer(&peer);
+              if (err != ESP_OK) {
+                  ESP_LOGE(TAG, "esp_now_add_peer failed: %s", esp_err_to_name(err));
+              }
           }
 
           void espnow_send_command(const char *cmd)
           {
-              esp_now_send(peer_mac, (uint8_t *)cmd, strlen(cmd));
+              esp_err_t err = esp_now_send(peer_mac, (uint8_t *)cmd, strlen(cmd));
+              if (err != ESP_OK) {
+                  ESP_LOGE(TAG, "esp_now_send failed: %s", esp_err_to_name(err));
+              }
           }
           EOF
 
@@ -141,7 +164,7 @@ jobs:
           EOF
 
       # ---------------------------
-      # MQTT BRIDGE (UPDATED)
+      # MQTT BRIDGE
       # ---------------------------
       - name: Add MQTT bridge
         run: |
@@ -160,7 +183,7 @@ jobs:
           EOF
 
       # ---------------------------
-      # WEB SERVER (KEEP SIMPLE)
+      # WEB SERVER
       # ---------------------------
       - name: Add Web Server
         run: |
@@ -192,12 +215,135 @@ jobs:
           EOF
 
       # ---------------------------
+      # ADD ESP-NOW COMPONENT DEPENDENCY
+      # Ensures idf_component.yml declares espressif/esp-now
+      # so the Component Manager fetches it automatically.
+      # ---------------------------
+      - name: Add ESP-NOW component dependency
+        run: |
+          COMP_YML=examples/factory_demo/main/idf_component.yml
+          if [ ! -f "$COMP_YML" ]; then
+            echo "dependencies:" > "$COMP_YML"
+          fi
+          if ! grep -q 'espressif/esp-now' "$COMP_YML"; then
+            echo '  espressif/esp-now: ">=2.0.0"' >> "$COMP_YML"
+          fi
+
+      # ---------------------------
       # PATCH CMAKE
+      # Uses a Python script to reliably insert source files
+      # into the SRCS list — avoids brittle sed regex on SRCS.
       # ---------------------------
       - name: Patch CMakeLists.txt
         run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-          sed -i '/SRCS.*main\.c/s/.*/& ap_fallback.c web_server.c mqtt_bridge.c system_state.c command_router.c espnow_bridge.c/' $FILE
+          python3 - << 'EOF'
+          import pathlib, re
+
+          cmake_path = pathlib.Path("examples/factory_demo/main/CMakeLists.txt")
+          src = cmake_path.read_text()
+
+          new_files = [
+              "ap_fallback.c",
+              "web_server.c",
+              "mqtt_bridge.c",
+              "system_state.c",
+              "command_router.c",
+              "espnow_bridge.c",
+          ]
+
+          # Insert extra source files after the first occurrence of "SRCS"
+          def insert_srcs(match):
+              indent = "        "
+              extras = "".join(f"\n{indent}{f}" for f in new_files)
+              return match.group(0) + extras
+
+          src = re.sub(r'SRCS\b', insert_srcs, src, count=1)
+          cmake_path.write_text(src)
+          print("CMakeLists.txt patched successfully")
+          EOF
+
+      # ---------------------------
+      # PATCH MAIN
+      # Uses a Python script for reliable multiline edits —
+      # avoids portability issues with sed backslash-newlines.
+      # ---------------------------
+      - name: Patch main.c
+        run: |
+          python3 - << 'EOF'
+          import pathlib, re
+
+          main_path = pathlib.Path("examples/factory_demo/main/main.c")
+          src = main_path.read_text()
+
+          # --- 1. Inject includes after the last #include line ---
+          extra_includes = (
+              '#include "system_state.h"\n'
+              '#include "command_router.h"\n'
+              '#include "espnow_bridge.h"\n'
+          )
+
+          # Find position just after the last #include line
+          last_inc = None
+          for m in re.finditer(r'^#include\s+.+$', src, re.MULTILINE):
+              last_inc = m
+          if last_inc is None:
+              raise RuntimeError("No #include found in main.c")
+
+          insert_pos = last_inc.end()
+          # Only inject if not already present
+          if 'system_state.h' not in src:
+              src = src[:insert_pos] + '\n' + extra_includes + src[insert_pos:]
+
+          # --- 2. Inject calls after app_rmaker_start() ---
+          injection = (
+              '\n    system_start_services();'
+              '\n    espnow_init();'
+          )
+          token = 'app_rmaker_start();'
+          if token in src and 'espnow_init()' not in src:
+              src = src.replace(token, token + injection)
+
+          main_path.write_text(src)
+          print("main.c patched successfully")
+          EOF
+
+      # ---------------------------
+      # BUILD
+      # Uses `source` (not `.`) for reliable shell sourcing
+      # inside the espressif/idf container.
+      # ---------------------------
+      - name: Build firmware
+        run: |
+          source $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+          idf.py build
+
+      # ---------------------------
+      # MERGE BIN
+      # Uses @flash_args (esptool argument-file syntax) instead
+      # of $(cat flash_args) to avoid flag conflicts with
+      # explicit --flash_mode / --flash_size arguments.
+      # ---------------------------
+      - name: Merge firmware
+        run: |
+          source $IDF_PATH/export.sh
+          cd examples/factory_demo/build
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o factory_merged.bin \
+            @flash_args
+
+      # ---------------------------
+      # UPLOAD
+      # ---------------------------
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-box-voice-router
+          path: examples/factory_demo/build/factory_merged.bin
+
 
       # ---------------------------
       # PATCH MAIN
