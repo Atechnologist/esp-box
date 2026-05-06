@@ -31,13 +31,11 @@ jobs:
         run: git config --global --add safe.directory '*'
 
       # ---------------------------
-      # CLEAN BUILD + CACHE
+      # CLEAN
       # ---------------------------
-      - name: Clean build + cache
+      - name: Clean build
         run: |
           rm -rf examples/factory_demo/build || true
-          rm -rf ~/.espressif/components || true
-          rm -rf ~/.cache/Espressif || true
 
       # ---------------------------
       # ENABLE COMPONENT MANAGER
@@ -46,21 +44,14 @@ jobs:
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ---------------------------
-      # FIX COMPONENT CONFLICTS
+      # FIX DEPENDENCIES (CRITICAL)
       # ---------------------------
-      - name: Fix component conflicts
-        run: |
-          find . -name "idf_component.yml" -exec sed -i '/esp-lcd-touch/d' {} \; || true
-          find . -name "idf_component.yml" -exec sed -i '/ili9341/d' {} \; || true
-
-      # ---------------------------
-      # FORCE ESP-NOW VERSION (CRITICAL FIX)
-      # ---------------------------
-      - name: Set ESP-NOW dependency (compatible)
+      - name: Fix dependencies (ESP-NOW + AHT20)
         run: |
           cat > examples/factory_demo/main/idf_component.yml << 'EOF'
           dependencies:
             espressif/esp-now: "==2.1.0"
+            espressif/aht20: ">=1.0.0"
           EOF
 
       # ---------------------------
@@ -128,7 +119,7 @@ jobs:
           EOF
 
       # ---------------------------
-      # ESPNOW BRIDGE (SAFE INIT)
+      # ESPNOW BRIDGE
       # ---------------------------
       - name: Add ESPNOW bridge
         run: |
@@ -140,15 +131,12 @@ jobs:
           #include <string.h>
 
           static const char *TAG = "espnow_bridge";
-
-          static uint8_t peer_mac[] = {0x24, 0x6F, 0x28, 0xAA, 0xBB, 0xCC};
+          static uint8_t peer_mac[] = {0x24,0x6F,0x28,0xAA,0xBB,0xCC};
 
           void espnow_init(void)
           {
-              if (esp_now_init() != ESP_OK) {
-                  ESP_LOGE(TAG, "ESP-NOW init failed");
-                  return;
-              }
+              esp_wifi_start();
+              esp_now_init();
 
               esp_now_peer_info_t peer = {0};
               memcpy(peer.peer_addr, peer_mac, 6);
@@ -220,52 +208,53 @@ jobs:
           EOF
 
       # ---------------------------
-      # PATCH CMAKE
+      # PATCH CMAKE (ROBUST)
       # ---------------------------
       - name: Patch CMakeLists.txt
         run: |
           python3 - << 'EOF'
-          import pathlib, re
+          import pathlib
+
           p = pathlib.Path("examples/factory_demo/main/CMakeLists.txt")
-          s = p.read_text()
+          txt = p.read_text()
 
           files = [
-              "ap_fallback.c",
-              "web_server.c",
-              "mqtt_bridge.c",
               "system_state.c",
               "command_router.c",
               "espnow_bridge.c",
+              "mqtt_bridge.c",
+              "web_server.c",
+              "ap_fallback.c"
           ]
 
-          def repl(m):
-              return m.group(0) + "".join("\n        " + f for f in files)
+          for f in files:
+              if f not in txt:
+                  txt = txt.replace("main.c", f"main.c {f}")
 
-          s = re.sub(r"SRCS", repl, s, count=1)
-          p.write_text(s)
+          p.write_text(txt)
           EOF
 
       # ---------------------------
-      # PATCH MAIN
+      # PATCH MAIN (SAFE)
       # ---------------------------
       - name: Patch main.c
         run: |
           python3 - << 'EOF'
           import pathlib, re
-          p = pathlib.Path("examples/factory_demo/main/main.c")
-          s = p.read_text()
 
-          inc = '#include "system_state.h"\n#include "command_router.h"\n#include "espnow_bridge.h"\n'
+          f = pathlib.Path("examples/factory_demo/main/main.c")
+          src = f.read_text()
 
-          if "system_state.h" not in s:
-              last = list(re.finditer(r'^#include.*$', s, re.M))[-1]
-              s = s[:last.end()] + "\n" + inc + s[last.end():]
+          if "system_state.h" not in src:
+              src = re.sub(r'(#include.+\n)',
+                  r'\1#include "system_state.h"\n#include "espnow_bridge.h"\n#include "command_router.h"\n',
+                  src, count=1)
 
-          if "espnow_init();" not in s:
-              s = s.replace("app_rmaker_start();",
-                            "app_rmaker_start();\n    system_start_services();\n    espnow_init();")
+          if "espnow_init();" not in src:
+              src = src.replace("app_rmaker_start();",
+                                "app_rmaker_start();\n    system_start_services();\n    espnow_init();")
 
-          p.write_text(s)
+          f.write_text(src)
           EOF
 
       # ---------------------------
@@ -297,5 +286,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-voice-router-fixed
+          name: esp32s3-box-voice-router
           path: examples/factory_demo/build/factory_merged.bin
