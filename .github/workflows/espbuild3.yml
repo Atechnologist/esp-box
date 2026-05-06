@@ -47,7 +47,7 @@ jobs:
       # =========================
       - name: Add ai_voice_router
         run: |
-          cat > examples/factory_demo/main/ai_voice_router.h << 'EOF'
+          cat > examples/factory_demo/main/ai_voice_router.h << 'HEOF'
           #pragma once
           #ifdef __cplusplus
           extern "C" {
@@ -58,9 +58,9 @@ jobs:
           #ifdef __cplusplus
           }
           #endif
-          EOF
+          HEOF
 
-          cat > examples/factory_demo/main/ai_voice_router.c << 'EOF'
+          cat > examples/factory_demo/main/ai_voice_router.c << 'HEOF'
           #include "ai_voice_router.h"
           #include "command_router.h"
           #include <string.h>
@@ -77,7 +77,6 @@ jobs:
 
               printf("VOICE: %s\n", text);
 
-              // --- INTENT LOGIC ---
               if (contains(text, "light") || contains(text, "led"))
               {
                   if (contains(text, "on") || contains(text, "start"))
@@ -86,25 +85,23 @@ jobs:
                   else if (contains(text, "off") || contains(text, "stop"))
                       command_router_execute("LED_OFF");
               }
-
               else if (contains(text, "remote"))
               {
                   command_router_execute("REMOTE_ON");
               }
-
               else if (contains(text, "send"))
               {
                   command_router_execute("ESPNOW_ON");
               }
           }
-          EOF
+          HEOF
 
       # =========================
       # COMMAND ROUTER
       # =========================
       - name: Add command_router
         run: |
-          cat > examples/factory_demo/main/command_router.h << 'EOF'
+          cat > examples/factory_demo/main/command_router.h << 'HEOF'
           #pragma once
           #ifdef __cplusplus
           extern "C" {
@@ -115,9 +112,9 @@ jobs:
           #ifdef __cplusplus
           }
           #endif
-          EOF
+          HEOF
 
-          cat > examples/factory_demo/main/command_router.c << 'EOF'
+          cat > examples/factory_demo/main/command_router.c << 'HEOF'
           #include "command_router.h"
           #include "app_led.h"
           #include <string.h>
@@ -134,23 +131,20 @@ jobs:
 
               else if (strcmp(cmd, "LED_OFF") == 0)
                   app_pwm_led_set_power(false);
-
-              // future:
-              // MQTT / ESPNOW hooks here
           }
-          EOF
+          HEOF
 
       # =========================
       # WEB UI
       # =========================
       - name: Add web_server
         run: |
-          cat > examples/factory_demo/main/web_server.h << 'EOF'
+          cat > examples/factory_demo/main/web_server.h << 'HEOF'
           #pragma once
           void web_server_start(void);
-          EOF
+          HEOF
 
-          cat > examples/factory_demo/main/web_server.c << 'EOF'
+          cat > examples/factory_demo/main/web_server.c << 'HEOF'
           #include "web_server.h"
           #include "esp_http_server.h"
           #include "app_led.h"
@@ -196,54 +190,112 @@ jobs:
               httpd_register_uri_handler(server, &o);
               httpd_register_uri_handler(server, &f);
           }
-          EOF
+          HEOF
 
       # =========================
       # PATCH CMAKE
+      # Python used instead of sed to avoid brittle regex
+      # and YAML quoting issues with inline sed expressions.
       # =========================
       - name: Patch CMake
         run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-          grep -q ai_voice_router.c $FILE || \
-          sed -i '/SRCS/s/main.c/& ai_voice_router.c command_router.c web_server.c/' $FILE
+          python3 - << 'PYEOF'
+          import pathlib, re
+
+          cmake_path = pathlib.Path("examples/factory_demo/main/CMakeLists.txt")
+          src = cmake_path.read_text()
+
+          if "ai_voice_router.c" not in src:
+              new_files = ["ai_voice_router.c", "command_router.c", "web_server.c"]
+
+              def insert_srcs(match):
+                  indent = "        "
+                  extras = "".join(f"\n{indent}{f}" for f in new_files)
+                  return match.group(0) + extras
+
+              src = re.sub(r'SRCS\b', insert_srcs, src, count=1)
+              cmake_path.write_text(src)
+              print("CMakeLists.txt patched")
+          else:
+              print("CMakeLists.txt already patched, skipping")
+          PYEOF
 
       # =========================
-      # PATCH SR HANDLER (KEY PART)
+      # PATCH SR HANDLER
+      # Injects ai_voice_process() call after the speech
+      # recognition log line in app_sr_handler.c.
+      # Python used instead of multiline sed — the original
+      # sed -i '/.../a \' block is invalid YAML syntax.
       # =========================
       - name: Inject AI into speech pipeline
         run: |
-          FILE=examples/factory_demo/main/app/app_sr_handler.c
+          python3 - << 'PYEOF'
+          import pathlib, re
 
-          grep -q ai_voice_process $FILE || sed -i '
-          /ESP_LOGI.*"recog"/a \
-          ai_voice_process(result->phrase);
-          ' $FILE
+          sr_path = pathlib.Path("examples/factory_demo/main/app/app_sr_handler.c")
+          if not sr_path.exists():
+              # Try alternate location
+              sr_path = pathlib.Path("examples/factory_demo/main/app_sr_handler.c")
+
+          if not sr_path.exists():
+              print("WARNING: app_sr_handler.c not found, searching...")
+              import subprocess
+              result = subprocess.run(
+                  ["find", "examples/factory_demo", "-name", "app_sr_handler.c"],
+                  capture_output=True, text=True
+              )
+              found = result.stdout.strip().splitlines()
+              if not found:
+                  raise FileNotFoundError("app_sr_handler.c not found anywhere")
+              sr_path = pathlib.Path(found[0])
+              print(f"Found at: {sr_path}")
+
+          src = sr_path.read_text()
+
+          if "ai_voice_process" in src:
+              print("SR handler already patched, skipping")
+          else:
+              # Add include at top if not present
+              if '"ai_voice_router.h"' not in src:
+                  src = '#include "ai_voice_router.h"\n' + src
+
+              # Insert ai_voice_process() call after the ESP_LOGI line
+              # that logs the recognised phrase
+              src = re.sub(
+                  r'(ESP_LOGI\s*\([^)]*recog[^)]*\)\s*;)',
+                  r'\1\n    ai_voice_process(result->phrase);',
+                  src
+              )
+              sr_path.write_text(src)
+              print(f"SR handler patched: {sr_path}")
+          PYEOF
 
       # =========================
       # PATCH MAIN
       # =========================
       - name: Patch main
         run: |
-          python3 - << 'EOF'
-          import pathlib,re
-          f=pathlib.Path("examples/factory_demo/main/main.c")
-          s=f.read_text()
+          python3 - << 'PYEOF'
+          import pathlib, re
 
-          inc = '''
-#include "web_server.h"
-#include "ai_voice_router.h"
-'''
+          f = pathlib.Path("examples/factory_demo/main/main.c")
+          s = f.read_text()
 
-          m=list(re.finditer(r'^#include.*$',s,re.M))
+          inc = '\n#include "web_server.h"\n#include "ai_voice_router.h"\n'
+
+          m = list(re.finditer(r'^#include.*$', s, re.M))
           if m and "ai_voice_router.h" not in s:
-              s=s[:m[-1].end()]+inc+s[m[-1].end():]
+              s = s[:m[-1].end()] + inc + s[m[-1].end():]
 
           if "web_server_start();" not in s:
-              s=s.replace("app_rmaker_start();",
-              "app_rmaker_start();\nweb_server_start();")
+              s = s.replace(
+                  "app_rmaker_start();",
+                  "app_rmaker_start();\n    web_server_start();"
+              )
 
           f.write_text(s)
-          EOF
+          print("main.c patched")
+          PYEOF
 
       # =========================
       # BUILD
@@ -274,3 +326,4 @@ jobs:
         with:
           name: esp32-ai-voice-router
           path: examples/factory_demo/build/factory.bin
+
