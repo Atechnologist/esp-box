@@ -1,10 +1,9 @@
-name: ESP32-S3-BOX PRODUCTION BUILD (VOICE + ESPNOW + MQTT + WEBUI + ROUTER)
+name: ESP32-S3-BOX PRODUCTION BUILD (VOICE PIPELINE FINAL)
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   build:
@@ -27,58 +26,56 @@ jobs:
         with:
           repository: espressif/esp-box
           submodules: recursive
-          fetch-depth: 0
 
-      - name: Safe directory fix
-        run: git config --global --add safe.directory '*'
+      - run: git config --global --add safe.directory '*'
 
       # ---------------------------
-      # CLEAN STATE (CRITICAL)
+      # CLEAN
       # ---------------------------
-      - name: Clean build
+      - name: Clean state
         run: |
-          rm -rf examples/factory_demo/build || true
-          rm -rf examples/factory_demo/dependencies.lock || true
-          rm -rf examples/factory_demo/managed_components || true
-          rm -rf examples/factory_demo/.idf_component_cache || true
+          rm -rf examples/factory_demo/build
+          rm -rf examples/factory_demo/dependencies.lock
+          rm -rf examples/factory_demo/managed_components
 
       # ---------------------------
-      # RESTORE ORIGINAL DEPENDENCIES
+      # SYSTEM STATE (FIXED BOOL)
       # ---------------------------
-      - name: Restore idf_component.yml
+      - name: Add system state
         run: |
-          cd examples/factory_demo
-          git checkout idf_component.yml 2>/dev/null || true
-
-      # ---------------------------
-      # ENABLE COMPONENT MANAGER
-      # ---------------------------
-      - name: Enable Component Manager
-        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
-
-      # ---------------------------
-      # SYSTEM STATE
-      # ---------------------------
-      - name: Add system_state
-        run: |
-          cat > examples/factory_demo/main/system_state.c << 'EOF'
-          #include "system_state.h"
-          static bool started = false;
-          void system_start_services(void){ if(started) return; started=true; }
-          bool system_is_started(void){ return started; }
-          EOF
-
           cat > examples/factory_demo/main/system_state.h << 'EOF'
           #pragma once
+          #include <stdbool.h>
           void system_start_services(void);
           bool system_is_started(void);
           EOF
 
+          cat > examples/factory_demo/main/system_state.c << 'EOF'
+          #include "system_state.h"
+          #include <stdbool.h>
+
+          static bool started = false;
+
+          void system_start_services(void){
+              if(started) return;
+              started = true;
+          }
+
+          bool system_is_started(void){
+              return started;
+          }
+          EOF
+
       # ---------------------------
-      # COMMAND ROUTER
+      # COMMAND ROUTER (DYNAMIC)
       # ---------------------------
-      - name: Add command_router
+      - name: Add command router
         run: |
+          cat > examples/factory_demo/main/command_router.h << 'EOF'
+          #pragma once
+          void command_router_execute(const char *cmd);
+          EOF
+
           cat > examples/factory_demo/main/command_router.c << 'EOF'
           #include "command_router.h"
           #include "app_led.h"
@@ -91,171 +88,123 @@ jobs:
           {
               if (!cmd) return;
 
-              ESP_LOGI(TAG, "CMD: %s", cmd);
+              ESP_LOGI(TAG, "VOICE CMD: %s", cmd);
 
-              if (strcmp(cmd,"LED_ON")==0) {
+              if (strstr(cmd, "turn on")) {
                   app_pwm_led_set_power(true);
-              } else if (strcmp(cmd,"LED_OFF")==0) {
+              }
+              else if (strstr(cmd, "turn off")) {
                   app_pwm_led_set_power(false);
               }
           }
           EOF
 
-          cat > examples/factory_demo/main/command_router.h << 'EOF'
-          #pragma once
-          void command_router_execute(const char *cmd);
-          EOF
-
       # ---------------------------
-      # ESPNOW (SAFE STUB)
+      # WEB SERVER
       # ---------------------------
-      - name: Add espnow bridge
+      - name: Add WebUI
         run: |
-          cat > examples/factory_demo/main/espnow_bridge.c << 'EOF'
-          #include "espnow_bridge.h"
-          void espnow_init(void){}
-          void espnow_send_command(const char *cmd){}
-          EOF
-
-          cat > examples/factory_demo/main/espnow_bridge.h << 'EOF'
-          #pragma once
-          void espnow_init(void);
-          void espnow_send_command(const char *cmd);
-          EOF
-
-      # ---------------------------
-      # MQTT (SAFE STUB)
-      # ---------------------------
-      - name: Add mqtt bridge
-        run: |
-          cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
-          #include "mqtt_bridge.h"
-          void mqtt_bridge_start(void){}
-          void mqtt_bridge_publish(const char *t,const char *d){}
-          EOF
-
-          cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
-          #pragma once
-          void mqtt_bridge_start(void);
-          void mqtt_bridge_publish(const char*,const char*);
-          EOF
-
-      # ---------------------------
-      # WEB SERVER (WORKING)
-      # ---------------------------
-      - name: Add web server
-        run: |
-          cat > examples/factory_demo/main/web_server.c << 'EOF'
-          #include "web_server.h"
-          #include "esp_http_server.h"
-          #include "app_led.h"
-
-          static httpd_handle_t server=NULL;
-
-          static esp_err_t root(httpd_req_t *req){
-              const char html[]="<h1>ESP32 BOX</h1>";
-              httpd_resp_send(req,html,HTTPD_RESP_USE_STRLEN);
-              return ESP_OK;
-          }
-
-          void web_server_start(void){
-              if(server) return;
-              httpd_config_t config=HTTPD_DEFAULT_CONFIG();
-              httpd_start(&server,&config);
-              httpd_uri_t uri={.uri="/",.method=HTTP_GET,.handler=root};
-              httpd_register_uri_handler(server,&uri);
-          }
-          EOF
-
           cat > examples/factory_demo/main/web_server.h << 'EOF'
           #pragma once
           void web_server_start(void);
           EOF
 
-      # ---------------------------
-      # AP FALLBACK
-      # ---------------------------
-      - name: Add ap fallback
-        run: |
-          cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
-          void ap_fallback_init(void){}
-          void start_ap_fallback(void){}
+          cat > examples/factory_demo/main/web_server.c << 'EOF'
+          #include "web_server.h"
+          #include "esp_http_server.h"
+          #include "app_led.h"
+
+          static httpd_handle_t server = NULL;
+
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const char resp[] = "<h1>ESP32 Voice Ready</h1>";
+              httpd_resp_send(req, resp, -1);
+              return ESP_OK;
+          }
+
+          void web_server_start(void)
+          {
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              httpd_start(&server, &config);
+
+              httpd_uri_t uri = {
+                  .uri="/",
+                  .method=HTTP_GET,
+                  .handler=root_handler
+              };
+
+              httpd_register_uri_handler(server, &uri);
+          }
           EOF
 
-          cat > examples/factory_demo/main/ap_fallback.h << 'EOF'
-          #pragma once
-          void ap_fallback_init(void);
-          void start_ap_fallback(void);
-          EOF
-
       # ---------------------------
-      # PATCH ESP-SR → ROUTER
+      # ESPNOW + MQTT (SAFE STUBS)
       # ---------------------------
-      - name: Inject router into ESP-SR
+      - name: Add bridges
         run: |
-          FILE=$(grep -rl "app_pwm_led_set_power" examples/factory_demo/main | head -n 1)
-          echo "Patching $FILE"
-
-          grep -q command_router.h $FILE || sed -i '1i #include "command_router.h"' $FILE
-
-          sed -i 's/app_pwm_led_set_power(true);/command_router_execute("LED_ON");/g' $FILE
-          sed -i 's/app_pwm_led_set_power(false);/command_router_execute("LED_OFF");/g' $FILE
+          echo 'void espnow_init(void){}' > examples/factory_demo/main/espnow_bridge.c
+          echo 'void mqtt_bridge_start(void){}' > examples/factory_demo/main/mqtt_bridge.c
 
       # ---------------------------
       # PATCH CMAKE
       # ---------------------------
       - name: Patch CMake
         run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-          sed -i '/SRCS.*main\.c/s/.*/& command_router.c espnow_bridge.c mqtt_bridge.c web_server.c ap_fallback.c system_state.c/' $FILE
+          sed -i '/SRCS/s/main.c/main.c command_router.c web_server.c system_state.c espnow_bridge.c mqtt_bridge.c/' \
+          examples/factory_demo/main/CMakeLists.txt
 
       # ---------------------------
-      # PATCH MAIN
+      # PATCH MAIN (VOICE HOOK)
       # ---------------------------
-      - name: Patch main
+      - name: Inject voice pipeline
         run: |
           FILE=examples/factory_demo/main/main.c
-          LAST=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
 
-          sed -i "${LAST}a\\
-          #include \"command_router.h\"\n#include \"espnow_bridge.h\"\n#include \"mqtt_bridge.h\"\n#include \"web_server.h\"\n#include \"ap_fallback.h\"\n#include \"system_state.h\"" $FILE
+          sed -i '/#include "app_priv.h"/a \
+          #include "command_router.h"\n#include "web_server.h"\n#include "system_state.h"' $FILE
 
           sed -i '/app_rmaker_start()/a \
-          ap_fallback_init();\
-          system_start_services();\
-          espnow_init();\
-          web_server_start();\
-          mqtt_bridge_start();' $FILE
+              system_start_services();\
+              web_server_start();' $FILE
+
+      # ---------------------------
+      # HOOK INTO ESP-SR (KEY PART)
+      # ---------------------------
+      - name: Inject SR callback router
+        run: |
+          FILE=examples/factory_demo/main/app_sr.c
+
+          sed -i '/printf("cmd:/a \
+          command_router_execute(command_id);' $FILE || true
 
       # ---------------------------
       # BUILD
       # ---------------------------
-      - name: Build
+      - name: Build firmware
         run: |
           source $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
           cp sdkconfig.ci.box sdkconfig
-          idf.py fullclean
           idf.py build
 
       # ---------------------------
       # MERGE BIN
       # ---------------------------
-      - name: Merge
+      - name: Merge firmware
         run: |
           source $IDF_PATH/export.sh
           cd examples/factory_demo/build
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
-            -o factory.bin \
+            -o factory_merged.bin \
             @flash_args
 
       # ---------------------------
       # UPLOAD
       # ---------------------------
-      - name: Upload
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-final
-          path: examples/factory_demo/build/factory.bin
+          name: esp32s3-voice-pipeline
+          path: examples/factory_demo/build/factory_merged.bin
