@@ -17,9 +17,6 @@ jobs:
         shell: bash
 
     steps:
-      # ---------------------------
-      # CHECKOUT
-      # ---------------------------
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -30,28 +27,20 @@ jobs:
       - name: Safe directory fix
         run: git config --global --add safe.directory '*'
 
-      # ---------------------------
-      # CLEAN
-      # ---------------------------
       - name: Clean build
-        run: |
-          rm -rf examples/factory_demo/build || true
+        run: rm -rf examples/factory_demo/build || true
 
-      # ---------------------------
-      # ENABLE COMPONENT MANAGER
-      # ---------------------------
       - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
-      # ---------------------------
-      # FIX DEPENDENCIES (CRITICAL)
-      # ---------------------------
-      - name: Fix dependencies (ESP-NOW + AHT20)
+      # ✅ FIX ALL MISSING COMPONENTS HERE
+      - name: Fix dependencies (ESP-NOW + sensors)
         run: |
           cat > examples/factory_demo/main/idf_component.yml << 'EOF'
           dependencies:
             espressif/esp-now: "==2.1.0"
             espressif/aht20: ">=1.0.0"
+            espressif/at581x: ">=1.0.0"
           EOF
 
       # ---------------------------
@@ -119,7 +108,7 @@ jobs:
           EOF
 
       # ---------------------------
-      # ESPNOW BRIDGE
+      # ESPNOW
       # ---------------------------
       - name: Add ESPNOW bridge
         run: |
@@ -127,10 +116,8 @@ jobs:
           #include "espnow_bridge.h"
           #include "esp_now.h"
           #include "esp_wifi.h"
-          #include "esp_log.h"
           #include <string.h>
 
-          static const char *TAG = "espnow_bridge";
           static uint8_t peer_mac[] = {0x24,0x6F,0x28,0xAA,0xBB,0xCC};
 
           void espnow_init(void)
@@ -140,9 +127,6 @@ jobs:
 
               esp_now_peer_info_t peer = {0};
               memcpy(peer.peer_addr, peer_mac, 6);
-              peer.channel = 0;
-              peer.encrypt = false;
-
               esp_now_add_peer(&peer);
           }
 
@@ -159,103 +143,37 @@ jobs:
           EOF
 
       # ---------------------------
-      # MQTT BRIDGE (SAFE STUB)
+      # STUB MODULES (SAFE)
       # ---------------------------
-      - name: Add MQTT bridge
+      - name: Add stubs
         run: |
-          cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
-          #include "mqtt_bridge.h"
-          void mqtt_bridge_start(void) {}
-          void mqtt_bridge_publish(const char *topic, const char *data) {}
-          EOF
+          echo '#pragma once\nvoid mqtt_bridge_start(void);void mqtt_bridge_publish(const char*,const char*);' > examples/factory_demo/main/mqtt_bridge.h
+          echo 'void mqtt_bridge_start(void){} void mqtt_bridge_publish(const char*a,const char*b){}' > examples/factory_demo/main/mqtt_bridge.c
 
-          cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
-          #pragma once
-          void mqtt_bridge_start(void);
-          void mqtt_bridge_publish(const char *topic, const char *data);
-          EOF
+          echo '#pragma once\nvoid web_server_start(void);' > examples/factory_demo/main/web_server.h
+          echo 'void web_server_start(void){}' > examples/factory_demo/main/web_server.c
+
+          echo '#pragma once\nvoid ap_fallback_init(void);' > examples/factory_demo/main/ap_fallback.h
+          echo 'void ap_fallback_init(void){}' > examples/factory_demo/main/ap_fallback.c
 
       # ---------------------------
-      # WEB SERVER (SAFE STUB)
-      # ---------------------------
-      - name: Add Web Server
-        run: |
-          cat > examples/factory_demo/main/web_server.c << 'EOF'
-          #include "web_server.h"
-          void web_server_start(void) {}
-          EOF
-
-          cat > examples/factory_demo/main/web_server.h << 'EOF'
-          #pragma once
-          void web_server_start(void);
-          EOF
-
-      # ---------------------------
-      # AP FALLBACK (SAFE STUB)
-      # ---------------------------
-      - name: Add AP fallback
-        run: |
-          cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
-          #include "ap_fallback.h"
-          void ap_fallback_init(void) {}
-          void start_ap_fallback(void) {}
-          EOF
-
-          cat > examples/factory_demo/main/ap_fallback.h << 'EOF'
-          #pragma once
-          void ap_fallback_init(void);
-          void start_ap_fallback(void);
-          EOF
-
-      # ---------------------------
-      # PATCH CMAKE (ROBUST)
+      # PATCH CMAKE
       # ---------------------------
       - name: Patch CMakeLists.txt
         run: |
-          python3 - << 'EOF'
-          import pathlib
-
-          p = pathlib.Path("examples/factory_demo/main/CMakeLists.txt")
-          txt = p.read_text()
-
-          files = [
-              "system_state.c",
-              "command_router.c",
-              "espnow_bridge.c",
-              "mqtt_bridge.c",
-              "web_server.c",
-              "ap_fallback.c"
-          ]
-
-          for f in files:
-              if f not in txt:
-                  txt = txt.replace("main.c", f"main.c {f}")
-
-          p.write_text(txt)
-          EOF
+          sed -i 's/main.c/main.c system_state.c command_router.c espnow_bridge.c mqtt_bridge.c web_server.c ap_fallback.c/' \
+          examples/factory_demo/main/CMakeLists.txt
 
       # ---------------------------
-      # PATCH MAIN (SAFE)
+      # PATCH MAIN
       # ---------------------------
       - name: Patch main.c
         run: |
-          python3 - << 'EOF'
-          import pathlib, re
+          sed -i '1i #include "system_state.h"\n#include "espnow_bridge.h"' \
+          examples/factory_demo/main/main.c
 
-          f = pathlib.Path("examples/factory_demo/main/main.c")
-          src = f.read_text()
-
-          if "system_state.h" not in src:
-              src = re.sub(r'(#include.+\n)',
-                  r'\1#include "system_state.h"\n#include "espnow_bridge.h"\n#include "command_router.h"\n',
-                  src, count=1)
-
-          if "espnow_init();" not in src:
-              src = src.replace("app_rmaker_start();",
-                                "app_rmaker_start();\n    system_start_services();\n    espnow_init();")
-
-          f.write_text(src)
-          EOF
+          sed -i 's/app_rmaker_start();/app_rmaker_start();\n    system_start_services();\n    espnow_init();/' \
+          examples/factory_demo/main/main.c
 
       # ---------------------------
       # BUILD
