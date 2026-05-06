@@ -12,6 +12,10 @@ jobs:
     container:
       image: espressif/idf:release-v5.1
 
+    defaults:
+      run:
+        shell: bash
+
     steps:
       # ---------------------------
       # CHECKOUT
@@ -309,8 +313,9 @@ jobs:
 
       # ---------------------------
       # BUILD
-      # Uses `source` (not `.`) for reliable shell sourcing
-      # inside the espressif/idf container.
+      # defaults.run.shell: bash (set above) ensures `source`
+      # works inside the espressif/idf container, which
+      # defaults to /bin/sh where `source` is not available.
       # ---------------------------
       - name: Build firmware
         run: |
@@ -344,53 +349,3 @@ jobs:
           name: esp32s3-box-voice-router
           path: examples/factory_demo/build/factory_merged.bin
 
-
-      # ---------------------------
-      # PATCH MAIN
-      # ---------------------------
-      - name: Patch main.c
-        run: |
-          FILE=examples/factory_demo/main/main.c
-
-          LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
-
-          sed -i "${LAST_INCLUDE}a\\
-          #include \"system_state.h\"\n#include \"command_router.h\"\n#include \"espnow_bridge.h\"" $FILE
-
-          sed -i '/app_rmaker_start()/a \
-          system_start_services();\
-          espnow_init();' $FILE
-
-      # ---------------------------
-      # BUILD
-      # ---------------------------
-      - name: Build firmware
-        run: |
-          . $IDF_PATH/export.sh
-          cd examples/factory_demo
-          idf.py set-target esp32s3
-          cp sdkconfig.ci.box sdkconfig
-          idf.py build
-
-      # ---------------------------
-      # MERGE BIN
-      # ---------------------------
-      - name: Merge firmware
-        run: |
-          . $IDF_PATH/export.sh
-          cd examples/factory_demo/build
-          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o factory_merged.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      # ---------------------------
-      # UPLOAD
-      # ---------------------------
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32s3-box-voice-router
-          path: examples/factory_demo/build/factory_merged.bin
