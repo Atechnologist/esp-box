@@ -32,35 +32,31 @@ jobs:
         run: git config --global --add safe.directory '*'
 
       # ---------------------------
-      # CLEAN
+      # CLEAN BUILD
       # ---------------------------
       - name: Clean build
         run: rm -rf examples/factory_demo/build || true
 
       # ---------------------------
-      # COMPONENT MANAGER
+      # ENABLE COMPONENT MANAGER
       # ---------------------------
       - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # ---------------------------
-      # FIX MISSING COMPONENTS (SAFE VERSION)
+      # FIX BROKEN COMPONENTS (SAFE FILTER ONLY)
       # ---------------------------
-      - name: Fix required dependencies
+      - name: Fix component conflicts safely
         run: |
-          COMP=examples/factory_demo/main/idf_component.yml
-          mkdir -p examples/factory_demo/main
-
-          cat > $COMP << 'EOF'
-          dependencies:
-            espressif/esp-now: "2.1.0"
-            espressif/aht20: "2.0.0"
-          EOF
+          # DO NOT remove required esp-box dependencies
+          # Only avoid broken optional sensors in CI
+          find . -name "idf_component.yml" -exec sed -i '/at581x/d' {} \; || true
+          find . -name "idf_component.yml" -exec sed -i '/aht20/d' {} \; || true
 
       # ---------------------------
-      # SYSTEM STATE (LAYER 1 CORE)
+      # SYSTEM STATE (safe minimal)
       # ---------------------------
-      - name: System state module
+      - name: System state
         run: |
           cat > examples/factory_demo/main/system_state.c << 'EOF'
           #include "system_state.h"
@@ -70,7 +66,6 @@ jobs:
 
           void system_start_services(void)
           {
-              if (started) return;
               started = true;
           }
 
@@ -88,7 +83,39 @@ jobs:
           EOF
 
       # ---------------------------
-      # ESPNOW (LAYER 2)
+      # COMMAND ROUTER (VOICE → ACTION LAYER)
+      # ---------------------------
+      - name: Command Router
+        run: |
+          cat > examples/factory_demo/main/command_router.c << 'EOF'
+          #include "command_router.h"
+          #include "esp_log.h"
+          #include "app_led.h"
+
+          static const char *TAG = "ROUTER";
+
+          void command_router_execute(const char *cmd)
+          {
+              ESP_LOGI(TAG, "CMD: %s", cmd);
+
+              if (!cmd) return;
+
+              if (strcmp(cmd, "LED_ON") == 0) {
+                  app_pwm_led_set_power(true);
+              }
+              else if (strcmp(cmd, "LED_OFF") == 0) {
+                  app_pwm_led_set_power(false);
+              }
+          }
+          EOF
+
+          cat > examples/factory_demo/main/command_router.h << 'EOF'
+          #pragma once
+          void command_router_execute(const char *cmd);
+          EOF
+
+      # ---------------------------
+      # ESP-NOW (LOCKED TO 2.1.0 FOR IDF 5.1)
       # ---------------------------
       - name: ESPNOW bridge
         run: |
@@ -101,25 +128,24 @@ jobs:
 
           static const char *TAG = "ESPNOW";
 
-          static uint8_t peer_mac[] = {0x24,0x6F,0x28,0xAA,0xBB,0xCC};
+          static uint8_t peer[] = {0x24,0x6F,0x28,0xAA,0xBB,0xCC};
 
           void espnow_init(void)
           {
               esp_wifi_start();
               esp_now_init();
 
-              esp_now_peer_info_t peer = {0};
-              memcpy(peer.peer_addr, peer_mac, 6);
-              peer.channel = 0;
-              peer.encrypt = false;
+              esp_now_peer_info_t p = {0};
+              memcpy(p.peer_addr, peer, 6);
+              p.channel = 0;
+              p.encrypt = false;
 
-              esp_now_add_peer(&peer);
-              ESP_LOGI(TAG, "ESP-NOW ready");
+              esp_now_add_peer(&p);
           }
 
           void espnow_send_command(const char *cmd)
           {
-              esp_now_send(peer_mac, (uint8_t*)cmd, strlen(cmd));
+              esp_now_send(peer, (uint8_t*)cmd, strlen(cmd));
           }
           EOF
 
@@ -130,15 +156,25 @@ jobs:
           EOF
 
       # ---------------------------
-      # MQTT (LAYER 2)
+      # MQTT (stub safe layer)
       # ---------------------------
       - name: MQTT bridge
         run: |
           cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
           #include "mqtt_bridge.h"
+          #include "esp_log.h"
 
-          void mqtt_bridge_start(void) {}
-          void mqtt_bridge_publish(const char *topic, const char *data) {}
+          static const char *TAG = "MQTT";
+
+          void mqtt_bridge_start(void)
+          {
+              ESP_LOGI(TAG, "MQTT started");
+          }
+
+          void mqtt_bridge_publish(const char *topic, const char *data)
+          {
+              ESP_LOGI(TAG, "MQTT %s -> %s", topic, data);
+          }
           EOF
 
           cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
@@ -148,14 +184,37 @@ jobs:
           EOF
 
       # ---------------------------
-      # WEB UI (LAYER 2)
+      # WEB UI (REAL HTTP SERVER RESTORE)
       # ---------------------------
-      - name: Web server
+      - name: WebUI
         run: |
           cat > examples/factory_demo/main/web_server.c << 'EOF'
           #include "web_server.h"
+          #include "esp_http_server.h"
 
-          void web_server_start(void) {}
+          static httpd_handle_t server = NULL;
+
+          static esp_err_t root(httpd_req_t *req)
+          {
+              const char html[] =
+              "<h1>ESP32-S3 BOX OK</h1>";
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          void web_server_start(void)
+          {
+              httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+              httpd_start(&server, &cfg);
+
+              httpd_uri_t uri = {
+                  .uri="/",
+                  .method=HTTP_GET,
+                  .handler=root
+              };
+
+              httpd_register_uri_handler(server, &uri);
+          }
           EOF
 
           cat > examples/factory_demo/main/web_server.h << 'EOF'
@@ -164,92 +223,35 @@ jobs:
           EOF
 
       # ---------------------------
-      # COMMAND ROUTER (LAYER 2 CORE)
+      # COMPONENT DEPENDENCY LOCK (CRITICAL FIX)
       # ---------------------------
-      - name: Command router
+      - name: Fix component dependencies
         run: |
-          cat > examples/factory_demo/main/command_router.c << 'EOF'
-          #include "command_router.h"
-          #include "espnow_bridge.h"
-          #include "mqtt_bridge.h"
-          #include "app_led.h"
-          #include <string.h>
-
-          void command_router_execute(const char *cmd)
-          {
-              if (!cmd) return;
-
-              if (strcmp(cmd,"LED_ON")==0) {
-                  app_pwm_led_set_power(true);
-              }
-              else if (strcmp(cmd,"LED_OFF")==0) {
-                  app_pwm_led_set_power(false);
-              }
-              else if (strcmp(cmd,"ESPNOW_ON")==0) {
-                  espnow_send_command("ON");
-              }
-              else if (strcmp(cmd,"MQTT_ON")==0) {
-                  mqtt_bridge_publish("relay","on");
-              }
-          }
-          EOF
-
-          cat > examples/factory_demo/main/command_router.h << 'EOF'
-          #pragma once
-          void command_router_execute(const char *cmd);
+          cat > examples/factory_demo/main/idf_component.yml << 'EOF'
+          dependencies:
+            espressif/esp-now: "2.1.0"
+            espressif/esp_http_server: "*"
+            espressif/esp_wifi: "*"
           EOF
 
       # ---------------------------
-      # PATCH CMAKE (SAFE APPEND)
+      # PATCH CMAKE (SAFE ADD ONLY)
       # ---------------------------
       - name: Patch CMakeLists
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
-
-          for f in espnow_bridge.c mqtt_bridge.c web_server.c system_state.c command_router.c; do
-            grep -q "$f" $FILE || sed -i "/SRCS/a \        $f" $FILE
-          done
+          echo 'REQUIRES esp_http_server esp_wifi' >> $FILE
 
       # ---------------------------
-      # FIX MAIN.C (CRITICAL FIX)
+      # PATCH MAIN (NO BROKEN INJECTION)
       # ---------------------------
-      - name: Fix main.c headers + boot order
+      - name: Patch main
         run: |
-          python3 - << 'EOF'
-          from pathlib import Path
-          import re
+          FILE=examples/factory_demo/main/main.c
 
-          f = Path("examples/factory_demo/main/main.c")
-          s = f.read_text()
-
-          headers = [
-              '#include "system_state.h"',
-              '#include "espnow_bridge.h"',
-              '#include "web_server.h"',
-              '#include "mqtt_bridge.h"',
-              '#include "command_router.h"'
-          ]
-
-          # inject headers
-          last = max([m.end() for m in re.finditer(r'^#include.*$', s, re.M)], default=0)
-          for h in headers:
-              if h not in s:
-                  s = s[:last] + "\n" + h + s[last:]
-
-          # inject boot calls safely
-          boot = """
-          system_start_services();
-          espnow_init();
-          web_server_start();
-          mqtt_bridge_start();
-          """
-
-          if "espnow_init" not in s:
-              s = s.replace("app_rmaker_start();", "app_rmaker_start();" + boot)
-
-          f.write_text(s)
-          print("main.c fixed")
-          EOF
+          if ! grep -q "espnow_init" $FILE; then
+            sed -i '/app_rmaker_start/a espnow_init(); web_server_start(); mqtt_bridge_start();' $FILE
+          fi
 
       # ---------------------------
       # BUILD
@@ -259,7 +261,6 @@ jobs:
           source $IDF_PATH/export.sh
           cd examples/factory_demo
           idf.py set-target esp32s3
-          cp sdkconfig.ci.box sdkconfig
           idf.py build
 
       # ---------------------------
@@ -275,96 +276,10 @@ jobs:
             @flash_args
 
       # ---------------------------
-      # ARTIFACT
+      # UPLOAD
       # ---------------------------
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-box-voice-router
+          name: esp32s3-box-stable
           path: examples/factory_demo/build/factory_merged.bin
-    # =========================================================
-    # FIX: AHT20 COMPONENT CRASH
-    # =========================================================
-
-    - name: Fix missing sensor dependency (AHT20)
-      run: |
-        COMP=examples/factory_demo/main/idf_component.yml
-
-        if [ ! -f "$COMP" ]; then
-          echo "dependencies:" > $COMP
-        fi
-
-        # pin safe version (IDF 5.1 compatible)
-        grep -q aht20 $COMP || echo '  espressif/aht20: "2.0.0"' >> $COMP
-
-    # =========================================================
-    # PATCH MAIN ENTRY (BOOT SAFE ORDER)
-    # =========================================================
-
-    - name: Patch main.c boot order
-      run: |
-        python3 - << 'EOF'
-        import pathlib, re
-
-        f = pathlib.Path("examples/factory_demo/main/main.c")
-        s = f.read_text()
-
-        inject = """
-            system_start_services();
-            espnow_init();
-            web_server_start();
-            mqtt_bridge_start();
-        """
-
-        if "system_start_services" not in s:
-            s = s.replace("app_rmaker_start();", "app_rmaker_start();" + inject)
-
-        f.write_text(s)
-        print("patched main.c")
-        EOF
-
-    # =========================================================
-    # FIX CMAKE (SAFE ADDITION)
-    # =========================================================
-
-    - name: Patch CMakeLists
-      run: |
-        FILE=examples/factory_demo/main/CMakeLists.txt
-        for f in system_state.c command_router.c espnow_bridge.c mqtt_bridge.c web_server.c ap_fallback.c voice_router.c; do
-          grep -q $f $FILE || sed -i "/SRCS/a \        $f" $FILE
-        done
-
-    # =========================================================
-    # BUILD
-    # =========================================================
-
-    - name: Build firmware
-      run: |
-        source $IDF_PATH/export.sh
-        cd examples/factory_demo
-        idf.py set-target esp32s3
-        cp sdkconfig.ci.box sdkconfig
-        idf.py build
-
-    # =========================================================
-    # MERGE BIN
-    # =========================================================
-
-    - name: Merge firmware
-      run: |
-        source $IDF_PATH/export.sh
-        cd examples/factory_demo/build
-        python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-          --chip esp32s3 merge_bin \
-          -o factory_merged.bin \
-          @flash_args
-
-    # =========================================================
-    # ARTIFACT
-    # =========================================================
-
-    - name: Upload firmware
-      uses: actions/upload-artifact@v4
-      with:
-        name: esp32s3-box-3layer-voice
-        path: examples/factory_demo/build/factory_merged.bin
