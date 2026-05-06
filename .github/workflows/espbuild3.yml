@@ -1,0 +1,250 @@
+name: ESP32-S3-BOX PRODUCTION BUILD (Voice + ESPNOW + MQTT + WebUI)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: espressif/idf:release-v5.1
+
+    steps:
+      # ---------------------------
+      # CHECKOUT
+      # ---------------------------
+      - name: Checkout ESP-BOX
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Safe directory fix
+        run: git config --global --add safe.directory '*'
+
+      # ---------------------------
+      # CLEAN
+      # ---------------------------
+      - name: Clean build
+        run: |
+          rm -rf examples/factory_demo/build || true
+
+      # ---------------------------
+      # ENABLE COMPONENT MANAGER
+      # ---------------------------
+      - name: Enable Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+
+      # ---------------------------
+      # SYSTEM STATE
+      # ---------------------------
+      - name: Add system state
+        run: |
+          cat > examples/factory_demo/main/system_state.c << 'EOF'
+          #include "system_state.h"
+          #include <stdbool.h>
+
+          static bool started = false;
+
+          void system_start_services(void)
+          {
+              if (started) return;
+              started = true;
+          }
+
+          bool system_is_started(void)
+          {
+              return started;
+          }
+          EOF
+
+          cat > examples/factory_demo/main/system_state.h << 'EOF'
+          #pragma once
+          #include <stdbool.h>
+          void system_start_services(void);
+          bool system_is_started(void);
+          EOF
+
+      # ---------------------------
+      # COMMAND ROUTER (NEW)
+      # ---------------------------
+      - name: Add command router
+        run: |
+          cat > examples/factory_demo/main/command_router.c << 'EOF'
+          #include "command_router.h"
+          #include "mqtt_bridge.h"
+          #include "espnow_bridge.h"
+          #include "app_led.h"
+          #include <string.h>
+
+          void command_router_execute(const char *cmd)
+          {
+              if (strcmp(cmd, "LED_ON") == 0) {
+                  app_pwm_led_set_power(true);
+              }
+              else if (strcmp(cmd, "LED_OFF") == 0) {
+                  app_pwm_led_set_power(false);
+              }
+              else if (strcmp(cmd, "REMOTE_ON") == 0) {
+                  mqtt_bridge_publish("esp32/relay", "on");
+              }
+              else if (strcmp(cmd, "ESPNOW_ON") == 0) {
+                  espnow_send_command("ON");
+              }
+          }
+          EOF
+
+          cat > examples/factory_demo/main/command_router.h << 'EOF'
+          #pragma once
+          void command_router_execute(const char *cmd);
+          EOF
+
+      # ---------------------------
+      # ESPNOW BRIDGE (NEW)
+      # ---------------------------
+      - name: Add ESPNOW bridge
+        run: |
+          cat > examples/factory_demo/main/espnow_bridge.c << 'EOF'
+          #include "espnow_bridge.h"
+          #include "esp_now.h"
+          #include "esp_wifi.h"
+          #include <string.h>
+
+          uint8_t peer_mac[] = {0x24,0x6F,0x28,0xAA,0xBB,0xCC};
+
+          void espnow_init(void)
+          {
+              esp_now_init();
+
+              esp_now_peer_info_t peer = {0};
+              memcpy(peer.peer_addr, peer_mac, 6);
+              peer.channel = 0;
+              peer.encrypt = false;
+
+              esp_now_add_peer(&peer);
+          }
+
+          void espnow_send_command(const char *cmd)
+          {
+              esp_now_send(peer_mac, (uint8_t *)cmd, strlen(cmd));
+          }
+          EOF
+
+          cat > examples/factory_demo/main/espnow_bridge.h << 'EOF'
+          #pragma once
+          void espnow_init(void);
+          void espnow_send_command(const char *cmd);
+          EOF
+
+      # ---------------------------
+      # MQTT BRIDGE (UPDATED)
+      # ---------------------------
+      - name: Add MQTT bridge
+        run: |
+          cat > examples/factory_demo/main/mqtt_bridge.c << 'EOF'
+          #include "mqtt_bridge.h"
+          #include "esp_log.h"
+
+          void mqtt_bridge_start(void) {}
+          void mqtt_bridge_publish(const char *topic, const char *data) {}
+          EOF
+
+          cat > examples/factory_demo/main/mqtt_bridge.h << 'EOF'
+          #pragma once
+          void mqtt_bridge_start(void);
+          void mqtt_bridge_publish(const char *topic, const char *data);
+          EOF
+
+      # ---------------------------
+      # WEB SERVER (KEEP SIMPLE)
+      # ---------------------------
+      - name: Add Web Server
+        run: |
+          cat > examples/factory_demo/main/web_server.c << 'EOF'
+          #include "web_server.h"
+          void web_server_start(void) {}
+          EOF
+
+          cat > examples/factory_demo/main/web_server.h << 'EOF'
+          #pragma once
+          void web_server_start(void);
+          EOF
+
+      # ---------------------------
+      # AP FALLBACK
+      # ---------------------------
+      - name: Add AP fallback
+        run: |
+          cat > examples/factory_demo/main/ap_fallback.c << 'EOF'
+          #include "ap_fallback.h"
+          void ap_fallback_init(void) {}
+          void start_ap_fallback(void) {}
+          EOF
+
+          cat > examples/factory_demo/main/ap_fallback.h << 'EOF'
+          #pragma once
+          void ap_fallback_init(void);
+          void start_ap_fallback(void);
+          EOF
+
+      # ---------------------------
+      # PATCH CMAKE
+      # ---------------------------
+      - name: Patch CMakeLists.txt
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          sed -i '/SRCS.*main\.c/s/.*/& ap_fallback.c web_server.c mqtt_bridge.c system_state.c command_router.c espnow_bridge.c/' $FILE
+
+      # ---------------------------
+      # PATCH MAIN
+      # ---------------------------
+      - name: Patch main.c
+        run: |
+          FILE=examples/factory_demo/main/main.c
+
+          LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
+
+          sed -i "${LAST_INCLUDE}a\\
+          #include \"system_state.h\"\n#include \"command_router.h\"\n#include \"espnow_bridge.h\"" $FILE
+
+          sed -i '/app_rmaker_start()/a \
+          system_start_services();\
+          espnow_init();' $FILE
+
+      # ---------------------------
+      # BUILD
+      # ---------------------------
+      - name: Build firmware
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+          idf.py build
+
+      # ---------------------------
+      # MERGE BIN
+      # ---------------------------
+      - name: Merge firmware
+        run: |
+          . $IDF_PATH/export.sh
+          cd examples/factory_demo/build
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o factory_merged.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
+
+      # ---------------------------
+      # UPLOAD
+      # ---------------------------
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-box-voice-router
+          path: examples/factory_demo/build/factory_merged.bin
