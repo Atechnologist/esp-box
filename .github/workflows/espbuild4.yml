@@ -83,6 +83,65 @@ jobs:
           #include "esp_log.h"
           #include <stdio.h>
           #include <string.h>
+          #include <ctype.h>
+          
+          static const char *TAG = "AI_VOICE";
+          
+          static int contains(const char *text, const char *word)
+          {
+              if (!text || !word) return 0;
+              return strstr(text, word) != NULL;
+          }
+          
+          /* Check for whole-word match to avoid "on" matching inside "control",
+             "done", "stone", etc.  Also catches "on." "on!" etc. */
+          static int contains_word(const char *text, const char *word)
+          {
+              if (!text || !word) return 0;
+              const char *p = text;
+              size_t wlen = strlen(word);
+              while ((p = strstr(p, word)) != NULL) {
+                  /* char before must be start-of-string or non-alpha */
+                  int pre_ok  = (p == text) || !isalpha((unsigned char)*(p - 1));
+                  /* char after must be end-of-string or non-alpha */
+                  int post_ok = !isalpha((unsigned char)*(p + wlen));
+                  if (pre_ok && post_ok) return 1;
+                  p += wlen;
+              }
+              return 0;
+          }
+          
+          void ai_voice_process(const char *text)
+          {
+              if (!text || strlen(text) == 0) return;
+          
+              ESP_LOGI(TAG, "Voice: %s", text);
+          
+              if (contains(text, "light") || contains(text, "led")) {
+                  /* IMPORTANT: check "off" BEFORE "on" so that the word
+                     "off" is never accidentally caught by the "on" branch. */
+                  if (contains_word(text, "off")) {
+                      ESP_LOGI(TAG, "Command: LED OFF");
+                      command_router_execute("LED_OFF");
+                  } else if (contains_word(text, "on")) {
+                      ESP_LOGI(TAG, "Command: LED ON");
+                      command_router_execute("LED_ON");
+                  }
+              }
+          }
+          
+          void ai_voice_init(void)
+          {
+              ESP_LOGI(TAG, "AI Voice Router initialized");
+          }
+          EOF
+          
+          cat > examples/factory_demo/main/ai_voice_router.c << 'EOF'
+          #include "ai_voice_router.h"
+          #include "command_router.h"
+          #include "esp_log.h"
+          #include <stdio.h>
+          #include <string.h>
           
           static const char *TAG = "AI_VOICE";
           
