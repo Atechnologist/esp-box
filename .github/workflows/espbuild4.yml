@@ -1,0 +1,421 @@
+name: ESP32-S3-BOX AI VOICE ROUTER STABLE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: espressif/idf:release-v5.1
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+
+      # =========================================================
+      # CHECKOUT
+      # =========================================================
+      - name: Checkout ESP-BOX
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Safe Git
+        run: git config --global --add safe.directory '*'
+
+      # =========================================================
+      # CLEAN
+      # =========================================================
+      - name: Clean previous build
+        run: |
+          rm -rf examples/factory_demo/build || true
+          rm -rf examples/factory_demo/managed_components || true
+          rm -rf examples/factory_demo/dependencies.lock || true
+
+      # =========================================================
+      # RESTORE ORIGINAL FILES
+      # =========================================================
+      - name: Restore original files
+        run: |
+          cd examples/factory_demo
+          git checkout idf_component.yml || true
+          git checkout main/CMakeLists.txt || true
+          git checkout main/main.c || true
+
+      # =========================================================
+      # ENABLE COMPONENT MANAGER
+      # =========================================================
+      - name: Enable component manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+
+      # =========================================================
+      # AI VOICE ROUTER
+      # =========================================================
+      - name: Add AI router
+        run: |
+
+          cat > examples/factory_demo/main/ai_voice_router.h << 'EOF'
+          #pragma once
+
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+
+          void ai_voice_process(const char *text);
+
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+
+          cat > examples/factory_demo/main/ai_voice_router.c << 'EOF'
+          #include "ai_voice_router.h"
+          #include "command_router.h"
+
+          #include <stdio.h>
+          #include <string.h>
+
+          static int contains(const char *text, const char *word)
+          {
+              if (!text || !word) {
+                  return 0;
+              }
+
+              return strstr(text, word) != NULL;
+          }
+
+          void ai_voice_process(const char *text)
+          {
+              if (!text) {
+                  return;
+              }
+
+              printf("VOICE: %s\n", text);
+
+              if (contains(text, "light") || contains(text, "led")) {
+
+                  if (contains(text, "on")) {
+                      command_router_execute("LED_ON");
+                  }
+                  else if (contains(text, "off")) {
+                      command_router_execute("LED_OFF");
+                  }
+              }
+          }
+          EOF
+
+      # =========================================================
+      # COMMAND ROUTER
+      # =========================================================
+      - name: Add command router
+        run: |
+
+          cat > examples/factory_demo/main/command_router.h << 'EOF'
+          #pragma once
+
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+
+          void command_router_execute(const char *cmd);
+
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+
+          cat > examples/factory_demo/main/command_router.c << 'EOF'
+          #include "command_router.h"
+          #include "app_led.h"
+
+          #include <stdbool.h>
+          #include <stdio.h>
+          #include <string.h>
+
+          void command_router_execute(const char *cmd)
+          {
+              if (!cmd) {
+                  return;
+              }
+
+              printf("CMD: %s\n", cmd);
+
+              if (strcmp(cmd, "LED_ON") == 0) {
+                  app_pwm_led_set_power(true);
+              }
+              else if (strcmp(cmd, "LED_OFF") == 0) {
+                  app_pwm_led_set_power(false);
+              }
+          }
+          EOF
+
+      # =========================================================
+      # WEB SERVER
+      # =========================================================
+      - name: Add web server
+        run: |
+
+          cat > examples/factory_demo/main/web_server.h << 'EOF'
+          #pragma once
+
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+
+          void web_server_start(void);
+
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+
+          cat > examples/factory_demo/main/web_server.c << 'EOF'
+          #include "web_server.h"
+
+          #include "esp_http_server.h"
+          #include "app_led.h"
+
+          #include <stdbool.h>
+
+          static httpd_handle_t server = NULL;
+
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const char html[] =
+                  "<!DOCTYPE html>"
+                  "<html>"
+                  "<head>"
+                  "<title>ESP32 Voice AI</title>"
+                  "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                  "</head>"
+                  "<body>"
+                  "<h1>ESP32-S3-BOX</h1>"
+                  "<button onclick=\"fetch('/on')\">LED ON</button>"
+                  "<button onclick=\"fetch('/off')\">LED OFF</button>"
+                  "</body>"
+                  "</html>";
+
+              httpd_resp_set_type(req, "text/html");
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+
+              return ESP_OK;
+          }
+
+          static esp_err_t on_handler(httpd_req_t *req)
+          {
+              app_pwm_led_set_power(true);
+
+              httpd_resp_send(req, "ON", HTTPD_RESP_USE_STRLEN);
+
+              return ESP_OK;
+          }
+
+          static esp_err_t off_handler(httpd_req_t *req)
+          {
+              app_pwm_led_set_power(false);
+
+              httpd_resp_send(req, "OFF", HTTPD_RESP_USE_STRLEN);
+
+              return ESP_OK;
+          }
+
+          void web_server_start(void)
+          {
+              if (server != NULL) {
+                  return;
+              }
+
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+              if (httpd_start(&server, &config) != ESP_OK) {
+                  return;
+              }
+
+              httpd_uri_t root = {
+                  .uri = "/",
+                  .method = HTTP_GET,
+                  .handler = root_handler,
+                  .user_ctx = NULL
+              };
+
+              httpd_uri_t on = {
+                  .uri = "/on",
+                  .method = HTTP_GET,
+                  .handler = on_handler,
+                  .user_ctx = NULL
+              };
+
+              httpd_uri_t off = {
+                  .uri = "/off",
+                  .method = HTTP_GET,
+                  .handler = off_handler,
+                  .user_ctx = NULL
+              };
+
+              httpd_register_uri_handler(server, &root);
+              httpd_register_uri_handler(server, &on);
+              httpd_register_uri_handler(server, &off);
+          }
+          EOF
+
+      # =========================================================
+      # PATCH CMakeLists.txt
+      # =========================================================
+      - name: Patch CMakeLists
+        run: |
+
+          python3 - << 'EOF'
+          from pathlib import Path
+
+          path = Path("examples/factory_demo/main/CMakeLists.txt")
+
+          text = path.read_text()
+
+          if "ai_voice_router.c" not in text:
+
+              text = text.replace(
+                  "main.c",
+                  "main.c ai_voice_router.c command_router.c web_server.c"
+              )
+
+              path.write_text(text)
+
+          print("CMakeLists patched")
+          EOF
+
+      # =========================================================
+      # PATCH main.c
+      # =========================================================
+      - name: Patch main.c
+        run: |
+
+          python3 - << 'EOF'
+          from pathlib import Path
+
+          path = Path("examples/factory_demo/main/main.c")
+
+          text = path.read_text()
+
+          includes = '''
+          #include "web_server.h"
+          #include "ai_voice_router.h"
+          '''
+
+          if '#include "web_server.h"' not in text:
+
+              idx = text.rfind("#include")
+
+              end = text.find("\n", idx)
+
+              text = text[:end+1] + includes + text[end+1:]
+
+          if "web_server_start();" not in text:
+
+              text = text.replace(
+                  "app_rmaker_start();",
+                  "app_rmaker_start();\n    web_server_start();"
+              )
+
+          path.write_text(text)
+
+          print("main.c patched")
+          EOF
+
+      # =========================================================
+      # PATCH SPEECH RECOGNITION HANDLER
+      # =========================================================
+      - name: Inject AI voice pipeline
+        run: |
+
+          python3 - << 'EOF'
+          from pathlib import Path
+          import subprocess
+
+          files = list(
+              Path("examples/factory_demo").rglob("app_sr_handler.c")
+          )
+
+          if not files:
+              raise RuntimeError("app_sr_handler.c not found")
+
+          path = files[0]
+
+          text = path.read_text(errors="ignore")
+
+          if '#include "ai_voice_router.h"' not in text:
+              text = '#include "ai_voice_router.h"\n' + text
+
+          if "ai_voice_process(" not in text:
+
+              targets = [
+                  "ESP_LOGI(TAG, \"Recived command:",
+                  "ESP_LOGI(TAG, \"recived command:",
+                  "ESP_LOGI(TAG, \"command:",
+              ]
+
+              inserted = False
+
+              for t in targets:
+                  if t in text:
+                      text = text.replace(
+                          t,
+                          t + "\n    ai_voice_process(result->phrase);"
+                      )
+                      inserted = True
+                      break
+
+              if not inserted:
+                  print("WARNING: Could not inject into SR handler")
+
+          path.write_text(text)
+
+          print("Speech pipeline patched")
+          EOF
+
+      # =========================================================
+      # BUILD
+      # =========================================================
+      - name: Build firmware
+        run: |
+          source $IDF_PATH/export.sh
+
+          cd examples/factory_demo
+
+          idf.py set-target esp32s3
+
+          cp sdkconfig.ci.box sdkconfig
+
+          idf.py fullclean
+
+          idf.py build
+
+      # =========================================================
+      # MERGE BIN
+      # =========================================================
+      - name: Merge firmware
+        run: |
+          source $IDF_PATH/export.sh
+
+          cd examples/factory_demo/build
+
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o factory.bin \
+            @flash_args
+
+      # =========================================================
+      # UPLOAD
+      # =========================================================
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-s3-box-ai-voice-router
+          path: examples/factory_demo/build/factory.bin
