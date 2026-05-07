@@ -49,6 +49,7 @@ jobs:
           git checkout idf_component.yml || true
           git checkout main/CMakeLists.txt || true
           git checkout main/main.c || true
+          git checkout main/app/app_sr_handler.c || true
 
       # =========================================================
       # ENABLE COMPONENT MANAGER
@@ -69,6 +70,7 @@ jobs:
           #endif
           
           void ai_voice_process(const char *text);
+          void ai_voice_init(void);
           
           #ifdef __cplusplus
           }
@@ -95,20 +97,27 @@ jobs:
           
           void ai_voice_process(const char *text)
           {
-              if (!text) {
+              if (!text || strlen(text) == 0) {
                   return;
               }
               
-              ESP_LOGI(TAG, "Voice input: %s", text);
+              ESP_LOGI(TAG, "Voice: %s", text);
               
               if (contains(text, "light") || contains(text, "led")) {
                   if (contains(text, "on")) {
+                      ESP_LOGI(TAG, "Command: LED ON");
                       command_router_execute("LED_ON");
                   }
                   else if (contains(text, "off")) {
+                      ESP_LOGI(TAG, "Command: LED OFF");
                       command_router_execute("LED_OFF");
                   }
               }
+          }
+          
+          void ai_voice_init(void)
+          {
+              ESP_LOGI(TAG, "AI Voice Router initialized");
           }
           EOF
 
@@ -136,26 +145,25 @@ jobs:
           #include "app_led.h"
           #include "esp_log.h"
           #include <stdbool.h>
-          #include <stdio.h>
           #include <string.h>
           
           static const char *TAG = "CMD_ROUTER";
           
           void command_router_execute(const char *cmd)
           {
-              if (!cmd) {
+              if (!cmd || strlen(cmd) == 0) {
                   return;
               }
               
-              ESP_LOGI(TAG, "Executing: %s", cmd);
+              ESP_LOGI(TAG, "Cmd: %s", cmd);
               
               if (strcmp(cmd, "LED_ON") == 0) {
                   app_pwm_led_set_power(true);
-                  ESP_LOGI(TAG, "LED turned ON");
+                  ESP_LOGI(TAG, "LED ON");
               }
               else if (strcmp(cmd, "LED_OFF") == 0) {
                   app_pwm_led_set_power(false);
-                  ESP_LOGI(TAG, "LED turned OFF");
+                  ESP_LOGI(TAG, "LED OFF");
               }
           }
           EOF
@@ -184,7 +192,6 @@ jobs:
           #include "esp_http_server.h"
           #include "app_led.h"
           #include "esp_log.h"
-          #include <stdbool.h>
           
           static const char *TAG = "WEB_SERVER";
           static httpd_handle_t server = NULL;
@@ -193,48 +200,39 @@ jobs:
           {
               const char html[] =
                   "<!DOCTYPE html>"
-                  "<html>"
-                  "<head>"
-                  "<title>ESP32-S3-BOX AI Voice</title>"
+                  "<html><head><title>ESP32-S3-BOX</title>"
                   "<meta name='viewport' content='width=device-width,initial-scale=1'>"
                   "<style>"
                   "body{font-family:Arial;margin:20px;}"
-                  ".btn{padding:10px 20px;margin:5px;cursor:pointer;}"
+                  ".btn{padding:10px 20px;margin:5px;cursor:pointer;border:none;border-radius:4px;}"
                   ".on{background:#4CAF50;color:white;}"
                   ".off{background:#f44336;color:white;}"
-                  "</style>"
-                  "</head>"
+                  "</style></head>"
                   "<body>"
-                  "<h1>ESP32-S3-BOX AI Voice Router</h1>"
-                  "<p>Control LED via Voice or Web</p>"
+                  "<h1>ESP32-S3-BOX</h1>"
+                  "<p>AI Voice + Web Control</p>"
                   "<button class='btn on' onclick=\"fetch('/on')\">LED ON</button>"
                   "<button class='btn off' onclick=\"fetch('/off')\">LED OFF</button>"
-                  "</body>"
-                  "</html>";
+                  "</body></html>";
               
               httpd_resp_set_type(req, "text/html");
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-              
               return ESP_OK;
           }
           
           static esp_err_t on_handler(httpd_req_t *req)
           {
-              ESP_LOGI(TAG, "LED ON requested via web");
+              ESP_LOGI(TAG, "LED ON via web");
               app_pwm_led_set_power(true);
-              
-              httpd_resp_send(req, "LED_ON", HTTPD_RESP_USE_STRLEN);
-              
+              httpd_resp_send(req, "ON", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
           
           static esp_err_t off_handler(httpd_req_t *req)
           {
-              ESP_LOGI(TAG, "LED OFF requested via web");
+              ESP_LOGI(TAG, "LED OFF via web");
               app_pwm_led_set_power(false);
-              
-              httpd_resp_send(req, "LED_OFF", HTTPD_RESP_USE_STRLEN);
-              
+              httpd_resp_send(req, "OFF", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
           
@@ -248,36 +246,63 @@ jobs:
               config.stack_size = 8192;
               
               if (httpd_start(&server, &config) != ESP_OK) {
-                  ESP_LOGE(TAG, "Failed to start web server");
+                  ESP_LOGE(TAG, "Failed to start");
                   return;
               }
               
-              httpd_uri_t root = {
-                  .uri = "/",
-                  .method = HTTP_GET,
-                  .handler = root_handler,
-                  .user_ctx = NULL
-              };
-              
-              httpd_uri_t on = {
-                  .uri = "/on",
-                  .method = HTTP_GET,
-                  .handler = on_handler,
-                  .user_ctx = NULL
-              };
-              
-              httpd_uri_t off = {
-                  .uri = "/off",
-                  .method = HTTP_GET,
-                  .handler = off_handler,
-                  .user_ctx = NULL
-              };
+              httpd_uri_t root = {.uri = "/", .method = HTTP_GET, .handler = root_handler};
+              httpd_uri_t on = {.uri = "/on", .method = HTTP_GET, .handler = on_handler};
+              httpd_uri_t off = {.uri = "/off", .method = HTTP_GET, .handler = off_handler};
               
               httpd_register_uri_handler(server, &root);
               httpd_register_uri_handler(server, &on);
               httpd_register_uri_handler(server, &off);
               
-              ESP_LOGI(TAG, "Web server started on port 80");
+              ESP_LOGI(TAG, "Started on port 80");
+          }
+          EOF
+
+      # =========================================================
+      # VOICE HOOK WRAPPER
+      # =========================================================
+      - name: Add voice hook wrapper
+        run: |
+          cat > examples/factory_demo/main/voice_hook.h << 'EOF'
+          #pragma once
+          
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          
+          void voice_hook_init(void);
+          void voice_hook_process(const char *phrase);
+          
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+          
+          cat > examples/factory_demo/main/voice_hook.c << 'EOF'
+          #include "voice_hook.h"
+          #include "ai_voice_router.h"
+          #include "esp_log.h"
+          
+          static const char *TAG = "VOICE_HOOK";
+          
+          void voice_hook_init(void)
+          {
+              ESP_LOGI(TAG, "Voice hook initialized");
+              ai_voice_init();
+          }
+          
+          void voice_hook_process(const char *phrase)
+          {
+              if (!phrase) {
+                  return;
+              }
+              
+              ESP_LOGI(TAG, "Processing: %s", phrase);
+              ai_voice_process(phrase);
           }
           EOF
 
@@ -289,7 +314,7 @@ jobs:
           FILE=examples/factory_demo/main/CMakeLists.txt
           
           if ! grep -q "ai_voice_router.c" $FILE; then
-            sed -i '/SRCS.*main\.c/s/.*/& ai_voice_router.c command_router.c web_server.c/' $FILE
+            sed -i '/SRCS.*main\.c/s/.*/& ai_voice_router.c command_router.c web_server.c voice_hook.c/' $FILE
           fi
 
       # =========================================================
@@ -302,39 +327,49 @@ jobs:
           LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
           
           sed -i '/web_server.h/d' $FILE || true
-          sed -i '/ai_voice_router.h/d' $FILE || true
+          sed -i '/voice_hook.h/d' $FILE || true
           
           sed -i "${LAST_INCLUDE}a\\
-          #include \"web_server.h\"\n#include \"ai_voice_router.h\"" $FILE
+          #include \"web_server.h\"\n#include \"voice_hook.h\"" $FILE
 
       - name: Patch main.c calls
         run: |
           FILE=examples/factory_demo/main/main.c
           
           sed -i '/web_server_start()/d' $FILE || true
+          sed -i '/voice_hook_init()/d' $FILE || true
           
           sed -i '/app_rmaker_start()/a \
+          voice_hook_init();\
           web_server_start();' $FILE
 
       # =========================================================
-      # PATCH SPEECH RECOGNITION HANDLER
+      # PATCH app_sr_handler.c (SAFE - callback style)
       # =========================================================
-      - name: Inject AI voice pipeline
+      - name: Patch app_sr_handler for voice routing
         run: |
-          FILE=$(find examples/factory_demo -name "app_sr_handler.c" | head -1)
+          FILE=$(find examples/factory_demo -name "app_sr_handler.c" -type f | head -1)
           
           if [ -z "$FILE" ]; then
-            echo "app_sr_handler.c not found, skipping voice injection"
+            echo "app_sr_handler.c not found, skipping"
             exit 0
           fi
           
-          if ! grep -q "ai_voice_router.h" $FILE; then
-            sed -i '1s/^/#include "ai_voice_router.h"\n/' $FILE
+          echo "Patching: $FILE"
+          
+          # Add include at top
+          if ! grep -q "voice_hook.h" "$FILE"; then
+            sed -i '1s/^/#include "voice_hook.h"\n/' "$FILE"
+            echo "Added include"
           fi
           
-          if ! grep -q "ai_voice_process" $FILE; then
-            sed -i '/ESP_LOGI.*phrase/a \
-            if (result && result->phrase) ai_voice_process(result->phrase);' $FILE
+          # Find the logging line with phrase and add voice processing after it
+          if ! grep -q "voice_hook_process" "$FILE"; then
+            # Look for any line logging the phrase result
+            sed -i '/ESP_LOGI.*\(TAG.*phrase\|phrase.*\)/a \            voice_hook_process(result->phrase);' "$FILE"
+            echo "Added voice hook call"
+          else
+            echo "Voice hook already present"
           fi
 
       # =========================================================
