@@ -59,49 +59,49 @@ jobs:
       # =========================================================
       # AI VOICE ROUTER
       # =========================================================
-      - name: Add AI router
+      - name: Add AI voice router
         run: |
-
           cat > examples/factory_demo/main/ai_voice_router.h << 'EOF'
           #pragma once
-
+          
           #ifdef __cplusplus
           extern "C" {
           #endif
-
+          
           void ai_voice_process(const char *text);
-
+          
           #ifdef __cplusplus
           }
           #endif
           EOF
-
+          
           cat > examples/factory_demo/main/ai_voice_router.c << 'EOF'
           #include "ai_voice_router.h"
           #include "command_router.h"
-
+          #include "esp_log.h"
           #include <stdio.h>
           #include <string.h>
-
+          
+          static const char *TAG = "AI_VOICE";
+          
           static int contains(const char *text, const char *word)
           {
               if (!text || !word) {
                   return 0;
               }
-
+              
               return strstr(text, word) != NULL;
           }
-
+          
           void ai_voice_process(const char *text)
           {
               if (!text) {
                   return;
               }
-
-              printf("VOICE: %s\n", text);
-
+              
+              ESP_LOGI(TAG, "Voice input: %s", text);
+              
               if (contains(text, "light") || contains(text, "led")) {
-
                   if (contains(text, "on")) {
                       command_router_execute("LED_ON");
                   }
@@ -117,42 +117,45 @@ jobs:
       # =========================================================
       - name: Add command router
         run: |
-
           cat > examples/factory_demo/main/command_router.h << 'EOF'
           #pragma once
-
+          
           #ifdef __cplusplus
           extern "C" {
           #endif
-
+          
           void command_router_execute(const char *cmd);
-
+          
           #ifdef __cplusplus
           }
           #endif
           EOF
-
+          
           cat > examples/factory_demo/main/command_router.c << 'EOF'
           #include "command_router.h"
           #include "app_led.h"
-
+          #include "esp_log.h"
           #include <stdbool.h>
           #include <stdio.h>
           #include <string.h>
-
+          
+          static const char *TAG = "CMD_ROUTER";
+          
           void command_router_execute(const char *cmd)
           {
               if (!cmd) {
                   return;
               }
-
-              printf("CMD: %s\n", cmd);
-
+              
+              ESP_LOGI(TAG, "Executing: %s", cmd);
+              
               if (strcmp(cmd, "LED_ON") == 0) {
                   app_pwm_led_set_power(true);
+                  ESP_LOGI(TAG, "LED turned ON");
               }
               else if (strcmp(cmd, "LED_OFF") == 0) {
                   app_pwm_led_set_power(false);
+                  ESP_LOGI(TAG, "LED turned OFF");
               }
           }
           EOF
@@ -162,107 +165,119 @@ jobs:
       # =========================================================
       - name: Add web server
         run: |
-
           cat > examples/factory_demo/main/web_server.h << 'EOF'
           #pragma once
-
+          
           #ifdef __cplusplus
           extern "C" {
           #endif
-
+          
           void web_server_start(void);
-
+          
           #ifdef __cplusplus
           }
           #endif
           EOF
-
+          
           cat > examples/factory_demo/main/web_server.c << 'EOF'
           #include "web_server.h"
-
           #include "esp_http_server.h"
           #include "app_led.h"
-
+          #include "esp_log.h"
           #include <stdbool.h>
-
+          
+          static const char *TAG = "WEB_SERVER";
           static httpd_handle_t server = NULL;
-
+          
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
                   "<!DOCTYPE html>"
                   "<html>"
                   "<head>"
-                  "<title>ESP32 Voice AI</title>"
+                  "<title>ESP32-S3-BOX AI Voice</title>"
                   "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                  "<style>"
+                  "body{font-family:Arial;margin:20px;}"
+                  ".btn{padding:10px 20px;margin:5px;cursor:pointer;}"
+                  ".on{background:#4CAF50;color:white;}"
+                  ".off{background:#f44336;color:white;}"
+                  "</style>"
                   "</head>"
                   "<body>"
-                  "<h1>ESP32-S3-BOX</h1>"
-                  "<button onclick=\"fetch('/on')\">LED ON</button>"
-                  "<button onclick=\"fetch('/off')\">LED OFF</button>"
+                  "<h1>ESP32-S3-BOX AI Voice Router</h1>"
+                  "<p>Control LED via Voice or Web</p>"
+                  "<button class='btn on' onclick=\"fetch('/on')\">LED ON</button>"
+                  "<button class='btn off' onclick=\"fetch('/off')\">LED OFF</button>"
                   "</body>"
                   "</html>";
-
+              
               httpd_resp_set_type(req, "text/html");
               httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-
+              
               return ESP_OK;
           }
-
+          
           static esp_err_t on_handler(httpd_req_t *req)
           {
+              ESP_LOGI(TAG, "LED ON requested via web");
               app_pwm_led_set_power(true);
-
-              httpd_resp_send(req, "ON", HTTPD_RESP_USE_STRLEN);
-
+              
+              httpd_resp_send(req, "LED_ON", HTTPD_RESP_USE_STRLEN);
+              
               return ESP_OK;
           }
-
+          
           static esp_err_t off_handler(httpd_req_t *req)
           {
+              ESP_LOGI(TAG, "LED OFF requested via web");
               app_pwm_led_set_power(false);
-
-              httpd_resp_send(req, "OFF", HTTPD_RESP_USE_STRLEN);
-
+              
+              httpd_resp_send(req, "LED_OFF", HTTPD_RESP_USE_STRLEN);
+              
               return ESP_OK;
           }
-
+          
           void web_server_start(void)
           {
               if (server != NULL) {
                   return;
               }
-
+              
               httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-
+              config.stack_size = 8192;
+              
               if (httpd_start(&server, &config) != ESP_OK) {
+                  ESP_LOGE(TAG, "Failed to start web server");
                   return;
               }
-
+              
               httpd_uri_t root = {
                   .uri = "/",
                   .method = HTTP_GET,
                   .handler = root_handler,
                   .user_ctx = NULL
               };
-
+              
               httpd_uri_t on = {
                   .uri = "/on",
                   .method = HTTP_GET,
                   .handler = on_handler,
                   .user_ctx = NULL
               };
-
+              
               httpd_uri_t off = {
                   .uri = "/off",
                   .method = HTTP_GET,
                   .handler = off_handler,
                   .user_ctx = NULL
               };
-
+              
               httpd_register_uri_handler(server, &root);
               httpd_register_uri_handler(server, &on);
               httpd_register_uri_handler(server, &off);
+              
+              ESP_LOGI(TAG, "Web server started on port 80");
           }
           EOF
 
@@ -271,121 +286,56 @@ jobs:
       # =========================================================
       - name: Patch CMakeLists
         run: |
-
-          python3 - << 'EOF'
-          from pathlib import Path
-
-          path = Path("examples/factory_demo/main/CMakeLists.txt")
-
-          text = path.read_text()
-
-          if "ai_voice_router.c" not in text:
-
-              text = text.replace(
-                  "main.c",
-                  "main.c ai_voice_router.c command_router.c web_server.c"
-              )
-
-              path.write_text(text)
-
-          print("CMakeLists patched")
-          EOF
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          
+          if ! grep -q "ai_voice_router.c" $FILE; then
+            sed -i '/SRCS.*main\.c/s/.*/& ai_voice_router.c command_router.c web_server.c/' $FILE
+          fi
 
       # =========================================================
       # PATCH main.c
       # =========================================================
-      - name: Patch main.c
+      - name: Patch main.c includes
         run: |
+          FILE=examples/factory_demo/main/main.c
+          
+          LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
+          
+          sed -i '/web_server.h/d' $FILE || true
+          sed -i '/ai_voice_router.h/d' $FILE || true
+          
+          sed -i "${LAST_INCLUDE}a\\
+          #include \"web_server.h\"\n#include \"ai_voice_router.h\"" $FILE
 
-          python3 - << 'EOF'
-          from pathlib import Path
-
-          path = Path("examples/factory_demo/main/main.c")
-
-          text = path.read_text()
-
-          includes = '''
-#include "web_server.h"
-#include "ai_voice_router.h"
-'''
-
-          if '#include "web_server.h"' not in text:
-
-              idx = text.rfind("#include")
-
-              end = text.find("\n", idx)
-
-              text = text[:end+1] + includes + text[end+1:]
-
-          if "web_server_start();" not in text:
-
-              text = text.replace(
-                  "app_rmaker_start();",
-                  "app_rmaker_start();\n    web_server_start();"
-              )
-
-          path.write_text(text)
-
-          print("main.c patched")
-          EOF
+      - name: Patch main.c calls
+        run: |
+          FILE=examples/factory_demo/main/main.c
+          
+          sed -i '/web_server_start()/d' $FILE || true
+          
+          sed -i '/app_rmaker_start()/a \
+          web_server_start();' $FILE
 
       # =========================================================
-      # PATCH SPEECH RECOGNITION HANDLER (SAFE)
+      # PATCH SPEECH RECOGNITION HANDLER
       # =========================================================
       - name: Inject AI voice pipeline
         run: |
-
-          python3 - << 'EOF'
-          from pathlib import Path
-          import re
-
-          files = list(
-              Path("examples/factory_demo").rglob("app_sr_handler.c")
-          )
-
-          if not files:
-              raise RuntimeError("app_sr_handler.c not found")
-
-          path = files[0]
-
-          text = path.read_text(errors="ignore")
-
-          # -------------------------------------------------
-          # Add include safely
-          # -------------------------------------------------
-          if '#include "ai_voice_router.h"' not in text:
-              text = '#include "ai_voice_router.h"\n' + text
-
-          # -------------------------------------------------
-          # Avoid double patch
-          # -------------------------------------------------
-          if "ai_voice_process(result->phrase);" not in text:
-
-              pattern = r'(ESP_LOGI\s*\([^;]*\);\s*)'
-
-              replacement = (
-                  r'\1\n'
-                  r'    if (result && result->phrase) {\n'
-                  r'        ai_voice_process(result->phrase);\n'
-                  r'    }\n'
-              )
-
-              text, count = re.subn(
-                  pattern,
-                  replacement,
-                  text,
-                  count=1
-              )
-
-              print(f"Injected AI pipeline: {count}")
-
-          else:
-              print("AI pipeline already injected")
-
-          path.write_text(text)
-
-          print("Speech pipeline patched safely")
-          EOF
+          FILE=$(find examples/factory_demo -name "app_sr_handler.c" | head -1)
+          
+          if [ -z "$FILE" ]; then
+            echo "app_sr_handler.c not found, skipping voice injection"
+            exit 0
+          fi
+          
+          if ! grep -q "ai_voice_router.h" $FILE; then
+            sed -i '1s/^/#include "ai_voice_router.h"\n/' $FILE
+          fi
+          
+          if ! grep -q "ai_voice_process" $FILE; then
+            sed -i '/ESP_LOGI.*phrase/a \
+            if (result && result->phrase) ai_voice_process(result->phrase);' $FILE
+          fi
 
       # =========================================================
       # BUILD
@@ -393,15 +343,11 @@ jobs:
       - name: Build firmware
         run: |
           source $IDF_PATH/export.sh
-
           cd examples/factory_demo
-
           idf.py set-target esp32s3
-
           cp sdkconfig.ci.box sdkconfig
-
           idf.py fullclean
-
+          idf.py reconfigure
           idf.py build
 
       # =========================================================
@@ -410,13 +356,13 @@ jobs:
       - name: Merge firmware
         run: |
           source $IDF_PATH/export.sh
-
           cd examples/factory_demo/build
-
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
             -o factory.bin \
-            @flash_args
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
 
       # =========================================================
       # UPLOAD
