@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX AI VOICE ROUTER STABLE
+name: ESP32-S3-BOX AI VOICE ROUTER + ESPNOW RELAY V2
 
 on:
   workflow_dispatch:
@@ -28,7 +28,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe Git
+      - name: Safe directory
         run: git config --global --add safe.directory '*'
 
       # =========================================================
@@ -39,191 +39,210 @@ jobs:
           rm -rf examples/factory_demo/build || true
           rm -rf examples/factory_demo/managed_components || true
           rm -rf examples/factory_demo/dependencies.lock || true
+          rm -rf examples/factory_demo/.idf_component_cache || true
 
       # =========================================================
-      # RESTORE ORIGINAL FILES
+      # RESTORE
       # =========================================================
-      - name: Restore original files
+      - name: Restore original manifest
         run: |
           cd examples/factory_demo
-          git checkout idf_component.yml || true
-          git checkout main/CMakeLists.txt || true
-          git checkout main/main.c || true
-          git checkout main/app/app_sr_handler.c || true
+          git checkout idf_component.yml 2>/dev/null || true
 
-      # =========================================================
-      # ENABLE COMPONENT MANAGER
-      # =========================================================
       - name: Enable component manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # =========================================================
-      # AI VOICE ROUTER
+      # VOICE HOOK
       # =========================================================
-      - name: Add AI voice router
+      - name: Add voice hook
         run: |
-          cat > examples/factory_demo/main/ai_voice_router.h << 'EOF'
+
+          cat > examples/factory_demo/main/voice_hook.h << 'EOF'
           #pragma once
-          
+
           #ifdef __cplusplus
           extern "C" {
           #endif
-          
-          void ai_voice_process(const char *text);
-          void ai_voice_init(void);
-          
+
+          void voice_hook_init(void);
+          void voice_hook_process(const char *phrase);
+
           #ifdef __cplusplus
           }
           #endif
           EOF
-          
-          cat > examples/factory_demo/main/ai_voice_router.c << 'EOF'
-          #include "ai_voice_router.h"
-          #include "command_router.h"
+
+          cat > examples/factory_demo/main/voice_hook.c << 'EOF'
+          #include "voice_hook.h"
+          #include "app_led.h"
           #include "esp_log.h"
-          #include <stdio.h>
+          #include "relay_protocol.h"
+
           #include <string.h>
-          #include <ctype.h>
-          
-          static const char *TAG = "AI_VOICE";
-          
-          static int contains(const char *text, const char *word)
+          #include <stdbool.h>
+
+          static const char *TAG = "VOICE";
+
+          static bool last_light_state = false;
+
+          static bool contains_word(const char *text, const char *word)
           {
-              if (!text || !word) return 0;
+              if (!text || !word) return false;
               return strstr(text, word) != NULL;
           }
-          
-          /* Check for whole-word match to avoid "on" matching inside "control",
-             "done", "stone", etc.  Also catches "on." "on!" etc. */
-          static int contains_word(const char *text, const char *word)
+
+          void voice_hook_init(void)
           {
-              if (!text || !word) return 0;
-              const char *p = text;
-              size_t wlen = strlen(word);
-              while ((p = strstr(p, word)) != NULL) {
-                  /* char before must be start-of-string or non-alpha */
-                  int pre_ok  = (p == text) || !isalpha((unsigned char)*(p - 1));
-                  /* char after must be end-of-string or non-alpha */
-                  int post_ok = !isalpha((unsigned char)*(p + wlen));
-                  if (pre_ok && post_ok) return 1;
-                  p += wlen;
-              }
-              return 0;
+              ESP_LOGI(TAG, "Voice router initialized");
           }
-          
-          void ai_voice_process(const char *text)
+
+          void voice_hook_process(const char *phrase)
           {
-              if (!text || strlen(text) == 0) return;
-          
-              ESP_LOGI(TAG, "Voice: %s", text);
-          
-              if (contains(text, "light") || contains(text, "led")) {
-                  /* IMPORTANT: check "off" BEFORE "on" so that the word
-                     "off" is never accidentally caught by the "on" branch. */
-                  if (contains_word(text, "off")) {
-                      ESP_LOGI(TAG, "Command: LED OFF");
-                      command_router_execute("LED_OFF");
-                  } else if (contains_word(text, "on")) {
-                      ESP_LOGI(TAG, "Command: LED ON");
-                      command_router_execute("LED_ON");
+              if (!phrase) return;
+
+              ESP_LOGI(TAG, "VOICE CMD: %s", phrase);
+
+              if (contains_word(phrase, "light") ||
+                  contains_word(phrase, "led"))
+              {
+                  if (contains_word(phrase, "on"))
+                  {
+                      app_pwm_led_set_power(true);
+                      relay_send_command("LED_ON");
+                      last_light_state = true;
+
+                      ESP_LOGI(TAG, "Light ON");
+                  }
+                  else if (contains_word(phrase, "off"))
+                  {
+                      app_pwm_led_set_power(false);
+                      relay_send_command("LED_OFF");
+                      last_light_state = false;
+
+                      ESP_LOGI(TAG, "Light OFF");
                   }
               }
-          }
-          
-          void ai_voice_init(void)
-          {
-              ESP_LOGI(TAG, "AI Voice Router initialized");
-          }
-          EOF
-          
-          cat > examples/factory_demo/main/ai_voice_router.c << 'EOF'
-          #include "ai_voice_router.h"
-          #include "command_router.h"
-          #include "esp_log.h"
-          #include <stdio.h>
-          #include <string.h>
-          
-          static const char *TAG = "AI_VOICE";
-          
-          static int contains(const char *text, const char *word)
-          {
-              if (!text || !word) {
-                  return 0;
-              }
-              
-              return strstr(text, word) != NULL;
-          }
-          
-          void ai_voice_process(const char *text)
-          {
-              if (!text || strlen(text) == 0) {
-                  return;
-              }
-              
-              ESP_LOGI(TAG, "Voice: %s", text);
-              
-              if (contains(text, "light") || contains(text, "led")) {
-                  if (contains(text, "on")) {
-                      ESP_LOGI(TAG, "Command: LED ON");
-                      command_router_execute("LED_ON");
+              else if (contains_word(phrase, "repeat"))
+              {
+                  if (last_light_state)
+                  {
+                      app_pwm_led_set_power(true);
+                      relay_send_command("LED_ON");
                   }
-                  else if (contains(text, "off")) {
-                      ESP_LOGI(TAG, "Command: LED OFF");
-                      command_router_execute("LED_OFF");
+                  else
+                  {
+                      app_pwm_led_set_power(false);
+                      relay_send_command("LED_OFF");
                   }
+
+                  ESP_LOGI(TAG, "Repeated previous action");
               }
-          }
-          
-          void ai_voice_init(void)
-          {
-              ESP_LOGI(TAG, "AI Voice Router initialized");
+              else if (contains_word(phrase, "relay"))
+              {
+                  relay_send_command("PING");
+                  ESP_LOGI(TAG, "Relay ping");
+              }
           }
           EOF
 
       # =========================================================
-      # COMMAND ROUTER
+      # ESPNOW RELAY PROTOCOL
       # =========================================================
-      - name: Add command router
+      - name: Add relay protocol
         run: |
-          cat > examples/factory_demo/main/command_router.h << 'EOF'
+
+          cat > examples/factory_demo/main/relay_protocol.h << 'EOF'
           #pragma once
-          
+
           #ifdef __cplusplus
           extern "C" {
           #endif
-          
-          void command_router_execute(const char *cmd);
-          
+
+          void relay_protocol_init(void);
+          void relay_send_command(const char *cmd);
+
           #ifdef __cplusplus
           }
           #endif
           EOF
-          
-          cat > examples/factory_demo/main/command_router.c << 'EOF'
-          #include "command_router.h"
-          #include "app_led.h"
+
+          cat > examples/factory_demo/main/relay_protocol.c << 'EOF'
+          #include "relay_protocol.h"
+
           #include "esp_log.h"
-          #include <stdbool.h>
+          #include "esp_now.h"
+          #include "esp_wifi.h"
+          #include "nvs_flash.h"
+
           #include <string.h>
-          
-          static const char *TAG = "CMD_ROUTER";
-          
-          void command_router_execute(const char *cmd)
+
+          static const char *TAG = "RELAY";
+
+          static uint8_t broadcast_mac[] =
           {
-              if (!cmd || strlen(cmd) == 0) {
-                  return;
-              }
-              
-              ESP_LOGI(TAG, "Cmd: %s", cmd);
-              
-              if (strcmp(cmd, "LED_ON") == 0) {
-                  app_pwm_led_set_power(true);
-                  ESP_LOGI(TAG, "LED ON");
-              }
-              else if (strcmp(cmd, "LED_OFF") == 0) {
-                  app_pwm_led_set_power(false);
-                  ESP_LOGI(TAG, "LED OFF");
-              }
+              0xFF,0xFF,0xFF,0xFF,0xFF,0xFF
+          };
+
+          typedef struct
+          {
+              char cmd[32];
+          } relay_packet_t;
+
+          static void send_cb(const uint8_t *mac_addr,
+                              esp_now_send_status_t status)
+          {
+              ESP_LOGI(TAG, "ESP-NOW send status: %d", status);
+          }
+
+          static void recv_cb(const esp_now_recv_info_t *info,
+                              const uint8_t *data,
+                              int len)
+          {
+              if (len <= 0) return;
+
+              relay_packet_t pkt;
+              memset(&pkt, 0, sizeof(pkt));
+
+              memcpy(&pkt, data,
+                     len > sizeof(pkt) ? sizeof(pkt) : len);
+
+              ESP_LOGI(TAG, "RX relay cmd: %s", pkt.cmd);
+          }
+
+          void relay_protocol_init(void)
+          {
+              ESP_LOGI(TAG, "Init relay protocol");
+
+              esp_now_init();
+
+              esp_now_register_send_cb(send_cb);
+              esp_now_register_recv_cb(recv_cb);
+
+              esp_now_peer_info_t peer = {0};
+
+              memcpy(peer.peer_addr, broadcast_mac, 6);
+
+              peer.channel = 0;
+              peer.encrypt = false;
+
+              esp_now_add_peer(&peer);
+          }
+
+          void relay_send_command(const char *cmd)
+          {
+              if (!cmd) return;
+
+              relay_packet_t pkt;
+              memset(&pkt, 0, sizeof(pkt));
+
+              strncpy(pkt.cmd, cmd, sizeof(pkt.cmd) - 1);
+
+              esp_now_send(broadcast_mac,
+                           (uint8_t *)&pkt,
+                           sizeof(pkt));
+
+              ESP_LOGI(TAG, "Relay send: %s", pkt.cmd);
           }
           EOF
 
@@ -232,203 +251,189 @@ jobs:
       # =========================================================
       - name: Add web server
         run: |
+
           cat > examples/factory_demo/main/web_server.h << 'EOF'
           #pragma once
-          
+
           #ifdef __cplusplus
           extern "C" {
           #endif
-          
+
           void web_server_start(void);
-          
+
           #ifdef __cplusplus
           }
           #endif
           EOF
-          
+
           cat > examples/factory_demo/main/web_server.c << 'EOF'
           #include "web_server.h"
+
           #include "esp_http_server.h"
           #include "app_led.h"
-          #include "esp_log.h"
-          
-          static const char *TAG = "WEB_SERVER";
+          #include "relay_protocol.h"
+
           static httpd_handle_t server = NULL;
-          
+
           static esp_err_t root_handler(httpd_req_t *req)
           {
               const char html[] =
-                  "<!DOCTYPE html>"
-                  "<html><head><title>ESP32-S3-BOX</title>"
-                  "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-                  "<style>"
-                  "body{font-family:Arial;margin:20px;}"
-                  ".btn{padding:10px 20px;margin:5px;cursor:pointer;border:none;border-radius:4px;}"
-                  ".on{background:#4CAF50;color:white;}"
-                  ".off{background:#f44336;color:white;}"
-                  "</style></head>"
-                  "<body>"
-                  "<h1>ESP32-S3-BOX</h1>"
-                  "<p>AI Voice + Web Control</p>"
-                  "<button class='btn on' onclick=\"fetch('/on')\">LED ON</button>"
-                  "<button class='btn off' onclick=\"fetch('/off')\">LED OFF</button>"
-                  "</body></html>";
-              
-              httpd_resp_set_type(req, "text/html");
-              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              "<html><body>"
+              "<h1>ESP32 AI Voice Router</h1>"
+              "<button onclick=\"fetch('/on')\">LED ON</button>"
+              "<button onclick=\"fetch('/off')\">LED OFF</button>"
+              "<button onclick=\"fetch('/relay')\">PING RELAY</button>"
+              "</body></html>";
+
+              httpd_resp_send(req,
+                              html,
+                              HTTPD_RESP_USE_STRLEN);
+
               return ESP_OK;
           }
-          
+
           static esp_err_t on_handler(httpd_req_t *req)
           {
-              ESP_LOGI(TAG, "LED ON via web");
               app_pwm_led_set_power(true);
-              httpd_resp_send(req, "ON", HTTPD_RESP_USE_STRLEN);
+              relay_send_command("LED_ON");
+
+              httpd_resp_send(req,
+                              "ON",
+                              HTTPD_RESP_USE_STRLEN);
+
               return ESP_OK;
           }
-          
+
           static esp_err_t off_handler(httpd_req_t *req)
           {
-              ESP_LOGI(TAG, "LED OFF via web");
               app_pwm_led_set_power(false);
-              httpd_resp_send(req, "OFF", HTTPD_RESP_USE_STRLEN);
+              relay_send_command("LED_OFF");
+
+              httpd_resp_send(req,
+                              "OFF",
+                              HTTPD_RESP_USE_STRLEN);
+
               return ESP_OK;
           }
-          
+
+          static esp_err_t relay_handler(httpd_req_t *req)
+          {
+              relay_send_command("PING");
+
+              httpd_resp_send(req,
+                              "PING",
+                              HTTPD_RESP_USE_STRLEN);
+
+              return ESP_OK;
+          }
+
           void web_server_start(void)
           {
-              if (server != NULL) {
-                  return;
-              }
-              
-              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-              config.stack_size = 8192;
-              
-              if (httpd_start(&server, &config) != ESP_OK) {
-                  ESP_LOGE(TAG, "Failed to start");
-                  return;
-              }
-              
-              httpd_uri_t root = {.uri = "/", .method = HTTP_GET, .handler = root_handler};
-              httpd_uri_t on = {.uri = "/on", .method = HTTP_GET, .handler = on_handler};
-              httpd_uri_t off = {.uri = "/off", .method = HTTP_GET, .handler = off_handler};
-              
+              if (server) return;
+
+              httpd_config_t config =
+                  HTTPD_DEFAULT_CONFIG();
+
+              httpd_start(&server, &config);
+
+              httpd_uri_t root = {
+                  .uri="/",
+                  .method=HTTP_GET,
+                  .handler=root_handler
+              };
+
+              httpd_uri_t on = {
+                  .uri="/on",
+                  .method=HTTP_GET,
+                  .handler=on_handler
+              };
+
+              httpd_uri_t off = {
+                  .uri="/off",
+                  .method=HTTP_GET,
+                  .handler=off_handler
+              };
+
+              httpd_uri_t relay = {
+                  .uri="/relay",
+                  .method=HTTP_GET,
+                  .handler=relay_handler
+              };
+
               httpd_register_uri_handler(server, &root);
               httpd_register_uri_handler(server, &on);
               httpd_register_uri_handler(server, &off);
-              
-              ESP_LOGI(TAG, "Started on port 80");
+              httpd_register_uri_handler(server, &relay);
           }
           EOF
 
       # =========================================================
-      # VOICE HOOK WRAPPER
-      # =========================================================
-      - name: Add voice hook wrapper
-        run: |
-          cat > examples/factory_demo/main/voice_hook.h << 'EOF'
-          #pragma once
-          
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-          
-          void voice_hook_init(void);
-          void voice_hook_process(const char *phrase);
-          
-          #ifdef __cplusplus
-          }
-          #endif
-          EOF
-          
-          cat > examples/factory_demo/main/voice_hook.c << 'EOF'
-          #include "voice_hook.h"
-          #include "ai_voice_router.h"
-          #include "esp_log.h"
-          
-          static const char *TAG = "VOICE_HOOK";
-          
-          void voice_hook_init(void)
-          {
-              ESP_LOGI(TAG, "Voice hook initialized");
-              ai_voice_init();
-          }
-          
-          void voice_hook_process(const char *phrase)
-          {
-              if (!phrase) {
-                  return;
-              }
-              
-              ESP_LOGI(TAG, "Processing: %s", phrase);
-              ai_voice_process(phrase);
-          }
-          EOF
-
-      # =========================================================
-      # PATCH CMakeLists.txt
+      # PATCH CMAKE
       # =========================================================
       - name: Patch CMakeLists
         run: |
+
           FILE=examples/factory_demo/main/CMakeLists.txt
-          
-          if ! grep -q "ai_voice_router.c" $FILE; then
-            sed -i '/SRCS.*main\.c/s/.*/& ai_voice_router.c command_router.c web_server.c voice_hook.c/' $FILE
+
+          if ! grep -q "voice_hook.c" $FILE; then
+            sed -i '/SRCS.*main\.c/s/.*/& voice_hook.c web_server.c relay_protocol.c/' $FILE
           fi
 
       # =========================================================
-      # PATCH main.c
+      # PATCH MAIN INCLUDES
       # =========================================================
       - name: Patch main.c includes
         run: |
+
           FILE=examples/factory_demo/main/main.c
-          
+
           LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
-          
+
           sed -i '/web_server.h/d' $FILE || true
           sed -i '/voice_hook.h/d' $FILE || true
-          
-          sed -i "${LAST_INCLUDE}a\\
-          #include \"web_server.h\"\n#include \"voice_hook.h\"" $FILE
+          sed -i '/relay_protocol.h/d' $FILE || true
 
+          sed -i "${LAST_INCLUDE}a\\
+          #include \"web_server.h\"\n#include \"voice_hook.h\"\n#include \"relay_protocol.h\"" $FILE
+
+      # =========================================================
+      # PATCH MAIN CALLS
+      # =========================================================
       - name: Patch main.c calls
         run: |
+
           FILE=examples/factory_demo/main/main.c
-          
+
           sed -i '/web_server_start()/d' $FILE || true
           sed -i '/voice_hook_init()/d' $FILE || true
-          
+          sed -i '/relay_protocol_init()/d' $FILE || true
+
           sed -i '/app_rmaker_start()/a \
+          relay_protocol_init();\
           voice_hook_init();\
           web_server_start();' $FILE
 
       # =========================================================
-      # PATCH app_sr_handler.c (SAFE - callback style)
+      # PATCH SR HANDLER SAFE
       # =========================================================
-      - name: Patch app_sr_handler for voice routing
+      - name: Patch app_sr_handler
         run: |
+
           FILE=$(find examples/factory_demo -name "app_sr_handler.c" -type f | head -1)
-          
+
           if [ -z "$FILE" ]; then
-            echo "app_sr_handler.c not found, skipping"
+            echo "app_sr_handler.c not found"
             exit 0
           fi
-          
+
           echo "Patching: $FILE"
-          
-          # Add include at top
+
           if ! grep -q "voice_hook.h" "$FILE"; then
             sed -i '1s/^/#include "voice_hook.h"\n/' "$FILE"
-            echo "Added include"
           fi
-          
-          # Find the logging line with phrase and add voice processing after it
+
           if ! grep -q "voice_hook_process" "$FILE"; then
-            # Look for any line logging the phrase result
             sed -i '/ESP_LOGI.*\(TAG.*phrase\|phrase.*\)/a \            voice_hook_process(result->phrase);' "$FILE"
-            echo "Added voice hook call"
-          else
-            echo "Voice hook already present"
           fi
 
       # =========================================================
@@ -437,11 +442,17 @@ jobs:
       - name: Build firmware
         run: |
           source $IDF_PATH/export.sh
+
           cd examples/factory_demo
+
           idf.py set-target esp32s3
+
           cp sdkconfig.ci.box sdkconfig
+
           idf.py fullclean
+
           idf.py reconfigure
+
           idf.py build
 
       # =========================================================
@@ -450,7 +461,9 @@ jobs:
       - name: Merge firmware
         run: |
           source $IDF_PATH/export.sh
+
           cd examples/factory_demo/build
+
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
             --chip esp32s3 merge_bin \
             -o factory.bin \
@@ -464,5 +477,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-s3-box-ai-voice-router
+          name: esp32-s3-box-ai-relay-v2
           path: examples/factory_demo/build/factory.bin
