@@ -878,19 +878,3 @@ jobs:
           name: esp32-s3-box-ai-v2-factory
           path: examples/factory_demo/build/factory.bin
           retention-days: 30
-
-      # =========================================================
-      # UPLOAD — full build directory (map, elf, partitions)
-      # =========================================================
-      - name: Upload full build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32-s3-box-ai-v2-build
-          path: |
-            examples/factory_demo/build/factory.bin
-            examples/factory_demo/build/factory_demo.elf
-            examples/factory_demo/build/factory_demo.map
-            examples/factory_demo/build/partition_table/partition-table.bin
-            examples/factory_demo/build/bootloader/bootloader.bin
-            examples/factory_demo/build/flash_args
-          retention-days: 30
