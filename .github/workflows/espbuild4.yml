@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX AI VOICE ROUTER + ESPNOW RELAY V2
+name: ESP32-S3-BOX AI VOICE + ESP-NOW NODE REGISTRY V2
 
 on:
   workflow_dispatch:
@@ -28,28 +28,27 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe directory
+      - name: Safe dir
         run: git config --global --add safe.directory '*'
 
       # =========================================================
       # CLEAN
       # =========================================================
-      - name: Clean previous build
+      - name: Clean
         run: |
           rm -rf examples/factory_demo/build || true
           rm -rf examples/factory_demo/managed_components || true
           rm -rf examples/factory_demo/dependencies.lock || true
-          rm -rf examples/factory_demo/.idf_component_cache || true
 
       # =========================================================
-      # RESTORE
+      # RESTORE ORIGINAL MANIFEST
       # =========================================================
-      - name: Restore original manifest
+      - name: Restore manifest
         run: |
           cd examples/factory_demo
-          git checkout idf_component.yml 2>/dev/null || true
+          git checkout idf_component.yml || true
 
-      - name: Enable component manager
+      - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
 
       # =========================================================
@@ -57,7 +56,6 @@ jobs:
       # =========================================================
       - name: Add voice hook
         run: |
-
           cat > examples/factory_demo/main/voice_hook.h << 'EOF'
           #pragma once
 
@@ -77,24 +75,25 @@ jobs:
           #include "voice_hook.h"
           #include "app_led.h"
           #include "esp_log.h"
-          #include "relay_protocol.h"
-
+          #include "espnow_relay.h"
+          #include "mqtt_client_app.h"
           #include <string.h>
           #include <stdbool.h>
 
-          static const char *TAG = "VOICE";
+          static const char *TAG = "VOICE_HOOK";
 
-          static bool last_light_state = false;
+          static char last_device[32] = "light";
+          static bool last_state = false;
 
-          static bool contains_word(const char *text, const char *word)
+          static bool contains(const char *a, const char *b)
           {
-              if (!text || !word) return false;
-              return strstr(text, word) != NULL;
+              if (!a || !b) return false;
+              return strstr(a, b) != NULL;
           }
 
           void voice_hook_init(void)
           {
-              ESP_LOGI(TAG, "Voice router initialized");
+              ESP_LOGI(TAG, "Voice hook initialized");
           }
 
           void voice_hook_process(const char *phrase)
@@ -103,227 +102,215 @@ jobs:
 
               ESP_LOGI(TAG, "VOICE CMD: %s", phrase);
 
-              if (contains_word(phrase, "light") ||
-                  contains_word(phrase, "led"))
+              if (contains(phrase, "light") || contains(phrase, "led"))
               {
-                  if (contains_word(phrase, "on"))
+                  strcpy(last_device, "light");
+
+                  if (contains(phrase, "on"))
                   {
                       app_pwm_led_set_power(true);
-                      relay_send_command("LED_ON");
-                      last_light_state = true;
-
+                      last_state = true;
+                      espnow_relay_broadcast("LIGHT:ON");
+                      mqtt_client_app_publish("/box/voice", "LIGHT:ON");
                       ESP_LOGI(TAG, "Light ON");
                   }
-                  else if (contains_word(phrase, "off"))
+                  else if (contains(phrase, "off"))
                   {
                       app_pwm_led_set_power(false);
-                      relay_send_command("LED_OFF");
-                      last_light_state = false;
-
+                      last_state = false;
+                      espnow_relay_broadcast("LIGHT:OFF");
+                      mqtt_client_app_publish("/box/voice", "LIGHT:OFF");
                       ESP_LOGI(TAG, "Light OFF");
                   }
               }
-              else if (contains_word(phrase, "repeat"))
+              else if (contains(phrase, "turn it on"))
               {
-                  if (last_light_state)
+                  if (strcmp(last_device, "light") == 0)
                   {
                       app_pwm_led_set_power(true);
-                      relay_send_command("LED_ON");
+                      last_state = true;
+                      espnow_relay_broadcast("LIGHT:ON");
+                      mqtt_client_app_publish("/box/voice", "LIGHT:ON");
                   }
-                  else
+              }
+              else if (contains(phrase, "turn it off"))
+              {
+                  if (strcmp(last_device, "light") == 0)
                   {
                       app_pwm_led_set_power(false);
-                      relay_send_command("LED_OFF");
+                      last_state = false;
+                      espnow_relay_broadcast("LIGHT:OFF");
+                      mqtt_client_app_publish("/box/voice", "LIGHT:OFF");
                   }
-
-                  ESP_LOGI(TAG, "Repeated previous action");
-              }
-              else if (contains_word(phrase, "relay"))
-              {
-                  relay_send_command("PING");
-                  ESP_LOGI(TAG, "Relay ping");
               }
           }
           EOF
 
       # =========================================================
-      # ESPNOW RELAY PROTOCOL
+      # WEB SERVER (RICH DASHBOARD)
       # =========================================================
-      - name: Add relay protocol
+      - name: Add web server with dashboard
         run: |
-
-          cat > examples/factory_demo/main/relay_protocol.h << 'EOF'
-          #pragma once
-
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-
-          void relay_protocol_init(void);
-          void relay_send_command(const char *cmd);
-
-          #ifdef __cplusplus
-          }
-          #endif
-          EOF
-
-          cat > examples/factory_demo/main/relay_protocol.c << 'EOF'
-          #include "relay_protocol.h"
-
-          #include "esp_log.h"
-          #include "esp_now.h"
-          #include "esp_wifi.h"
-          #include "nvs_flash.h"
-
-          #include <string.h>
-
-          static const char *TAG = "RELAY";
-
-          static uint8_t broadcast_mac[] =
-          {
-              0xFF,0xFF,0xFF,0xFF,0xFF,0xFF
-          };
-
-          typedef struct
-          {
-              char cmd[32];
-          } relay_packet_t;
-
-          static void send_cb(const uint8_t *mac_addr,
-                              esp_now_send_status_t status)
-          {
-              ESP_LOGI(TAG, "ESP-NOW send status: %d", status);
-          }
-
-          static void recv_cb(const esp_now_recv_info_t *info,
-                              const uint8_t *data,
-                              int len)
-          {
-              if (len <= 0) return;
-
-              relay_packet_t pkt;
-              memset(&pkt, 0, sizeof(pkt));
-
-              memcpy(&pkt, data,
-                     len > sizeof(pkt) ? sizeof(pkt) : len);
-
-              ESP_LOGI(TAG, "RX relay cmd: %s", pkt.cmd);
-          }
-
-          void relay_protocol_init(void)
-          {
-              ESP_LOGI(TAG, "Init relay protocol");
-
-              esp_now_init();
-
-              esp_now_register_send_cb(send_cb);
-              esp_now_register_recv_cb(recv_cb);
-
-              esp_now_peer_info_t peer = {0};
-
-              memcpy(peer.peer_addr, broadcast_mac, 6);
-
-              peer.channel = 0;
-              peer.encrypt = false;
-
-              esp_now_add_peer(&peer);
-          }
-
-          void relay_send_command(const char *cmd)
-          {
-              if (!cmd) return;
-
-              relay_packet_t pkt;
-              memset(&pkt, 0, sizeof(pkt));
-
-              strncpy(pkt.cmd, cmd, sizeof(pkt.cmd) - 1);
-
-              esp_now_send(broadcast_mac,
-                           (uint8_t *)&pkt,
-                           sizeof(pkt));
-
-              ESP_LOGI(TAG, "Relay send: %s", pkt.cmd);
-          }
-          EOF
-
-      # =========================================================
-      # WEB SERVER
-      # =========================================================
-      - name: Add web server
-        run: |
-
           cat > examples/factory_demo/main/web_server.h << 'EOF'
           #pragma once
-
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-
           void web_server_start(void);
-
-          #ifdef __cplusplus
-          }
-          #endif
           EOF
 
           cat > examples/factory_demo/main/web_server.c << 'EOF'
           #include "web_server.h"
-
           #include "esp_http_server.h"
           #include "app_led.h"
-          #include "relay_protocol.h"
+          #include "node_registry.h"
+          #include "esp_log.h"
+          #include "esp_ota_ops.h"
+          #include "esp_app_desc.h"
+          #include <stdio.h>
+          #include <string.h>
 
+          static const char *TAG = "WEB";
           static httpd_handle_t server = NULL;
 
+          /* ---- Dashboard HTML ---- */
           static esp_err_t root_handler(httpd_req_t *req)
           {
-              const char html[] =
-              "<html><body>"
-              "<h1>ESP32 AI Voice Router</h1>"
-              "<button onclick=\"fetch('/on')\">LED ON</button>"
-              "<button onclick=\"fetch('/off')\">LED OFF</button>"
-              "<button onclick=\"fetch('/relay')\">PING RELAY</button>"
-              "</body></html>";
+              char buf[4096];
+              char node_rows[1024] = "";
+              int count = 0;
+              const char **nodes = node_registry_get_all(&count);
 
-              httpd_resp_send(req,
-                              html,
-                              HTTPD_RESP_USE_STRLEN);
+              for (int i = 0; i < count; i++) {
+                  char row[128];
+                  snprintf(row, sizeof(row),
+                      "<tr><td>%d</td><td>%s</td><td>Online</td></tr>", i + 1, nodes[i]);
+                  strncat(node_rows, row, sizeof(node_rows) - strlen(node_rows) - 1);
+              }
 
+              const esp_app_desc_t *desc = esp_app_get_description();
+
+              snprintf(buf, sizeof(buf),
+                  "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                  "<title>ESP32-BOX AI</title>"
+                  "<style>"
+                  "body{font-family:sans-serif;background:#1a1a2e;color:#eee;padding:20px}"
+                  "h1{color:#e94560}table{width:100%%;border-collapse:collapse;margin-top:20px}"
+                  "th,td{border:1px solid #444;padding:8px;text-align:left}"
+                  "th{background:#16213e}.btn{padding:10px 20px;margin:5px;border:none;"
+                  "border-radius:6px;cursor:pointer;font-size:16px}"
+                  ".on{background:#27ae60;color:#fff}.off{background:#e74c3c;color:#fff}"
+                  ".ota{background:#2980b9;color:#fff}"
+                  "</style></head><body>"
+                  "<h1>&#x1F4E6; ESP32-S3-BOX AI Dashboard</h1>"
+                  "<p>Firmware: <b>%s</b> | Built: %s %s</p>"
+                  "<button class='btn on'  onclick=\"fetch('/on')\">&#x1F4A1; Light ON</button>"
+                  "<button class='btn off' onclick=\"fetch('/off')\">&#x1F4A1; Light OFF</button>"
+                  "<button class='btn ota' onclick=\"location.href='/ota'\">&#x1F504; OTA Update</button>"
+                  "<h2>Registered Nodes (%d)</h2>"
+                  "<table><tr><th>#</th><th>Node ID / MAC</th><th>Status</th></tr>"
+                  "%s"
+                  "</table>"
+                  "<h2>Voice Log</h2>"
+                  "<div id='log' style='background:#0f3460;padding:10px;height:120px;overflow-y:auto'></div>"
+                  "<script>"
+                  "setInterval(()=>fetch('/log').then(r=>r.text()).then(t=>{document.getElementById('log').innerText=t}),2000);"
+                  "</script>"
+                  "</body></html>",
+                  desc->version, desc->date, desc->time, count, node_rows);
+
+              httpd_resp_set_type(req, "text/html");
+              httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
           static esp_err_t on_handler(httpd_req_t *req)
           {
               app_pwm_led_set_power(true);
-              relay_send_command("LED_ON");
-
-              httpd_resp_send(req,
-                              "ON",
-                              HTTPD_RESP_USE_STRLEN);
-
+              httpd_resp_send(req, "ON", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
           static esp_err_t off_handler(httpd_req_t *req)
           {
               app_pwm_led_set_power(false);
-              relay_send_command("LED_OFF");
-
-              httpd_resp_send(req,
-                              "OFF",
-                              HTTPD_RESP_USE_STRLEN);
-
+              httpd_resp_send(req, "OFF", HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          static esp_err_t relay_handler(httpd_req_t *req)
+          /* ---- OTA page (binary upload via POST) ---- */
+          static esp_err_t ota_get_handler(httpd_req_t *req)
           {
-              relay_send_command("PING");
+              const char html[] =
+                  "<!DOCTYPE html><html><body style='font-family:sans-serif;background:#1a1a2e;color:#eee;padding:20px'>"
+                  "<h1>OTA Firmware Update</h1>"
+                  "<form method='POST' action='/ota/upload' enctype='multipart/form-data'>"
+                  "<input type='file' name='firmware' accept='.bin'><br><br>"
+                  "<input type='submit' value='Flash Firmware' style='padding:10px 20px;background:#2980b9;color:#fff;border:none;border-radius:6px;cursor:pointer'>"
+                  "</form></body></html>";
+              httpd_resp_set_type(req, "text/html");
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
 
-              httpd_resp_send(req,
-                              "PING",
+          static esp_err_t ota_post_handler(httpd_req_t *req)
+          {
+              esp_ota_handle_t ota_handle;
+              const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
+
+              if (!update_partition) {
+                  httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA partition");
+                  return ESP_FAIL;
+              }
+
+              if (esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle) != ESP_OK) {
+                  httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+                  return ESP_FAIL;
+              }
+
+              char buf[1024];
+              int received = 0;
+              int remaining = req->content_len;
+
+              while (remaining > 0) {
+                  int ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)));
+                  if (ret <= 0) {
+                      esp_ota_abort(ota_handle);
+                      httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive failed");
+                      return ESP_FAIL;
+                  }
+                  esp_ota_write(ota_handle, buf, ret);
+                  remaining -= ret;
+                  received += ret;
+              }
+
+              esp_ota_end(ota_handle);
+              esp_ota_set_boot_partition(update_partition);
+
+              httpd_resp_send(req, "<html><body><h2>Update OK! Rebooting...</h2></body></html>",
                               HTTPD_RESP_USE_STRLEN);
 
+              vTaskDelay(pdMS_TO_TICKS(1000));
+              esp_restart();
+              return ESP_OK;
+          }
+
+          /* ---- Voice log ring buffer (written by voice_hook) ---- */
+          #define LOG_BUF_SIZE 1024
+          static char voice_log[LOG_BUF_SIZE] = "No commands yet.\n";
+
+          void web_server_log_voice(const char *msg)
+          {
+              size_t cur = strlen(voice_log);
+              size_t msglen = strlen(msg);
+              if (cur + msglen + 2 > LOG_BUF_SIZE) {
+                  memmove(voice_log, voice_log + msglen + 2, LOG_BUF_SIZE - msglen - 2);
+                  cur = strlen(voice_log);
+              }
+              strncat(voice_log, msg, LOG_BUF_SIZE - cur - 2);
+              strcat(voice_log, "\n");
+          }
+
+          static esp_err_t log_handler(httpd_req_t *req)
+          {
+              httpd_resp_send(req, voice_log, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
@@ -331,151 +318,234 @@ jobs:
           {
               if (server) return;
 
-              httpd_config_t config =
-                  HTTPD_DEFAULT_CONFIG();
+              httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+              config.stack_size = 8192;
+              config.max_uri_handlers = 10;
 
-              httpd_start(&server, &config);
+              if (httpd_start(&server, &config) != ESP_OK) {
+                  ESP_LOGE(TAG, "Failed to start web server");
+                  return;
+              }
 
-              httpd_uri_t root = {
-                  .uri="/",
-                  .method=HTTP_GET,
-                  .handler=root_handler
+              httpd_uri_t uris[] = {
+                  { .uri = "/",            .method = HTTP_GET,  .handler = root_handler  },
+                  { .uri = "/on",          .method = HTTP_GET,  .handler = on_handler    },
+                  { .uri = "/off",         .method = HTTP_GET,  .handler = off_handler   },
+                  { .uri = "/ota",         .method = HTTP_GET,  .handler = ota_get_handler  },
+                  { .uri = "/ota/upload",  .method = HTTP_POST, .handler = ota_post_handler },
+                  { .uri = "/log",         .method = HTTP_GET,  .handler = log_handler   },
               };
 
-              httpd_uri_t on = {
-                  .uri="/on",
-                  .method=HTTP_GET,
-                  .handler=on_handler
-              };
+              for (int i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
+                  httpd_register_uri_handler(server, &uris[i]);
+              }
 
-              httpd_uri_t off = {
-                  .uri="/off",
-                  .method=HTTP_GET,
-                  .handler=off_handler
-              };
-
-              httpd_uri_t relay = {
-                  .uri="/relay",
-                  .method=HTTP_GET,
-                  .handler=relay_handler
-              };
-
-              httpd_register_uri_handler(server, &root);
-              httpd_register_uri_handler(server, &on);
-              httpd_register_uri_handler(server, &off);
-              httpd_register_uri_handler(server, &relay);
+              ESP_LOGI(TAG, "Web dashboard started");
           }
           EOF
 
       # =========================================================
-      # PATCH CMAKE
+      # ESP-NOW RELAY V2 (REAL PEER MESSAGING + MAC REGISTRY)
       # =========================================================
-      - name: Patch CMakeLists
+      - name: Add espnow relay v2
         run: |
+          cat > examples/factory_demo/main/espnow_relay.h << 'EOF'
+          #pragma once
+          #include <stdint.h>
 
-          FILE=examples/factory_demo/main/CMakeLists.txt
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
 
-          if ! grep -q "voice_hook.c" $FILE; then
-            sed -i '/SRCS.*main\.c/s/.*/& voice_hook.c web_server.c relay_protocol.c/' $FILE
-          fi
+          /* Initialize ESP-NOW and register receive callback */
+          void espnow_relay_init(void);
+
+          /* Send a command string to a specific peer by MAC address */
+          void espnow_relay_send(const uint8_t mac[6], const char *cmd);
+
+          /* Broadcast a command string to all registered peers */
+          void espnow_relay_broadcast(const char *cmd);
+
+          /* Add a peer MAC to the send list */
+          void espnow_relay_add_peer(const uint8_t mac[6]);
+
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
+
+          cat > examples/factory_demo/main/espnow_relay.c << 'EOF'
+          #include "espnow_relay.h"
+          #include "node_registry.h"
+          #include "esp_now.h"
+          #include "esp_wifi.h"
+          #include "esp_log.h"
+          #include <string.h>
+
+          static const char *TAG = "ESPNOW_RELAY";
+
+          #define MAX_PEERS 10
+
+          static uint8_t peer_macs[MAX_PEERS][6];
+          static int peer_count = 0;
+
+          /* Broadcast MAC */
+          static const uint8_t BROADCAST_MAC[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+
+          static void on_data_recv(const esp_now_recv_info_t *info,
+                                   const uint8_t *data, int len)
+          {
+              char buf[128] = {0};
+              int copy_len = (len < (int)sizeof(buf) - 1) ? len : (int)sizeof(buf) - 1;
+              memcpy(buf, data, copy_len);
+
+              char mac_str[18];
+              snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+                       info->src_addr[0], info->src_addr[1], info->src_addr[2],
+                       info->src_addr[3], info->src_addr[4], info->src_addr[5]);
+
+              ESP_LOGI(TAG, "RX from %s: %s", mac_str, buf);
+
+              /* Auto-register any new sender as a known node */
+              node_registry_add(mac_str);
+
+              /* Auto-add as ESP-NOW peer if not already known */
+              espnow_relay_add_peer(info->src_addr);
+          }
+
+          static void on_data_sent(const uint8_t *mac, esp_now_send_status_t status)
+          {
+              ESP_LOGI(TAG, "Send to %02X:%02X:%02X:%02X:%02X:%02X - %s",
+                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                       status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
+          }
+
+          void espnow_relay_init(void)
+          {
+              ESP_ERROR_CHECK(esp_now_init());
+              ESP_ERROR_CHECK(esp_now_register_recv_cb(on_data_recv));
+              ESP_ERROR_CHECK(esp_now_register_send_cb(on_data_sent));
+
+              /* Pre-register broadcast peer */
+              esp_now_peer_info_t peer = {0};
+              memcpy(peer.peer_addr, BROADCAST_MAC, 6);
+              peer.channel = 0;
+              peer.encrypt = false;
+              esp_now_add_peer(&peer);
+
+              ESP_LOGI(TAG, "ESP-NOW relay initialized");
+          }
+
+          void espnow_relay_add_peer(const uint8_t mac[6])
+          {
+              /* Skip if already registered */
+              for (int i = 0; i < peer_count; i++) {
+                  if (memcmp(peer_macs[i], mac, 6) == 0) return;
+              }
+
+              if (peer_count >= MAX_PEERS) {
+                  ESP_LOGW(TAG, "Peer table full");
+                  return;
+              }
+
+              memcpy(peer_macs[peer_count], mac, 6);
+              peer_count++;
+
+              if (!esp_now_is_peer_exist(mac)) {
+                  esp_now_peer_info_t peer = {0};
+                  memcpy(peer.peer_addr, mac, 6);
+                  peer.channel = 0;
+                  peer.encrypt = false;
+                  esp_now_add_peer(&peer);
+              }
+
+              ESP_LOGI(TAG, "Peer added: %02X:%02X:%02X:%02X:%02X:%02X",
+                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+          }
+
+          void espnow_relay_send(const uint8_t mac[6], const char *cmd)
+          {
+              if (!cmd) return;
+              esp_err_t err = esp_now_send(mac, (const uint8_t *)cmd, strlen(cmd) + 1);
+              if (err != ESP_OK) {
+                  ESP_LOGE(TAG, "esp_now_send error: %s", esp_err_to_name(err));
+              }
+          }
+
+          void espnow_relay_broadcast(const char *cmd)
+          {
+              espnow_relay_send(BROADCAST_MAC, cmd);
+          }
+          EOF
 
       # =========================================================
-      # PATCH MAIN INCLUDES
+      # NODE REGISTRY V2 (WITH GETTER)
       # =========================================================
-      - name: Patch main.c includes
+      - name: Add node registry v2
         run: |
+          cat > examples/factory_demo/main/node_registry.h << 'EOF'
+          #pragma once
+          #include <stdint.h>
 
-          FILE=examples/factory_demo/main/main.c
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
 
-          LAST_INCLUDE=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
+          void node_registry_init(void);
+          void node_registry_add(const char *node);
+          const char **node_registry_get_all(int *out_count);
+          int node_registry_count(void);
 
-          sed -i '/web_server.h/d' $FILE || true
-          sed -i '/voice_hook.h/d' $FILE || true
-          sed -i '/relay_protocol.h/d' $FILE || true
+          #ifdef __cplusplus
+          }
+          #endif
+          EOF
 
-          sed -i "${LAST_INCLUDE}a\\
-          #include \"web_server.h\"\n#include \"voice_hook.h\"\n#include \"relay_protocol.h\"" $FILE
+          cat > examples/factory_demo/main/node_registry.c << 'EOF'
+          #include "node_registry.h"
+          #include "esp_log.h"
+          #include <string.h>
 
-      # =========================================================
-      # PATCH MAIN CALLS
-      # =========================================================
-      - name: Patch main.c calls
-        run: |
+          static const char *TAG = "NODE_REGISTRY";
 
-          FILE=examples/factory_demo/main/main.c
+          #define MAX_NODES 20
 
-          sed -i '/web_server_start()/d' $FILE || true
-          sed -i '/voice_hook_init()/d' $FILE || true
-          sed -i '/relay_protocol_init()/d' $FILE || true
+          static char nodes[MAX_NODES][32];
+          static const char *node_ptrs[MAX_NODES];
+          static int node_count = 0;
 
-          sed -i '/app_rmaker_start()/a \
-          relay_protocol_init();\
-          voice_hook_init();\
-          web_server_start();' $FILE
+          void node_registry_init(void)
+          {
+              node_count = 0;
+              memset(nodes, 0, sizeof(nodes));
+              ESP_LOGI(TAG, "Registry initialized");
+          }
 
-      # =========================================================
-      # PATCH SR HANDLER SAFE
-      # =========================================================
-      - name: Patch app_sr_handler
-        run: |
+          void node_registry_add(const char *node)
+          {
+              if (!node) return;
 
-          FILE=$(find examples/factory_demo -name "app_sr_handler.c" -type f | head -1)
+              /* Deduplicate */
+              for (int i = 0; i < node_count; i++) {
+                  if (strncmp(nodes[i], node, sizeof(nodes[i])) == 0) return;
+              }
 
-          if [ -z "$FILE" ]; then
-            echo "app_sr_handler.c not found"
-            exit 0
-          fi
+              if (node_count >= MAX_NODES) {
+                  ESP_LOGW(TAG, "Node table full");
+                  return;
+              }
 
-          echo "Patching: $FILE"
+              strncpy(nodes[node_count], node, sizeof(nodes[node_count]) - 1);
+              node_ptrs[node_count] = nodes[node_count];
+              node_count++;
 
-          if ! grep -q "voice_hook.h" "$FILE"; then
-            sed -i '1s/^/#include "voice_hook.h"\n/' "$FILE"
-          fi
+              ESP_LOGI(TAG, "Node added: %s (total: %d)", node, node_count);
+          }
 
-          if ! grep -q "voice_hook_process" "$FILE"; then
-            sed -i '/ESP_LOGI.*\(TAG.*phrase\|phrase.*\)/a \            voice_hook_process(result->phrase);' "$FILE"
-          fi
+          const char **node_registry_get_all(int *out_count)
+          {
+              if (out_count) *out_count = node_count;
+              return node_ptrs;
+          }
 
-      # =========================================================
-      # BUILD
-      # =========================================================
-      - name: Build firmware
-        run: |
-          source $IDF_PATH/export.sh
-
-          cd examples/factory_demo
-
-          idf.py set-target esp32s3
-
-          cp sdkconfig.ci.box sdkconfig
-
-          idf.py fullclean
-
-          idf.py reconfigure
-
-          idf.py build
-
-      # =========================================================
-      # MERGE BIN
-      # =========================================================
-      - name: Merge firmware
-        run: |
-          source $IDF_PATH/export.sh
-
-          cd examples/factory_demo/build
-
-          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-            --chip esp32s3 merge_bin \
-            -o factory.bin \
-            --flash_mode dio \
-            --flash_size 16MB \
-            $(cat flash_args)
-
-      # =========================================================
-      # UPLOAD
-      # =========================================================
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32-s3-box-ai-relay-v2
-          path: examples/factory_demo/build/factory.bin
+          int node_reg
