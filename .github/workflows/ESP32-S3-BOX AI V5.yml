@@ -59,10 +59,9 @@ jobs:
 
       - name: Enable Component Manager
         run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
-
-      # =====================================================
+                                                                                                   
       # VOICE HOOK
-      # =====================================================
+      # =========================================================
 
       - name: Add voice hook
         run: |
@@ -83,7 +82,6 @@ jobs:
           EOF
 
           cat > examples/factory_demo/main/voice_hook.c << 'EOF'
-
           #include "voice_hook.h"
           #include "app_led.h"
           #include "esp_log.h"
@@ -113,12 +111,11 @@ jobs:
               if (!phrase) return;
 
               ESP_LOGI(TAG, "VOICE: %s", phrase);
-
               web_server_log_voice(phrase);
 
-              /* =============================================
-                 LOCAL LIGHT
-              ============================================== */
+              /* =====================================================
+                 LOCAL LIGHT CONTROL (ESP-BOX LED)
+                 ===================================================== */
 
               if (contains(phrase, "light") ||
                   contains(phrase, "led"))
@@ -129,39 +126,109 @@ jobs:
                   {
                       app_pwm_led_set_power(true);
 
+                      espnow_relay_broadcast("LIGHT:ON");
+
                       web_server_log_voice(
-                          "LOCAL LIGHT ON");
+                          "VOICE -> LIGHT ON");
                   }
                   else if (contains(phrase, "off"))
                   {
                       app_pwm_led_set_power(false);
 
+                      espnow_relay_broadcast("LIGHT:OFF");
+
                       web_server_log_voice(
-                          "LOCAL LIGHT OFF");
+                          "VOICE -> LIGHT OFF");
                   }
 
                   return;
               }
 
-              /* =============================================
-                 RELAY TOGGLE
-              ============================================== */
+              /* =====================================================
+                 RELAY NODE CONTROL
+                 Uses built-in SR command:
+                 "switch on" / "switch off"
+                 ===================================================== */
 
-              if (contains(phrase, "relay"))
+              if (contains(phrase, "switch"))
               {
                   strcpy(last_device, "relay");
 
-                  espnow_relay_broadcast(
-                      "RELAY:TOGGLE");
+                  if (contains(phrase, "on"))
+                  {
+                      espnow_relay_broadcast("RELAY:ON");
 
-                  web_server_log_voice(
-                      "VOICE RELAY TOGGLE");
+                      web_server_log_voice(
+                          "VOICE -> RELAY ON");
+
+                      ESP_LOGI(TAG, "Relay ON");
+                  }
+                  else if (contains(phrase, "off"))
+                  {
+                      espnow_relay_broadcast("RELAY:OFF");
+
+                      web_server_log_voice(
+                          "VOICE -> RELAY OFF");
+
+                      ESP_LOGI(TAG, "Relay OFF");
+                  }
 
                   return;
               }
-          }
 
+              /* =====================================================
+                 FOLLOW-UP COMMANDS
+                 ===================================================== */
+
+              if (contains(phrase, "turn it on"))
+              {
+                  if (strcmp(last_device, "light") == 0)
+                  {
+                      app_pwm_led_set_power(true);
+
+                      espnow_relay_broadcast("LIGHT:ON");
+
+                      web_server_log_voice(
+                          "FOLLOWUP -> LIGHT ON");
+                  }
+                  else if (strcmp(last_device, "relay") == 0)
+                  {
+                      espnow_relay_broadcast("RELAY:ON");
+
+                      web_server_log_voice(
+                          "FOLLOWUP -> RELAY ON");
+                  }
+
+                  return;
+              }
+
+              if (contains(phrase, "turn it off"))
+              {
+                  if (strcmp(last_device, "light") == 0)
+                  {
+                      app_pwm_led_set_power(false);
+
+                      espnow_relay_broadcast("LIGHT:OFF");
+
+                      web_server_log_voice(
+                          "FOLLOWUP -> LIGHT OFF");
+                  }
+                  else if (strcmp(last_device, "relay") == 0)
+                  {
+                      espnow_relay_broadcast("RELAY:OFF");
+
+                      web_server_log_voice(
+                          "FOLLOWUP -> RELAY OFF");
+                  }
+
+                  return;
+              }
+
+              web_server_log_voice(
+                  "VOICE -> UNKNOWN COMMAND");
+          }
           EOF
+      
 
       # =====================================================
       # NODE REGISTRY
