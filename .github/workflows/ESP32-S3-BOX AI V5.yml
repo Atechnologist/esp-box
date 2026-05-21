@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX AI VOICE + ESPNOW RELAY STABLE
+name: ESP32-S3-BOX AI VOICE + ESP-NOW NODE REGISTRY V6 STABLE
 
 on:
   workflow_dispatch:
@@ -21,7 +21,6 @@ jobs:
       # =========================================================
       # CHECKOUT
       # =========================================================
-
       - name: Checkout ESP-BOX
         uses: actions/checkout@v4
         with:
@@ -35,64 +34,46 @@ jobs:
       # =========================================================
       # CLEAN
       # =========================================================
-
-      - name: Clean build
+      - name: Clean
         run: |
           rm -rf examples/factory_demo/build || true
           rm -rf examples/factory_demo/managed_components || true
-          rm -rf examples/factory_demo/dependencies.lock || true
 
       # =========================================================
-      # ENABLE COMPONENT MANAGER
+      # VOICE HOOK (UPDATED)
       # =========================================================
-
-      - name: Enable component manager
-        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
-
-      # =========================================================
-      # VOICE HOOK
-      # =========================================================
-
       - name: Add voice hook
         run: |
 
-          cat > examples/factory_demo/main/voice_hook.h << 'EOF'
-          #pragma once
-
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-
-          void voice_hook_init(void);
-          void voice_hook_process(const char *phrase);
-
-          #ifdef __cplusplus
-          }
-          #endif
-          EOF
-
           cat > examples/factory_demo/main/voice_hook.c << 'EOF'
           #include "voice_hook.h"
-
           #include "app_led.h"
           #include "esp_log.h"
           #include "espnow_relay.h"
           #include "web_server.h"
+          #include "esp_wifi.h"
 
           #include <string.h>
-          #include <stdbool.h>
 
           static const char *TAG = "VOICE";
 
-          static bool contains(const char *a, const char *b)
+          static bool has(const char *a, const char *b)
           {
-              if (!a || !b) return false;
-              return strstr(a, b) != NULL;
+              return a && b && strstr(a,b);
           }
 
-          void voice_hook_init(void)
+          static void send_channel_sync()
           {
-              ESP_LOGI(TAG, "Voice hook ready");
+              uint8_t ch;
+              wifi_second_chan_t second;
+
+              esp_wifi_get_channel(&ch, &second);
+
+              char msg[32];
+              snprintf(msg, sizeof(msg), "SYS:CH:%d", ch);
+
+              espnow_relay_broadcast(msg);
+              web_server_log_voice("CHANNEL SYNC SENT");
           }
 
           void voice_hook_process(const char *phrase)
@@ -101,207 +82,108 @@ jobs:
 
               ESP_LOGI(TAG, "VOICE: %s", phrase);
 
-              web_server_log_voice(phrase);
-
-              if (contains(phrase, "light"))
+              // LIGHT (LOCAL)
+              if (has(phrase, "light"))
               {
-                  if (contains(phrase, "on"))
+                  if (has(phrase, "on"))
                   {
                       app_pwm_led_set_power(true);
-
-                      espnow_relay_broadcast("LIGHT:ON");
-                      espnow_relay_broadcast("RELAY:ON");
-
-                      web_server_log_voice("VOICE LIGHT ON");
+                      web_server_log_voice("LIGHT ON");
                   }
-
-                  if (contains(phrase, "off"))
+                  if (has(phrase, "off"))
                   {
                       app_pwm_led_set_power(false);
+                      web_server_log_voice("LIGHT OFF");
+                  }
+              }
 
-                      espnow_relay_broadcast("LIGHT:OFF");
+              // RELAY CONTROL (EXTERNAL)
+              if (has(phrase, "relay") || has(phrase, "switch"))
+              {
+                  if (has(phrase, "on"))
+                  {
+                      espnow_relay_broadcast("RELAY:ON");
+                      send_channel_sync();
+                      web_server_log_voice("RELAY ON");
+                  }
+
+                  if (has(phrase, "off"))
+                  {
                       espnow_relay_broadcast("RELAY:OFF");
+                      send_channel_sync();
+                      web_server_log_voice("RELAY OFF");
+                  }
 
-                      web_server_log_voice("VOICE LIGHT OFF");
+                  if (has(phrase, "toggle"))
+                  {
+                      espnow_relay_broadcast("RELAY:TOGGLE");
+                      send_channel_sync();
+                      web_server_log_voice("RELAY TOGGLE");
                   }
               }
           }
           EOF
 
       # =========================================================
-      # NODE REGISTRY
+      # ESPNOW RELAY (MASTER SIDE)
       # =========================================================
-
-      - name: Add node registry
-        run: |
-
-          cat > examples/factory_demo/main/node_registry.h << 'EOF'
-          #pragma once
-
-          void node_registry_init(void);
-          void node_registry_add(const char *node);
-          const char **node_registry_get_all(int *count);
-          EOF
-
-          cat > examples/factory_demo/main/node_registry.c << 'EOF'
-          #include "node_registry.h"
-
-          #include <string.h>
-
-          #define MAX_NODES 20
-
-          static char nodes[MAX_NODES][32];
-          static const char *ptrs[MAX_NODES];
-          static int node_count = 0;
-
-          void node_registry_init(void)
-          {
-              memset(nodes, 0, sizeof(nodes));
-              node_count = 0;
-          }
-
-          void node_registry_add(const char *node)
-          {
-              if (!node || !strlen(node))
-                  return;
-
-              for (int i = 0; i < node_count; i++)
-              {
-                  if (strcmp(nodes[i], node) == 0)
-                      return;
-              }
-
-              if (node_count >= MAX_NODES)
-                  return;
-
-              strncpy(nodes[node_count], node, 31);
-
-              ptrs[node_count] = nodes[node_count];
-
-              node_count++;
-          }
-
-          const char **node_registry_get_all(int *count)
-          {
-              if (count)
-                  *count = node_count;
-
-              return ptrs;
-          }
-          EOF
-
-      # =========================================================
-      # ESPNOW
-      # =========================================================
-
       - name: Add espnow relay
         run: |
 
-          cat > examples/factory_demo/main/espnow_relay.h << 'EOF'
-          #pragma once
-
-          void espnow_relay_init(void);
-          void espnow_relay_broadcast(const char *msg);
-          EOF
-
           cat > examples/factory_demo/main/espnow_relay.c << 'EOF'
           #include "espnow_relay.h"
-
-          #include "node_registry.h"
-          #include "web_server.h"
-
           #include "esp_now.h"
           #include "esp_wifi.h"
           #include "esp_log.h"
-
           #include "freertos/FreeRTOS.h"
           #include "freertos/task.h"
 
           #include <string.h>
-          #include <stdio.h>
 
           static const char *TAG = "ESPNOW";
+          static const uint8_t BCAST[6] = {0xff,0xff,0xff,0xff,0xff,0xff};
 
           static bool ready = false;
 
-          static const uint8_t BCAST[6] =
-          {
-              0xff,0xff,0xff,0xff,0xff,0xff
-          };
-
-          static void recv_cb(
-              const esp_now_recv_info_t *info,
-              const uint8_t *data,
-              int len)
+          static void recv_cb(const esp_now_recv_info_t *info,
+                              const uint8_t *data, int len)
           {
               char msg[128] = {0};
-
-              memcpy(msg,
-                     data,
-                     len < sizeof(msg)-1 ?
-                     len :
-                     sizeof(msg)-1);
+              memcpy(msg, data, len < 127 ? len : 127);
 
               ESP_LOGI(TAG, "RX: %s", msg);
 
               web_server_log_voice(msg);
-
-              if (strncmp(msg, "NODE:", 5) == 0)
-              {
-                  node_registry_add(msg + 5);
-              }
-
-              if (strcmp(msg, "PONG") == 0)
-              {
-                  node_registry_add("RelayNode");
-              }
           }
 
-          static void send_cb(
-              const uint8_t *mac,
-              esp_now_send_status_t status)
+          void espnow_relay_broadcast(const char *msg)
           {
+              if (!ready || !msg) return;
+
+              esp_now_send(BCAST,
+                           (uint8_t*)msg,
+                           strlen(msg)+1);
           }
 
-          static void espnow_task(void *arg)
+          static void init_task(void *arg)
           {
-              uint8_t primary = 0;
+              uint8_t ch;
               wifi_second_chan_t second;
 
-              while (primary == 0)
+              while (1)
               {
-                  vTaskDelay(pdMS_TO_TICKS(1000));
+                  esp_wifi_get_channel(&ch, &second);
 
-                  esp_wifi_get_channel(
-                      &primary,
-                      &second);
+                  if (ch != 0) break;
+
+                  vTaskDelay(pdMS_TO_TICKS(500));
               }
 
-              char tmp[64];
-
-              snprintf(tmp,
-                       sizeof(tmp),
-                       "WiFi channel locked: %d",
-                       primary);
-
-              web_server_log_voice(tmp);
-
-              if (esp_now_init() != ESP_OK)
-              {
-                  web_server_log_voice(
-                      "ESP-NOW INIT FAILED");
-
-                  vTaskDelete(NULL);
-                  return;
-              }
-
+              esp_now_init();
               esp_now_register_recv_cb(recv_cb);
-              esp_now_register_send_cb(send_cb);
 
               esp_now_peer_info_t peer = {0};
-
               memcpy(peer.peer_addr, BCAST, 6);
-
               peer.channel = 0;
               peer.encrypt = false;
 
@@ -309,317 +191,82 @@ jobs:
 
               ready = true;
 
-              web_server_log_voice(
-                  "ESP-NOW READY");
+              ESP_LOGI(TAG, "ESP-NOW READY CH=%d", ch);
 
-              while (1)
-              {
-                  espnow_relay_broadcast("PING");
-
-                  ESP_LOGI(TAG, "PING");
-
-                  vTaskDelay(
-                      pdMS_TO_TICKS(10000));
-              }
+              vTaskDelete(NULL);
           }
 
           void espnow_relay_init(void)
           {
-              xTaskCreate(
-                  espnow_task,
-                  "espnow_task",
-                  4096,
-                  NULL,
-                  5,
-                  NULL);
-          }
-
-          void espnow_relay_broadcast(
-              const char *msg)
-          {
-              if (!ready || !msg)
-                  return;
-
-              esp_now_send(
-                  BCAST,
-                  (const uint8_t *)msg,
-                  strlen(msg) + 1);
+              xTaskCreate(init_task, "espnow", 4096, NULL, 5, NULL);
           }
           EOF
 
       # =========================================================
-      # WEB SERVER
+      # WEB UI (ADD RELAY BUTTON)
       # =========================================================
-
-      - name: Add web server
+      - name: Web UI update
         run: |
-
-          cat > examples/factory_demo/main/web_server.h << 'EOF'
-          #pragma once
-
-          void web_server_start(void);
-          void web_server_log_voice(const char *msg);
-          EOF
 
           cat > examples/factory_demo/main/web_server.c << 'EOF'
           #include "web_server.h"
-
           #include "esp_http_server.h"
-          #include "esp_log.h"
-
           #include "app_led.h"
           #include "espnow_relay.h"
           #include "node_registry.h"
 
-          #include <stdio.h>
-          #include <string.h>
+          static httpd_handle_t server;
 
-          static httpd_handle_t server = NULL;
-
-          #define LOG_SIZE 4096
-
-          static char logbuf[LOG_SIZE] =
-              "-- log start --\n";
-
-          void web_server_log_voice(
-              const char *msg)
+          static esp_err_t root(httpd_req_t *req)
           {
-              if (!msg)
-                  return;
-
-              strncat(
-                  logbuf,
-                  msg,
-                  LOG_SIZE - strlen(logbuf) - 2);
-
-              strcat(logbuf, "\n");
-          }
-
-          static esp_err_t root_handler(
-              httpd_req_t *req)
-          {
-              char html[4096];
-
-              snprintf(html,
-                       sizeof(html),
-
-              "<html>"
-              "<body style='font-family:sans-serif'>"
-
-              "<h1>ESP32-S3-BOX AI</h1>"
-
-              "<button onclick=\"fetch('/light/on')\">"
-              "Light ON</button>"
-
-              "<button onclick=\"fetch('/light/off')\">"
-              "Light OFF</button>"
-
+              const char html[] =
+              "<h1>ESP32 BOX</h1>"
+              "<button onclick=\"fetch('/light/on')\">Light ON</button>"
+              "<button onclick=\"fetch('/light/off')\">Light OFF</button>"
               "<br><br>"
+              "<button onclick=\"fetch('/relay/on')\">Relay ON</button>"
+              "<button onclick=\"fetch('/relay/off')\">Relay OFF</button>"
+              "<button onclick=\"fetch('/relay/toggle')\">Relay TOGGLE</button>";
 
-              "<button onclick=\"fetch('/relay/toggle')\">"
-              "Relay Toggle</button>"
-
-              "<br><br>"
-
-              "<button onclick=\"fetch('/ping')\">"
-              "PING</button>"
-
-              "<h2>Nodes</h2>"
-              "<pre id='nodes'></pre>"
-
-              "<h2>Event Log</h2>"
-              "<pre id='log'></pre>"
-
-              "<script>"
-
-              "function upd(){"
-
-              "fetch('/nodes').then(r=>r.text())"
-              ".then(t=>{"
-              "document.getElementById('nodes').textContent=t;"
-              "});"
-
-              "fetch('/log').then(r=>r.text())"
-              ".then(t=>{"
-              "document.getElementById('log').textContent=t;"
-              "});"
-
-              "}"
-
-              "setInterval(upd,2000);"
-              "upd();"
-
-              "</script>"
-              "</body>"
-              "</html>");
-
-              httpd_resp_send(
-                  req,
-                  html,
-                  HTTPD_RESP_USE_STRLEN);
-
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
               return ESP_OK;
           }
 
-          static esp_err_t light_on(
-              httpd_req_t *req)
+          static esp_err_t relay_on(httpd_req_t *req)
           {
-              app_pwm_led_set_power(true);
-
-              espnow_relay_broadcast("LIGHT:ON");
               espnow_relay_broadcast("RELAY:ON");
-
-              web_server_log_voice(
-                  "WEB LIGHT ON");
-
-              httpd_resp_send(req, "OK", 2);
-
+              httpd_resp_send(req,"OK",2);
               return ESP_OK;
           }
 
-          static esp_err_t light_off(
-              httpd_req_t *req)
+          static esp_err_t relay_off(httpd_req_t *req)
           {
-              app_pwm_led_set_power(false);
-
-              espnow_relay_broadcast("LIGHT:OFF");
               espnow_relay_broadcast("RELAY:OFF");
-
-              web_server_log_voice(
-                  "WEB LIGHT OFF");
-
-              httpd_resp_send(req, "OK", 2);
-
+              httpd_resp_send(req,"OK",2);
               return ESP_OK;
           }
 
-          static esp_err_t relay_toggle(
-              httpd_req_t *req)
+          static esp_err_t relay_toggle(httpd_req_t *req)
           {
-              espnow_relay_broadcast(
-                  "RELAY:TOGGLE");
-
-              web_server_log_voice(
-                  "WEB RELAY TOGGLE");
-
-              httpd_resp_send(req, "OK", 2);
-
-              return ESP_OK;
-          }
-
-          static esp_err_t ping_handler(
-              httpd_req_t *req)
-          {
-              espnow_relay_broadcast("PING");
-
-              httpd_resp_send(req, "PING", 4);
-
-              return ESP_OK;
-          }
-
-          static esp_err_t log_handler(
-              httpd_req_t *req)
-          {
-              httpd_resp_send(
-                  req,
-                  logbuf,
-                  HTTPD_RESP_USE_STRLEN);
-
-              return ESP_OK;
-          }
-
-          static esp_err_t nodes_handler(
-              httpd_req_t *req)
-          {
-              char out[512] = "";
-
-              int count = 0;
-
-              const char **nodes =
-                  node_registry_get_all(&count);
-
-              for (int i = 0; i < count; i++)
-              {
-                  strcat(out, nodes[i]);
-                  strcat(out, "\n");
-              }
-
-              httpd_resp_send(
-                  req,
-                  out,
-                  HTTPD_RESP_USE_STRLEN);
-
+              espnow_relay_broadcast("RELAY:TOGGLE");
+              httpd_resp_send(req,"OK",2);
               return ESP_OK;
           }
 
           void web_server_start(void)
           {
-              if (server)
-                  return;
-
-              httpd_config_t cfg =
-                  HTTPD_DEFAULT_CONFIG();
-
-              cfg.stack_size = 8192;
-
+              httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
               httpd_start(&server, &cfg);
 
-              httpd_uri_t root = {
-                  .uri = "/",
-                  .method = HTTP_GET,
-                  .handler = root_handler,
-                  .user_ctx = NULL
+              httpd_uri_t u[] = {
+                  {"/", HTTP_GET, root},
+                  {"/relay/on", HTTP_GET, relay_on},
+                  {"/relay/off", HTTP_GET, relay_off},
+                  {"/relay/toggle", HTTP_GET, relay_toggle},
               };
 
-              httpd_uri_t lighton = {
-                  .uri = "/light/on",
-                  .method = HTTP_GET,
-                  .handler = light_on,
-                  .user_ctx = NULL
-              };
-
-              httpd_uri_t lightoff = {
-                  .uri = "/light/off",
-                  .method = HTTP_GET,
-                  .handler = light_off,
-                  .user_ctx = NULL
-              };
-
-              httpd_uri_t relaytoggle = {
-                  .uri = "/relay/toggle",
-                  .method = HTTP_GET,
-                  .handler = relay_toggle,
-                  .user_ctx = NULL
-              };
-
-              httpd_uri_t ping = {
-                  .uri = "/ping",
-                  .method = HTTP_GET,
-                  .handler = ping_handler,
-                  .user_ctx = NULL
-              };
-
-              httpd_uri_t loguri = {
-                  .uri = "/log",
-                  .method = HTTP_GET,
-                  .handler = log_handler,
-                  .user_ctx = NULL
-              };
-
-              httpd_uri_t nodesuri = {
-                  .uri = "/nodes",
-                  .method = HTTP_GET,
-                  .handler = nodes_handler,
-                  .user_ctx = NULL
-              };
-
-              httpd_register_uri_handler(server, &root);
-              httpd_register_uri_handler(server, &lighton);
-              httpd_register_uri_handler(server, &lightoff);
-              httpd_register_uri_handler(server, &relaytoggle);
-              httpd_register_uri_handler(server, &ping);
-              httpd_register_uri_handler(server, &loguri);
-              httpd_register_uri_handler(server, &nodesuri);
+              for (int i=0;i<3;i++)
+                  httpd_register_uri_handler(server, &u[i]);
           }
           EOF
 
