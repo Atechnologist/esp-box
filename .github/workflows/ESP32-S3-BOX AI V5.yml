@@ -1,13 +1,9 @@
-# =========================================================
-# ESP32-S3-BOX AI
-# SAFE WEBUI + ESPNOW RELAY
-# FIXED WEBUI REBOOT VERSION
-# =========================================================
-
-name: ESP32-S3-BOX AI SAFE WEBUI
+name: ESP32-S3-BOX AI WEBUI FIX
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
@@ -33,7 +29,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Safe Git
+      - name: Safe directory
         run: git config --global --add safe.directory '*'
 
       # =====================================================
@@ -43,19 +39,69 @@ jobs:
       - name: Clean
         run: |
           rm -rf examples/factory_demo/build || true
+          rm -rf examples/factory_demo/managed_components || true
+          rm -rf examples/factory_demo/dependencies.lock || true
 
       # =====================================================
-      # WEB SERVER
+      # RESTORE MANIFEST
       # =====================================================
 
-      - name: Create web server
+      - name: Restore manifest
+        run: |
+          cd examples/factory_demo
+          git checkout idf_component.yml || true
+
+      - name: Enable component manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+
+      # =====================================================
+      # ESPNOW STUB
+      # =====================================================
+
+      - name: Add espnow relay stub
+        run: |
+
+          cat > examples/factory_demo/main/espnow_relay.h << 'EOF'
+          #pragma once
+
+          void espnow_relay_init(void);
+          void espnow_relay_broadcast(const char *msg);
+          EOF
+
+          cat > examples/factory_demo/main/espnow_relay.c << 'EOF'
+
+          #include "espnow_relay.h"
+          #include "esp_log.h"
+
+          static const char *TAG = "ESPNOW";
+
+          void espnow_relay_init(void)
+          {
+              ESP_LOGI(TAG, "Relay stub init");
+          }
+
+          void espnow_relay_broadcast(const char *msg)
+          {
+              if (!msg) return;
+
+              ESP_LOGI(TAG,
+                       "Broadcast: %s",
+                       msg);
+          }
+
+          EOF
+
+      # =====================================================
+      # SIMPLE WEB SERVER
+      # =====================================================
+
+      - name: Add web server
         run: |
 
           cat > examples/factory_demo/main/web_server.h << 'EOF'
           #pragma once
 
           void web_server_start(void);
-          void web_server_log(const char *msg);
           EOF
 
           cat > examples/factory_demo/main/web_server.c << 'EOF'
@@ -63,155 +109,47 @@ jobs:
           #include "web_server.h"
 
           #include "esp_http_server.h"
-          #include "esp_log.h"
-
           #include "app_led.h"
-
-          #include <string.h>
-          #include <stdio.h>
-
-          static const char *TAG = "WEB";
+          #include "esp_log.h"
+          #include "espnow_relay.h"
 
           static httpd_handle_t server = NULL;
 
-          #define LOG_SIZE 4096
-
-          static char logbuf[LOG_SIZE] =
-              "ESP32-S3-BOX READY\n";
-
-          extern void espnow_relay_broadcast(const char *msg);
-
-          // =================================================
-          // LOG
-          // =================================================
-
-          void web_server_log(const char *msg)
-          {
-              if (!msg) return;
-
-              strncat(logbuf,
-                      msg,
-                      LOG_SIZE - strlen(logbuf) - 2);
-
-              strcat(logbuf, "\n");
-          }
-
-          // =================================================
-          // ROOT PAGE
-          // =================================================
-
           static esp_err_t root_handler(httpd_req_t *req)
           {
-              httpd_resp_set_type(req, "text/html");
+              const char *html =
+              "<html>"
+              "<head>"
+              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+              "</head>"
+              "<body style='font-family:sans-serif;background:#111;color:#fff;padding:20px'>"
 
-              httpd_resp_sendstr_chunk(req,
-              "<!DOCTYPE html><html><head>"
-              "<meta charset='utf-8'>"
-              "<title>ESP32-S3-BOX</title>"
+              "<h1>ESP32-S3-BOX</h1>"
 
-              "<style>"
-              "body{font-family:sans-serif;"
-              "background:#111;color:#eee;padding:20px}"
+              "<button style='width:200px;height:60px;font-size:20px' "
+              "onclick=\"fetch('/light/on')\">LIGHT ON</button><br><br>"
 
-              "button{padding:12px;"
-              "margin:5px;"
-              "font-size:18px;"
-              "border-radius:8px;"
-              "border:none}"
+              "<button style='width:200px;height:60px;font-size:20px' "
+              "onclick=\"fetch('/light/off')\">LIGHT OFF</button><br><br>"
 
-              ".on{background:#27ae60;color:white}"
-              ".off{background:#c0392b;color:white}"
-              ".relay{background:#2980b9;color:white}"
-              "</style>"
-              "</head><body>");
+              "<button style='width:200px;height:60px;font-size:20px' "
+              "onclick=\"fetch('/relay/toggle')\">RELAY TOGGLE</button>"
 
-              httpd_resp_sendstr_chunk(req,
-              "<h1>ESP32-S3-BOX AI</h1>");
+              "</body>"
+              "</html>";
 
-              // LIGHT
-
-              httpd_resp_sendstr_chunk(req,
-              "<button class='on' "
-              "onclick=\"fetch('/light/on')\">"
-              "Light ON</button>");
-
-              httpd_resp_sendstr_chunk(req,
-              "<button class='off' "
-              "onclick=\"fetch('/light/off')\">"
-              "Light OFF</button>");
-
-              // RELAY
-
-              httpd_resp_sendstr_chunk(req,
-              "<br><br>");
-
-              httpd_resp_sendstr_chunk(req,
-              "<button class='relay' "
-              "onclick=\"fetch('/relay/on')\">"
-              "Relay ON</button>");
-
-              httpd_resp_sendstr_chunk(req,
-              "<button class='relay' "
-              "onclick=\"fetch('/relay/off')\">"
-              "Relay OFF</button>");
-
-              httpd_resp_sendstr_chunk(req,
-              "<button class='relay' "
-              "onclick=\"fetch('/relay/toggle')\">"
-              "Relay Toggle</button>");
-
-              // PING
-
-              httpd_resp_sendstr_chunk(req,
-              "<br><br>"
-              "<button onclick=\"fetch('/ping')\">"
-              "PING</button>");
-
-              // LOGS
-
-              httpd_resp_sendstr_chunk(req,
-              "<h2>Event Log</h2>"
-              "<pre id='log'>Loading...</pre>");
-
-              // SCRIPT
-
-              httpd_resp_sendstr_chunk(req,
-
-              "<script>"
-
-              "function upd(){"
-
-              "fetch('/log').then(r=>r.text()).then(t=>{"
-              "document.getElementById('log').textContent=t;"
-              "});"
-
-              "}"
-
-              "setInterval(upd,2000);"
-
-              "upd();"
-
-              "</script>");
-
-              httpd_resp_sendstr_chunk(req,
-              "</body></html>");
-
-              httpd_resp_sendstr_chunk(req, NULL);
+              httpd_resp_send(req,
+                              html,
+                              HTTPD_RESP_USE_STRLEN);
 
               return ESP_OK;
           }
-
-          // =================================================
-          // LIGHT
-          // =================================================
 
           static esp_err_t light_on(httpd_req_t *req)
           {
               app_pwm_led_set_power(true);
 
               espnow_relay_broadcast("LIGHT:ON");
-
-              web_server_log("WEB LIGHT ON");
 
               httpd_resp_send(req,
                               "OK",
@@ -226,38 +164,6 @@ jobs:
 
               espnow_relay_broadcast("LIGHT:OFF");
 
-              web_server_log("WEB LIGHT OFF");
-
-              httpd_resp_send(req,
-                              "OK",
-                              HTTPD_RESP_USE_STRLEN);
-
-              return ESP_OK;
-          }
-
-          // =================================================
-          // RELAY
-          // =================================================
-
-          static esp_err_t relay_on(httpd_req_t *req)
-          {
-              espnow_relay_broadcast("RELAY:ON");
-
-              web_server_log("WEB RELAY ON");
-
-              httpd_resp_send(req,
-                              "OK",
-                              HTTPD_RESP_USE_STRLEN);
-
-              return ESP_OK;
-          }
-
-          static esp_err_t relay_off(httpd_req_t *req)
-          {
-              espnow_relay_broadcast("RELAY:OFF");
-
-              web_server_log("WEB RELAY OFF");
-
               httpd_resp_send(req,
                               "OK",
                               HTTPD_RESP_USE_STRLEN);
@@ -269,8 +175,6 @@ jobs:
           {
               espnow_relay_broadcast("RELAY:TOGGLE");
 
-              web_server_log("WEB RELAY TOGGLE");
-
               httpd_resp_send(req,
                               "OK",
                               HTTPD_RESP_USE_STRLEN);
@@ -278,119 +182,77 @@ jobs:
               return ESP_OK;
           }
 
-          // =================================================
-          // PING
-          // =================================================
-
-          static esp_err_t ping_handler(httpd_req_t *req)
-          {
-              espnow_relay_broadcast("PING");
-
-              web_server_log("PING SENT");
-
-              httpd_resp_send(req,
-                              "PING",
-                              HTTPD_RESP_USE_STRLEN);
-
-              return ESP_OK;
-          }
-
-          // =================================================
-          // LOG
-          // =================================================
-
-          static esp_err_t log_handler(httpd_req_t *req)
-          {
-              httpd_resp_send(req,
-                              logbuf,
-                              HTTPD_RESP_USE_STRLEN);
-
-              return ESP_OK;
-          }
-
-          // =================================================
-          // START
-          // =================================================
-
           void web_server_start(void)
           {
-              if (server) return;
+              if (server)
+                  return;
 
-              httpd_config_t cfg =
+              httpd_config_t config =
                   HTTPD_DEFAULT_CONFIG();
 
-              // IMPORTANT FIX
-              cfg.stack_size = 12288;
+              config.stack_size = 8192;
 
-              if (httpd_start(&server, &cfg) != ESP_OK)
+              if (httpd_start(&server,
+                              &config) != ESP_OK)
               {
-                  ESP_LOGE(TAG,
-                           "HTTP start failed");
-
                   return;
               }
 
               httpd_uri_t root = {
-                  .uri="/",
-                  .method=HTTP_GET,
-                  .handler=root_handler
+                  .uri = "/",
+                  .method = HTTP_GET,
+                  .handler = root_handler
               };
 
-              httpd_uri_t l1 = {
-                  .uri="/light/on",
-                  .method=HTTP_GET,
-                  .handler=light_on
+              httpd_uri_t on_uri = {
+                  .uri = "/light/on",
+                  .method = HTTP_GET,
+                  .handler = light_on
               };
 
-              httpd_uri_t l2 = {
-                  .uri="/light/off",
-                  .method=HTTP_GET,
-                  .handler=light_off
+              httpd_uri_t off_uri = {
+                  .uri = "/light/off",
+                  .method = HTTP_GET,
+                  .handler = light_off
               };
 
-              httpd_uri_t r1 = {
-                  .uri="/relay/on",
-                  .method=HTTP_GET,
-                  .handler=relay_on
+              httpd_uri_t relay_uri = {
+                  .uri = "/relay/toggle",
+                  .method = HTTP_GET,
+                  .handler = relay_toggle
               };
 
-              httpd_uri_t r2 = {
-                  .uri="/relay/off",
-                  .method=HTTP_GET,
-                  .handler=relay_off
-              };
+              httpd_register_uri_handler(server,
+                                         &root);
 
-              httpd_uri_t r3 = {
-                  .uri="/relay/toggle",
-                  .method=HTTP_GET,
-                  .handler=relay_toggle
-              };
+              httpd_register_uri_handler(server,
+                                         &on_uri);
 
-              httpd_uri_t p1 = {
-                  .uri="/ping",
-                  .method=HTTP_GET,
-                  .handler=ping_handler
-              };
+              httpd_register_uri_handler(server,
+                                         &off_uri);
 
-              httpd_uri_t lg = {
-                  .uri="/log",
-                  .method=HTTP_GET,
-                  .handler=log_handler
-              };
+              httpd_register_uri_handler(server,
+                                         &relay_uri);
 
-              httpd_register_uri_handler(server, &root);
-              httpd_register_uri_handler(server, &l1);
-              httpd_register_uri_handler(server, &l2);
-              httpd_register_uri_handler(server, &r1);
-              httpd_register_uri_handler(server, &r2);
-              httpd_register_uri_handler(server, &r3);
-              httpd_register_uri_handler(server, &p1);
-              httpd_register_uri_handler(server, &lg);
-
-              ESP_LOGI(TAG, "Web server started");
+              ESP_LOGI("WEB",
+                       "Web server started");
           }
 
           EOF
+
+      # =====================================================
+      # PATCH CMAKE
+      # =====================================================
+
+      - name: Patch CMake
+        run: |
+
+          FILE=examples/factory_demo/main/CMakeLists.txt
+
+          sed -i '/web_server.c/d' $FILE || true
+          sed -i '/espnow_relay.c/d' $FILE || true
+
+          sed -i 's/main.c/main.c web_server.c espnow_relay.c/' $FILE
 
       # =====================================================
       # PATCH MAIN
@@ -402,21 +264,49 @@ jobs:
           FILE=examples/factory_demo/main/main.c
 
           sed -i '/web_server.h/d' $FILE || true
+          sed -i '/espnow_relay.h/d' $FILE || true
 
           LAST=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
 
-          sed -i "${LAST}a #include \"web_server.h\"" $FILE
+          sed -i "${LAST}a\\
+          #include \"web_server.h\"\n\
+          #include \"espnow_relay.h\"" $FILE
 
           sed -i '/web_server_start()/d' $FILE || true
+          sed -i '/espnow_relay_init()/d' $FILE || true
 
           sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(1000));\
+          espnow_relay_init();\
           web_server_start();' $FILE
+
+      # =====================================================
+      # DISABLE TOUCH ERROR
+      # =====================================================
+
+      - name: Disable touch error
+        run: |
+
+          find examples/factory_demo -type f \
+          -name "*.c" \
+          -exec sed -i 's/ESP_LOGE([^;]*Touch not found[^;]*);/ESP_LOGW("PATCH","Touch skipped");/g' {} \; || true
+
+      # =====================================================
+      # SDKCONFIG
+      # =====================================================
+
+      - name: Patch sdkconfig
+        run: |
+
+          cd examples/factory_demo
+
+          echo 'CONFIG_ESP_TASK_WDT=n' >> sdkconfig.ci.box
 
       # =====================================================
       # BUILD
       # =====================================================
 
-      - name: Build
+      - name: Build firmware
         run: |
 
           source $IDF_PATH/export.sh
@@ -424,6 +314,12 @@ jobs:
           cd examples/factory_demo
 
           idf.py set-target esp32s3
+
+          cp sdkconfig.ci.box sdkconfig
+
+          idf.py fullclean
+
+          idf.py reconfigure
 
           idf.py build
 
@@ -439,18 +335,19 @@ jobs:
           cd examples/factory_demo/build
 
           python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-          --chip esp32s3 merge_bin \
-          -o factory.bin \
-          --flash_mode dio \
-          --flash_size 16MB \
-          $(cat flash_args)
+            --chip esp32s3 merge_bin \
+            -o factory.bin \
+            --flash_mode dio \
+            --flash_size 16MB \
+            $(cat flash_args)
 
       # =====================================================
       # UPLOAD
       # =====================================================
 
-      - name: Upload
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-s3-box-safe-webui
+          name: esp32-s3-box-webui-fix
           path: examples/factory_demo/build/factory.bin
+          retention-days: 30
