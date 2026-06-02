@@ -691,4 +691,3 @@ jobs:
           name: esp32-s3-box-industrial
           path: examples/factory_demo/build/factory.bin
           retention-days: 30
-```
