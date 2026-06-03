@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX INDUSTRIAL ESP-NOW RELAY BUILD
+name: ESP32-S3-BOX AI VOICE + ESP-NOW INDUSTRIAL BUILD
 
 on:
   workflow_dispatch:
@@ -11,6 +11,10 @@ jobs:
 
     container:
       image: espressif/idf:release-v5.1
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
 
@@ -32,24 +36,25 @@ jobs:
     # =========================================================
     - name: Clean build
       run: |
-        rm -rf examples/factory_demo/build
-        rm -rf examples/factory_demo/managed_components
-        rm -rf examples/factory_demo/dependencies.lock || true
+        rm -rf examples/factory_demo/build || true
+        rm -rf examples/factory_demo/sdkconfig || true
+        rm -rf examples/factory_demo/managed_components || true
 
     # =========================================================
-    # FORCE ESP32-S3-BOX TARGET
+    # FORCE TARGET STABILITY
     # =========================================================
-    - name: Force ESP32-S3-BOX config
+    - name: Force ESP32-S3 target
       run: |
         cd examples/factory_demo
-        sed -i '/CONFIG_ESP_BOX_3/d' sdkconfig.defaults || true
-        echo "CONFIG_ESP_BOX_3=n" >> sdkconfig.ci.box
+        echo "CONFIG_ESP_BOX_3=n" >> sdkconfig.ci.box || true
 
     # =========================================================
     # VOICE HOOK (SAFE)
     # =========================================================
     - name: Add voice hook
       run: |
+        mkdir -p examples/factory_demo/main
+
         cat > examples/factory_demo/main/voice_hook.h << 'EOF'
         #pragma once
         void voice_hook_init(void);
@@ -58,33 +63,47 @@ jobs:
 
         cat > examples/factory_demo/main/voice_hook.c << 'EOF'
         #include "voice_hook.h"
-        #include "app_led.h"
+        #include "esp_log.h"
         #include "espnow_relay.h"
-        #include "web_server.h"
+        #include "app_led.h"
         #include <string.h>
 
-        static void send(const char *msg){
-            espnow_relay_broadcast(msg);
-            web_server_log_voice(msg);
+        static const char *TAG = "VOICE";
+
+        static int has(const char *a, const char *b) {
+            return a && b && strstr(a,b);
         }
 
-        void voice_hook_init(void){}
+        void voice_hook_init(void) {
+            ESP_LOGI(TAG, "Voice ready");
+        }
 
-        void voice_hook_process(const char *p)
-        {
+        void voice_hook_process(const char *p) {
             if (!p) return;
 
-            if (strstr(p,"light") && strstr(p,"on")) send("LIGHT:ON");
-            else if (strstr(p,"light") && strstr(p,"off")) send("LIGHT:OFF");
+            ESP_LOGI(TAG, "VOICE: %s", p);
 
-            else if (strstr(p,"relay") && strstr(p,"on")) send("RELAY:ON");
-            else if (strstr(p,"relay") && strstr(p,"off")) send("RELAY:OFF");
-            else if (strstr(p,"toggle")) send("RELAY:TOGGLE");
+            if (has(p,"light")) {
+                if (has(p,"on")) {
+                    app_pwm_led_set_power(true);
+                    espnow_relay_broadcast("LIGHT:ON");
+                }
+                if (has(p,"off")) {
+                    app_pwm_led_set_power(false);
+                    espnow_relay_broadcast("LIGHT:OFF");
+                }
+            }
+
+            if (has(p,"relay")) {
+                if (has(p,"on")) espnow_relay_broadcast("RELAY:ON");
+                if (has(p,"off")) espnow_relay_broadcast("RELAY:OFF");
+                if (has(p,"toggle")) espnow_relay_broadcast("RELAY:TOGGLE");
+            }
         }
         EOF
 
     # =========================================================
-    # ESPNOW RELAY (FIXED CHANNEL + STABLE)
+    # ESP-NOW RELAY (FIXED + STABLE)
     # =========================================================
     - name: Add ESP-NOW relay
       run: |
@@ -96,66 +115,66 @@ jobs:
 
         cat > examples/factory_demo/main/espnow_relay.c << 'EOF'
         #include "espnow_relay.h"
+        #include "esp_log.h"
         #include "esp_now.h"
         #include "esp_wifi.h"
-        #include "web_server.h"
         #include <string.h>
 
-        static bool ready=false;
-        static const uint8_t BCAST[6]={0xff,0xff,0xff,0xff,0xff,0xff};
+        static const char *TAG = "ESPNOW";
 
-        static void recv(const esp_now_recv_info_t *info,
-                         const uint8_t *data,int len)
+        static const uint8_t BCAST[6] = {0xff,0xff,0xff,0xff,0xff,0xff};
+        static bool ready = false;
+
+        static void recv_cb(const esp_now_recv_info_t *info,
+                            const uint8_t *data, int len)
         {
-            char msg[128]={0};
-            memcpy(msg,data,len>127?127:len);
-            web_server_log_voice(msg);
+            char msg[128] = {0};
+            memcpy(msg, data, len > 127 ? 127 : len);
+
+            ESP_LOGI(TAG, "RX: %s", msg);
         }
 
         void espnow_relay_init(void)
         {
-            esp_wifi_set_mode(WIFI_MODE_STA);
-            esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+            ESP_LOGI(TAG, "ESP-NOW init");
 
             esp_now_init();
-            esp_now_register_recv_cb(recv);
+            esp_now_register_recv_cb(recv_cb);
 
-            esp_now_peer_info_t peer={0};
-            memcpy(peer.peer_addr,BCAST,6);
-            peer.channel=1;
-            peer.encrypt=false;
+            esp_now_peer_info_t peer = {0};
+            memcpy(peer.peer_addr, BCAST, 6);
+            peer.channel = 0;
+            peer.encrypt = false;
 
             esp_now_add_peer(&peer);
 
-            ready=true;
+            ready = true;
         }
 
         void espnow_relay_broadcast(const char *msg)
         {
-            if(!ready) return;
-            esp_now_send(BCAST,(uint8_t*)msg,strlen(msg)+1);
+            if (!ready || !msg) return;
+
+            esp_now_send(BCAST,
+                         (const uint8_t*)msg,
+                         strlen(msg)+1);
+
+            ESP_LOGI(TAG, "TX: %s", msg);
         }
         EOF
 
     # =========================================================
-    # WEB SERVER (SYNC UI RELAY + LIGHT)
+    # WEB SERVER (SAFE + NO CRASH)
     # =========================================================
     - name: Add web server
       run: |
         cat > examples/factory_demo/main/web_server.c << 'EOF'
         #include "esp_http_server.h"
-        #include "app_led.h"
+        #include "esp_log.h"
         #include "espnow_relay.h"
-        #include "node_registry.h"
-        #include <string.h>
+        #include "app_led.h"
 
-        static httpd_handle_t server=NULL;
-        static char logbuf[2048]="--log--\n";
-
-        void web_server_log_voice(const char *m){
-            strncat(logbuf,m,2000);
-            strcat(logbuf,"\n");
-        }
+        static httpd_handle_t server = NULL;
 
         static esp_err_t relay_on(httpd_req_t *r){
             espnow_relay_broadcast("RELAY:ON");
@@ -175,83 +194,57 @@ jobs:
             return ESP_OK;
         }
 
-        static esp_err_t light_on(httpd_req_t *r){
-            app_pwm_led_set_power(true);
-            espnow_relay_broadcast("LIGHT:ON");
-            httpd_resp_send(r,"OK",2);
-            return ESP_OK;
-        }
-
-        static esp_err_t light_off(httpd_req_t *r){
-            app_pwm_led_set_power(false);
-            espnow_relay_broadcast("LIGHT:OFF");
-            httpd_resp_send(r,"OK",2);
-            return ESP_OK;
-        }
-
         void web_server_start(void)
         {
-            httpd_config_t cfg=HTTPD_DEFAULT_CONFIG();
-            httpd_start(&server,&cfg);
+            httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+            httpd_start(&server, &cfg);
 
-            httpd_uri_t u[]={
-                {"/relay/on",HTTP_GET,relay_on},
-                {"/relay/off",HTTP_GET,relay_off},
-                {"/relay/toggle",HTTP_GET,relay_toggle},
-                {"/light/on",HTTP_GET,light_on},
-                {"/light/off",HTTP_GET,light_off},
+            httpd_uri_t uris[] = {
+                {"/relay/on", HTTP_GET, relay_on},
+                {"/relay/off", HTTP_GET, relay_off},
+                {"/relay/toggle", HTTP_GET, relay_toggle},
             };
 
-            for(int i=0;i<5;i++)
-                httpd_register_uri_handler(server,&u[i]);
+            for(int i=0;i<3;i++)
+                httpd_register_uri_handler(server,&uris[i]);
         }
         EOF
 
     # =========================================================
-    # SAFE MAIN PATCH (NO SED CRASHES)
+    # PATCH MAIN (SAFE INSERT)
     # =========================================================
-    - name: Patch main safely
+    - name: Patch main
       run: |
-        python3 - << 'EOF'
-        file = "examples/factory_demo/main/main.c"
+        FILE=examples/factory_demo/main/main.c
 
-        with open(file,"r") as f:
-            lines=f.readlines()
+        sed -i '/voice_hook.h/d' $FILE || true
+        sed -i '/espnow_relay.h/d' $FILE || true
+        sed -i '/web_server.h/d' $FILE || true
 
-        out=[]
-        inserted=False
-
-        for l in lines:
-            out.append(l)
-
-            if "app_rmaker_start" in l and not inserted:
-                out.append("vTaskDelay(pdMS_TO_TICKS(1000));\n")
-                out.append("espnow_relay_init();\n")
-                inserted=True
-
-        with open(file,"w") as f:
-            f.writelines(out)
-        EOF
+        sed -i '1i #include "voice_hook.h"\n#include "espnow_relay.h"\n#include "web_server.h"' $FILE
 
     # =========================================================
-    # BUILD
+    # BUILD (FIXED SOURCE ERROR)
     # =========================================================
     - name: Build firmware
+      shell: bash
       run: |
         source $IDF_PATH/export.sh
+
         cd examples/factory_demo
 
         idf.py set-target esp32s3
-        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.ci.box" reconfigure
-        idf.py fullclean
+        idf.py reconfigure
         idf.py build
 
     # =========================================================
     # MERGE BIN
     # =========================================================
     - name: Merge firmware
+      shell: bash
       run: |
         source $IDF_PATH/export.sh
+
         cd examples/factory_demo/build
 
         python $IDF_PATH/components/esptool_py/esptool/esptool.py \
@@ -262,7 +255,7 @@ jobs:
           $(cat flash_args)
 
     # =========================================================
-    # UPLOAD
+    # ARTIFACT
     # =========================================================
     - name: Upload firmware
       uses: actions/upload-artifact@v4
