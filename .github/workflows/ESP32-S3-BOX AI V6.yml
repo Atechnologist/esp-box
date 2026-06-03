@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX INDUSTRIAL ESP-NOW FIXED
+name: ESP32-S3-BOX INDUSTRIAL ESP-NOW RELAY BUILD
 
 on:
   workflow_dispatch:
@@ -12,47 +12,82 @@ jobs:
     container:
       image: espressif/idf:release-v5.1
 
-    defaults:
-      run:
-        shell: bash
-
     steps:
 
-    # =========================
+    # =========================================================
     # CHECKOUT
-    # =========================
+    # =========================================================
     - name: Checkout ESP-BOX
       uses: actions/checkout@v4
       with:
         repository: espressif/esp-box
         submodules: recursive
+        fetch-depth: 0
 
     - name: Safe directory
       run: git config --global --add safe.directory '*'
 
-    # =========================
+    # =========================================================
     # CLEAN
-    # =========================
+    # =========================================================
     - name: Clean build
       run: |
         rm -rf examples/factory_demo/build
         rm -rf examples/factory_demo/managed_components
+        rm -rf examples/factory_demo/dependencies.lock || true
 
-    # =========================
-    # FORCE TARGET
-    # =========================
-    - name: Force ESP32-S3-BOX
+    # =========================================================
+    # FORCE ESP32-S3-BOX TARGET
+    # =========================================================
+    - name: Force ESP32-S3-BOX config
       run: |
         cd examples/factory_demo
         sed -i '/CONFIG_ESP_BOX_3/d' sdkconfig.defaults || true
         echo "CONFIG_ESP_BOX_3=n" >> sdkconfig.ci.box
 
-    # =========================
-    # ADD ESP-NOW RELAY (FIXED - NO STUB)
-    # =========================
-    - name: Inject ESP-NOW Relay (FULL FIX)
+    # =========================================================
+    # VOICE HOOK (SAFE)
+    # =========================================================
+    - name: Add voice hook
       run: |
+        cat > examples/factory_demo/main/voice_hook.h << 'EOF'
+        #pragma once
+        void voice_hook_init(void);
+        void voice_hook_process(const char *phrase);
+        EOF
 
+        cat > examples/factory_demo/main/voice_hook.c << 'EOF'
+        #include "voice_hook.h"
+        #include "app_led.h"
+        #include "espnow_relay.h"
+        #include "web_server.h"
+        #include <string.h>
+
+        static void send(const char *msg){
+            espnow_relay_broadcast(msg);
+            web_server_log_voice(msg);
+        }
+
+        void voice_hook_init(void){}
+
+        void voice_hook_process(const char *p)
+        {
+            if (!p) return;
+
+            if (strstr(p,"light") && strstr(p,"on")) send("LIGHT:ON");
+            else if (strstr(p,"light") && strstr(p,"off")) send("LIGHT:OFF");
+
+            else if (strstr(p,"relay") && strstr(p,"on")) send("RELAY:ON");
+            else if (strstr(p,"relay") && strstr(p,"off")) send("RELAY:OFF");
+            else if (strstr(p,"toggle")) send("RELAY:TOGGLE");
+        }
+        EOF
+
+    # =========================================================
+    # ESPNOW RELAY (FIXED CHANNEL + STABLE)
+    # =========================================================
+    - name: Add ESP-NOW relay
+      run: |
         cat > examples/factory_demo/main/espnow_relay.h << 'EOF'
         #pragma once
         void espnow_relay_init(void);
@@ -63,120 +98,157 @@ jobs:
         #include "espnow_relay.h"
         #include "esp_now.h"
         #include "esp_wifi.h"
-        #include "esp_log.h"
+        #include "web_server.h"
         #include <string.h>
 
-        static const char *TAG = "ESPNOW";
+        static bool ready=false;
+        static const uint8_t BCAST[6]={0xff,0xff,0xff,0xff,0xff,0xff};
 
-        static uint8_t bcast[6] = {0xff,0xff,0xff,0xff,0xff,0xff};
-        static bool ready = false;
-
-        static void recv_cb(const esp_now_recv_info_t *info,
-                            const uint8_t *data, int len)
+        static void recv(const esp_now_recv_info_t *info,
+                         const uint8_t *data,int len)
         {
-            char msg[128] = {0};
-            memcpy(msg, data, len < sizeof(msg)-1 ? len : sizeof(msg)-1);
-            ESP_LOGI(TAG, "RX: %s", msg);
+            char msg[128]={0};
+            memcpy(msg,data,len>127?127:len);
+            web_server_log_voice(msg);
         }
 
         void espnow_relay_init(void)
         {
-            esp_now_init();
-            esp_now_register_recv_cb(recv_cb);
+            esp_wifi_set_mode(WIFI_MODE_STA);
+            esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
 
-            esp_now_peer_info_t peer = {0};
-            memcpy(peer.peer_addr, bcast, 6);
-            peer.channel = 0;
-            peer.encrypt = false;
+            esp_now_init();
+            esp_now_register_recv_cb(recv);
+
+            esp_now_peer_info_t peer={0};
+            memcpy(peer.peer_addr,BCAST,6);
+            peer.channel=1;
+            peer.encrypt=false;
 
             esp_now_add_peer(&peer);
 
-            ready = true;
-            ESP_LOGI(TAG, "ESP-NOW READY");
+            ready=true;
         }
 
         void espnow_relay_broadcast(const char *msg)
         {
-            if (!ready) return;
-            esp_now_send(bcast, (uint8_t*)msg, strlen(msg)+1);
+            if(!ready) return;
+            esp_now_send(BCAST,(uint8_t*)msg,strlen(msg)+1);
         }
         EOF
 
-    # =========================
-    # ADD CHANNEL SYNC TASK (CRITICAL FIX)
-    # =========================
-    - name: Inject Channel Sync
+    # =========================================================
+    # WEB SERVER (SYNC UI RELAY + LIGHT)
+    # =========================================================
+    - name: Add web server
       run: |
-
-        cat > examples/factory_demo/main/espnow_channel.c << 'EOF'
-        #include "esp_wifi.h"
+        cat > examples/factory_demo/main/web_server.c << 'EOF'
+        #include "esp_http_server.h"
+        #include "app_led.h"
         #include "espnow_relay.h"
-        #include "freertos/FreeRTOS.h"
-        #include "freertos/task.h"
-        #include <stdio.h>
+        #include "node_registry.h"
+        #include <string.h>
 
-        void espnow_channel_task(void *arg)
+        static httpd_handle_t server=NULL;
+        static char logbuf[2048]="--log--\n";
+
+        void web_server_log_voice(const char *m){
+            strncat(logbuf,m,2000);
+            strcat(logbuf,"\n");
+        }
+
+        static esp_err_t relay_on(httpd_req_t *r){
+            espnow_relay_broadcast("RELAY:ON");
+            httpd_resp_send(r,"OK",2);
+            return ESP_OK;
+        }
+
+        static esp_err_t relay_off(httpd_req_t *r){
+            espnow_relay_broadcast("RELAY:OFF");
+            httpd_resp_send(r,"OK",2);
+            return ESP_OK;
+        }
+
+        static esp_err_t relay_toggle(httpd_req_t *r){
+            espnow_relay_broadcast("RELAY:TOGGLE");
+            httpd_resp_send(r,"OK",2);
+            return ESP_OK;
+        }
+
+        static esp_err_t light_on(httpd_req_t *r){
+            app_pwm_led_set_power(true);
+            espnow_relay_broadcast("LIGHT:ON");
+            httpd_resp_send(r,"OK",2);
+            return ESP_OK;
+        }
+
+        static esp_err_t light_off(httpd_req_t *r){
+            app_pwm_led_set_power(false);
+            espnow_relay_broadcast("LIGHT:OFF");
+            httpd_resp_send(r,"OK",2);
+            return ESP_OK;
+        }
+
+        void web_server_start(void)
         {
-            while (1)
-            {
-                uint8_t ch;
-                wifi_second_chan_t sec;
+            httpd_config_t cfg=HTTPD_DEFAULT_CONFIG();
+            httpd_start(&server,&cfg);
 
-                esp_wifi_get_channel(&ch, &sec);
+            httpd_uri_t u[]={
+                {"/relay/on",HTTP_GET,relay_on},
+                {"/relay/off",HTTP_GET,relay_off},
+                {"/relay/toggle",HTTP_GET,relay_toggle},
+                {"/light/on",HTTP_GET,light_on},
+                {"/light/off",HTTP_GET,light_off},
+            };
 
-                char msg[16];
-                snprintf(msg, sizeof(msg), "CH:%d", ch);
-
-                espnow_relay_broadcast(msg);
-
-                vTaskDelay(pdMS_TO_TICKS(3000));
-            }
+            for(int i=0;i<5;i++)
+                httpd_register_uri_handler(server,&u[i]);
         }
         EOF
 
-    # =========================
-    # PATCH MAIN.C
-    # =========================
-    - name: Patch main
+    # =========================================================
+    # SAFE MAIN PATCH (NO SED CRASHES)
+    # =========================================================
+    - name: Patch main safely
       run: |
-        FILE=examples/factory_demo/main/main.c
+        python3 - << 'EOF'
+        file = "examples/factory_demo/main/main.c"
 
-        sed -i '/espnow_relay.h/d' $FILE || true
+        with open(file,"r") as f:
+            lines=f.readlines()
 
-        LAST=$(grep -n "#include" $FILE | tail -1 | cut -d: -f1)
+        out=[]
+        inserted=False
 
-        sed -i "${LAST}a\\
-#include \"espnow_relay.h\"\n\
-#include \"node_registry.h\"" $FILE
+        for l in lines:
+            out.append(l)
 
-        sed -i '/app_rmaker_start/a \
-vTaskDelay(pdMS_TO_TICKS(1000));\
-espnow_relay_init();\
-xTaskCreate(espnow_channel_task, "ch_sync", 4096, NULL, 5, NULL);' $FILE
+            if "app_rmaker_start" in l and not inserted:
+                out.append("vTaskDelay(pdMS_TO_TICKS(1000));\n")
+                out.append("espnow_relay_init();\n")
+                inserted=True
 
-    # =========================
-    # FIX TOUCH CRASH (S3-BOX SAFE MODE)
-    # =========================
-    - name: Disable touch crash
-      run: |
-        find examples/factory_demo -type f -name "*.c" \
-        -exec sed -i 's/Touch not found/Touch disabled (S3 SAFE)/g' {} \;
+        with open(file,"w") as f:
+            f.writelines(out)
+        EOF
 
-    # =========================
+    # =========================================================
     # BUILD
-    # =========================
+    # =========================================================
     - name: Build firmware
       run: |
         source $IDF_PATH/export.sh
         cd examples/factory_demo
 
         idf.py set-target esp32s3
-        idf.py reconfigure
+        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.ci.box" reconfigure
+        idf.py fullclean
         idf.py build
 
-    # =========================
+    # =========================================================
     # MERGE BIN
-    # =========================
+    # =========================================================
     - name: Merge firmware
       run: |
         source $IDF_PATH/export.sh
@@ -189,11 +261,12 @@ xTaskCreate(espnow_channel_task, "ch_sync", 4096, NULL, 5, NULL);' $FILE
           --flash_size 16MB \
           $(cat flash_args)
 
-    # =========================
+    # =========================================================
     # UPLOAD
-    # =========================
+    # =========================================================
     - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
         name: esp32-s3-box-industrial
         path: examples/factory_demo/build/factory.bin
+        retention-days: 30
