@@ -198,7 +198,7 @@ jobs:
           void rmaker_sync_init(void)
           {
               esp_rmaker_node_t *node =
-                  esp_rmaker_get_node();
+                  const esp_rmaker_node_t *node = esp_rmaker_get_node();
               if (!node)
               {
                   ESP_LOGW(TAG, "RainMaker node not ready");
@@ -222,7 +222,7 @@ jobs:
                   s_light_dev =
                       esp_rmaker_device_create(
                           "Light",
-                          ESP_RMAKER_DEVICE_SWITCH,
+                          esp_rmaker_device_switch
                           NULL);
                   if (s_light_dev)
                   {
