@@ -68,8 +68,7 @@ jobs:
           typedef enum {
               SRC_VOICE  = 0,
               SRC_WEB    = 1,
-              SRC_RMAKER = 2,
-              SRC_ESPNOW = 3,
+              SRC_ESPNOW = 2,
           } relay_src_t;
 
           void relay_state_init(void);
@@ -88,9 +87,6 @@ jobs:
           #include "esp_log.h"
           #include <stdio.h>
 
-          __attribute__((weak)) void rmaker_sync_light(bool on) {}
-          __attribute__((weak)) void rmaker_sync_relay(bool on) {}
-
           static const char *TAG = "STATE";
           static bool s_light = false;
           static bool s_relay = false;
@@ -105,7 +101,7 @@ jobs:
           void relay_state_set_light(bool on, relay_src_t src)
           {
               s_light = on;
-              const char *who[] = {"VOICE","WEB","RMAKER","ESPNOW"};
+              const char *who[] = {"VOICE","WEB","ESPNOW"};
               char log[64];
               snprintf(log, sizeof(log),
                        "[%s] LIGHT %s", who[src], on ? "ON" : "OFF");
@@ -114,14 +110,12 @@ jobs:
               app_pwm_led_set_power(on);
               if (src != SRC_ESPNOW)
                   espnow_relay_broadcast(on ? "LIGHT:ON" : "LIGHT:OFF");
-              if (src != SRC_RMAKER)
-                  rmaker_sync_light(on);
           }
 
           void relay_state_set_relay(bool on, relay_src_t src)
           {
               s_relay = on;
-              const char *who[] = {"VOICE","WEB","RMAKER","ESPNOW"};
+              const char *who[] = {"VOICE","WEB","ESPNOW"};
               char log[64];
               snprintf(log, sizeof(log),
                        "[%s] RELAY %s", who[src], on ? "ON" : "OFF");
@@ -129,8 +123,6 @@ jobs:
               web_server_log_voice(log);
               if (src != SRC_ESPNOW)
                   espnow_relay_broadcast(on ? "RELAY:ON" : "RELAY:OFF");
-              if (src != SRC_RMAKER)
-                  rmaker_sync_relay(on);
           }
 
           void relay_state_toggle_relay(relay_src_t src)
@@ -140,143 +132,6 @@ jobs:
 
           bool relay_state_get_light(void) { return s_light; }
           bool relay_state_get_relay(void) { return s_relay; }
-          EOF
-
-      # =========================================================
-      # RAINMAKER SYNC (FIXED)
-      # =========================================================
-      - name: Add rmaker sync
-        run: |
-          cat > examples/factory_demo/main/rmaker_sync.h << 'EOF'
-          #pragma once
-          #include <stdbool.h>
-
-          void rmaker_sync_init(void);
-          void rmaker_sync_light(bool on);
-          void rmaker_sync_relay(bool on);
-          EOF
-
-          cat > examples/factory_demo/main/rmaker_sync.c << 'EOF'
-          //#include "rmaker_sync.h"
-          #include "relay_state.h"
-          #include "esp_rmaker_core.h"
-          #include "esp_rmaker_standard_devices.h"
-          #include "esp_rmaker_standard_params.h"
-          #include "esp_log.h"
-          #include <string.h>
-          #include <stdbool.h>
-
-          static const char *TAG = "RMAKER_SYNC";
-          static esp_rmaker_device_t *s_light_dev = NULL;
-          static esp_rmaker_device_t *s_relay_dev = NULL;
-
-          static esp_err_t write_cb(
-              const esp_rmaker_device_t *dev,
-              const esp_rmaker_param_t  *param,
-              const esp_rmaker_param_val_t val,
-              void *priv,
-              esp_rmaker_write_ctx_t *ctx)
-          {
-              const char *pname =
-                  esp_rmaker_param_get_name(param);
-              const char *dname =
-                  esp_rmaker_device_get_name(dev);
-
-              if (strcmp(pname,
-                         ESP_RMAKER_DEF_POWER_NAME) == 0)
-              {
-                  bool on = val.val.b;
-                  if (strcmp(dname, "Light") == 0)
-                      relay_state_set_light(on, SRC_RMAKER);
-                  else if (strcmp(dname, "Relay") == 0)
-                      relay_state_set_relay(on, SRC_RMAKER);
-              }
-              esp_rmaker_param_update_and_report(param, val);
-              return ESP_OK;
-          }
-
-          void rmaker_sync_init(void)
-          {
-              const esp_rmaker_node_t *node = esp_rmaker_get_node();
-              if (!node)
-              {
-                  ESP_LOGW(TAG, "RainMaker node not ready");
-                  return;
-              }
-
-              s_light_dev =
-                  esp_rmaker_node_get_device_by_name(
-                      node, "Light");
-              s_relay_dev =
-                  esp_rmaker_node_get_device_by_name(
-                      node, "Relay");
-
-              if (s_light_dev)
-              {
-                  esp_rmaker_device_add_cb(
-                      s_light_dev, write_cb, NULL);
-              }
-              else
-              {
-                  s_light_dev =
-                      esp_rmaker_standard_device_create_lightbulb(
-                          "Light", NULL,
-                          relay_state_get_light());
-                  if (s_light_dev)
-                  {
-                      esp_rmaker_device_add_cb(
-                          s_light_dev, write_cb, NULL);
-                      esp_rmaker_node_add_device(
-                          node, s_light_dev);
-                      ESP_LOGI(TAG, "Light device created");
-                  }
-              }
-
-              if (s_relay_dev)
-              {
-                  esp_rmaker_device_add_cb(
-                      s_relay_dev, write_cb, NULL);
-              }
-              else
-              {
-                  s_relay_dev =
-                      esp_rmaker_standard_device_create_switch(
-                          "Relay", NULL,
-                          relay_state_get_relay());
-                  if (s_relay_dev)
-                  {
-                      esp_rmaker_device_add_cb(
-                          s_relay_dev, write_cb, NULL);
-                      esp_rmaker_node_add_device(
-                          node, s_relay_dev);
-                      ESP_LOGI(TAG, "Relay device created");
-                  }
-              }
-          }
-
-          void rmaker_sync_light(bool on)
-          {
-              if (!s_light_dev) return;
-              esp_rmaker_param_t *p =
-                  esp_rmaker_device_get_param_by_name(
-                      s_light_dev,
-                      ESP_RMAKER_DEF_POWER_NAME);
-              if (p)
-                  esp_rmaker_param_update_and_report(
-                      p, esp_rmaker_bool(on));
-          }
-
-          void rmaker_sync_relay(bool on)
-          {
-              if (!s_relay_dev) return;
-              esp_rmaker_param_t *p =
-                  esp_rmaker_device_get_param_by_name(
-                      s_relay_dev,
-                      ESP_RMAKER_DEF_POWER_NAME);
-              if (p)
-                  esp_rmaker_param_update_and_report(
-                      p, esp_rmaker_bool(on));
-          }
           EOF
 
       # =========================================================
@@ -920,24 +775,21 @@ jobs:
           sed -i '/espnow_relay.c/d'  $FILE || true
           sed -i '/node_registry.c/d' $FILE || true
           sed -i '/relay_state.c/d'   $FILE || true
-          //sed -i '/rmaker_sync.c/d'   $FILE || true
-          sed -i 's/main.c/main.c voice_hook.c web_server.c espnow_relay.c node_registry.c relay_state.c rmaker_sync.c/' $FILE
+          sed -i 's/main.c/main.c voice_hook.c web_server.c espnow_relay.c node_registry.c relay_state.c/' $FILE
 
       # =========================================================
       # PATCH MAIN — includes
-      # ALL headers added here including node_registry.h
       # =========================================================
       - name: Patch main includes
         run: |
           FILE=examples/factory_demo/main/main.c
           # Remove any previous injections
           for H in voice_hook.h web_server.h espnow_relay.h \
-                   node_registry.h relay_state.h rmaker_sync.h; do
+                   node_registry.h relay_state.h; do
             sed -i "/${H}/d" $FILE || true
           done
           LAST=$(grep -n "^#include" $FILE | tail -1 | cut -d: -f1)
           # Insert in reverse order so they end up in correct sequence
-          //sed -i "${LAST}a #include \"rmaker_sync.h\""   $FILE
           sed -i "${LAST}a #include \"node_registry.h\"" $FILE
           sed -i "${LAST}a #include \"relay_state.h\""   $FILE
           sed -i "${LAST}a #include \"espnow_relay.h\""  $FILE
@@ -946,14 +798,13 @@ jobs:
 
       # =========================================================
       # PATCH MAIN — init calls
-      # node_registry_init() included here
       # =========================================================
       - name: Patch main calls
         run: |
           FILE=examples/factory_demo/main/main.c
           for FN in voice_hook_init web_server_start     \
                     espnow_relay_init relay_state_init   \
-                    node_registry_init rmaker_sync_init; do
+                    node_registry_init; do
             sed -i "/${FN}()/d" $FILE || true
           done
           sed -i '/app_rmaker_start()/a \
@@ -963,7 +814,6 @@ jobs:
           web_server_start();\
           voice_hook_init();\
           espnow_relay_init();' $FILE
-          //rmaker_sync_init();
 
       # =========================================================
       # PATCH SR HANDLER
@@ -992,8 +842,7 @@ jobs:
         run: |
           cd examples/factory_demo
           echo 'CONFIG_ESP_TASK_WDT=n' >> sdkconfig.ci.box
-
-      # =========================================================
+# =========================================================
       # BUILD
       # =========================================================
       - name: Build firmware
@@ -1022,15 +871,8 @@ jobs:
           --chip esp32s3 merge_bin \
           -o factory.bin \
           --flash_mode dio \
-          --flash_size 16MB \
-          $(cat flash_args)
+          --flas
+          cd examples/factory_demo
+          idf.py -DSDKCONFIG_DEFAULTS=sdkconfig.ci.box build
 
-      # =========================================================
-      # UPLOAD
-      # =========================================================
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32-s3-box-industrial
-          path: examples/factory_demo/build/factory.bin
-          retention-days: 30
+     
