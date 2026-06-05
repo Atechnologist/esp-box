@@ -157,7 +157,7 @@ jobs:
           EOF
 
           cat > examples/factory_demo/main/rmaker_sync.c << 'EOF'
-          #include "rmaker_sync.h"
+          //#include "rmaker_sync.h"
           #include "relay_state.h"
           #include "esp_rmaker_core.h"
           #include "esp_rmaker_standard_devices.h"
@@ -920,7 +920,7 @@ jobs:
           sed -i '/espnow_relay.c/d'  $FILE || true
           sed -i '/node_registry.c/d' $FILE || true
           sed -i '/relay_state.c/d'   $FILE || true
-          sed -i '/rmaker_sync.c/d'   $FILE || true
+          //sed -i '/rmaker_sync.c/d'   $FILE || true
           sed -i 's/main.c/main.c voice_hook.c web_server.c espnow_relay.c node_registry.c relay_state.c rmaker_sync.c/' $FILE
 
       # =========================================================
@@ -937,7 +937,7 @@ jobs:
           done
           LAST=$(grep -n "^#include" $FILE | tail -1 | cut -d: -f1)
           # Insert in reverse order so they end up in correct sequence
-          sed -i "${LAST}a #include \"rmaker_sync.h\""   $FILE
+          //sed -i "${LAST}a #include \"rmaker_sync.h\""   $FILE
           sed -i "${LAST}a #include \"node_registry.h\"" $FILE
           sed -i "${LAST}a #include \"relay_state.h\""   $FILE
           sed -i "${LAST}a #include \"espnow_relay.h\""  $FILE
@@ -962,8 +962,8 @@ jobs:
           node_registry_init();\
           web_server_start();\
           voice_hook_init();\
-          espnow_relay_init();\
-          rmaker_sync_init();' $FILE
+          espnow_relay_init();' $FILE
+          //rmaker_sync_init();
 
       # =========================================================
       # PATCH SR HANDLER
