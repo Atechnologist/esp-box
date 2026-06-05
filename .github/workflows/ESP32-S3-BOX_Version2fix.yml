@@ -874,5 +874,14 @@ jobs:
             0x10000 factory_demo.bin
       
           ls -lh factory.bin
+      # =====================================================
+      # UPLOAD
+      # =====================================================
 
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-s3-box-industrial
+          path: examples/factory_demo/build/factory.bin
+          retention-days: 30
      
