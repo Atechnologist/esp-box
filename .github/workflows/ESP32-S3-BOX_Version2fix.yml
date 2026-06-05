@@ -866,13 +866,13 @@ jobs:
           source $IDF_PATH/export.sh
 
           cd examples/factory_demo/build
-
-          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
-          --chip esp32s3 merge_bin \
-          -o factory.bin \
-          --flash_mode dio \
-          --flas
-          cd examples/factory_demo
-          idf.py -DSDKCONFIG_DEFAULTS=sdkconfig.ci.box build
+      
+          esptool.py --chip esp32s3 merge_bin \
+            --output factory.bin \
+            0x0 bootloader/bootloader.bin \
+            0x8000 partition_table/partition-table.bin \
+            0x10000 factory_demo.bin
+      
+          ls -lh factory.bin
 
      
