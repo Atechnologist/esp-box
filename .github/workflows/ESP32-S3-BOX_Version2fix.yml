@@ -842,38 +842,35 @@ jobs:
         run: |
           cd examples/factory_demo
           echo 'CONFIG_ESP_TASK_WDT=n' >> sdkconfig.ci.box
-# =========================================================
+      
+     # =====================================================
       # BUILD
-      # =========================================================
+      # =====================================================
+
       - name: Build firmware
         run: |
           source $IDF_PATH/export.sh
-
           cd examples/factory_demo
-
           idf.py set-target esp32s3
-
           cp sdkconfig.ci.box sdkconfig
-
           idf.py fullclean
+          idf.py reconfigure
           idf.py build
-
-      # =========================================================
+      # =====================================================
       # MERGE BIN
-      # =========================================================
+      # =====================================================
+
       - name: Merge firmware
         run: |
           source $IDF_PATH/export.sh
-
           cd examples/factory_demo/build
-      
-          esptool.py --chip esp32s3 merge_bin \
-            --output factory.bin \
-            0x0 bootloader/bootloader.bin \
-            0x8000 partition_table/partition-table.bin \
-            0x10000 factory_demo.bin
-      
-          ls -lh factory.bin
+          python \
+          $IDF_PATH/components/esptool_py/esptool/esptool.py \
+          --chip esp32s3 merge_bin \
+          -o factory.bin \
+          --flash_mode dio \
+          --flash_size 16MB \
+          $(cat flash_args)
       # =====================================================
       # UPLOAD
       # =====================================================
@@ -884,4 +881,3 @@ jobs:
           name: esp32-s3-box-industrial
           path: examples/factory_demo/build/factory.bin
           retention-days: 30
-     
