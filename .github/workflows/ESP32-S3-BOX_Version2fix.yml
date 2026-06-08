@@ -826,16 +826,28 @@ jobs:
                   {"/discover", HTTP_GET,\
                       discover_h, NULL},' $FILE
       
+     # =========================================================
+      # PATCH CMAKE (Atomic Replacement)
       # =========================================================
-      # PATCH CMAKE
-      # All source files explicitly listed — no duplicates
-      # =========================================================
-      - name: Patch CMake Safe
+      - name: Patch CMake
         run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-
-          grep -q voice_hook.c $FILE || \
-          sed -i '/SRCS/s/"/ voice_hook.c web_server.c espnow_relay.c node_registry.c relay_state.c"/' $FILE
+          cat > examples/factory_demo/main/CMakeLists.txt << 'EOF'
+          idf_component_register(SRCS 
+              "main.c"
+              "relay_state.c"
+              "node_registry.c"
+              "espnow_relay.c"
+              "voice_hook.c"
+              "web_server.c"
+              INCLUDE_DIRS "."
+              REQUIRES 
+                  esp_now 
+                  esp_wifi 
+                  esp_http_server 
+                  esp_event
+                  esp_box
+          )
+          EOF
 
       # =========================================================
       # PATCH MAIN — includes
