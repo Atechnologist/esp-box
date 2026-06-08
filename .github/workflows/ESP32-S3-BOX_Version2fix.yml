@@ -397,6 +397,39 @@ jobs:
           }
           EOF
 
+      - name: Request Network State
+        run: |
+          FILE=examples/factory_demo/main/espnow_relay.c
+
+          sed -i '/ESP-NOW ready ch/a\
+              espnow_relay_broadcast("STATE?");' $FILE   
+
+      - name: Add ESPNOW State Sync
+        run: |
+          FILE=examples/factory_demo/main/espnow_relay.c
+
+          sed -i '/if (strcmp(msg, "PONG") == 0)/i\
+              if (strcmp(msg, "STATE?") == 0)\
+              {\
+                  char reply[32];\
+                  snprintf(reply,\
+                           sizeof(reply),\
+                           "STATE:%d,%d",\
+                           relay_state_get_light(),\
+                           relay_state_get_relay());\
+                  espnow_relay_broadcast(reply);\
+                  return;\
+              }\
+              if (strncmp(msg, "STATE:", 6) == 0)\
+              {\
+                  int light = 0;\
+                  int relay = 0;\
+                  sscanf(msg + 6,"%d,%d",&light,&relay);\
+                  relay_state_set_light(light,SRC_ESPNOW);\
+                  relay_state_set_relay(relay,SRC_ESPNOW);\
+                  return;\
+              }' $FILE
+      
       # =========================================================
       # VOICE HOOK
       # =========================================================
@@ -465,7 +498,33 @@ jobs:
               }
           }
           EOF
+      # =========================================================
+      # VOICE + WEB + ESPNOW FULL SYNC
+      # =========================================================
+      - name: Patch Voice Sync
+        run: |
+          FILE=examples/factory_demo/main/voice_hook.c
 
+          sed -i '/all off/a\
+              if (has(phrase, "lamp")) {\
+                  if (has(phrase, "on"))\
+                      relay_state_set_light(true, SRC_VOICE);\
+                  if (has(phrase, "off"))\
+                      relay_state_set_light(false, SRC_VOICE);\
+              }\
+              if (has(phrase, "switch on")) {\
+                  relay_state_set_relay(true, SRC_VOICE);\
+              }\
+              if (has(phrase, "switch off")) {\
+                  relay_state_set_relay(false, SRC_VOICE);\
+              }\
+              if (has(phrase, "turn on light")) {\
+                  relay_state_set_light(true, SRC_VOICE);\
+              }\
+              if (has(phrase, "turn off light")) {\
+                  relay_state_set_light(false, SRC_VOICE);\
+              }' $FILE
+              
       # =========================================================
       # WEB SERVER
       # =========================================================
@@ -762,20 +821,43 @@ jobs:
           }
           EOF
 
+      - name: Add Discover Button
+        run: |
+          FILE=examples/factory_demo/main/web_server.c
+
+          sed -i 's|</div><div id='\''log'\''|<button class="btn png" onclick="cmd('\''/discover'\'')">Discover Nodes</button></div><div id='\''log'\''|' $FILE || true
+
+      - name: Add Discover API
+        run: |
+          FILE=examples/factory_demo/main/web_server.c
+
+          sed -i '/static esp_err_t ping_h/a\
+          static esp_err_t discover_h(httpd_req_t *req)\
+          {\
+              espnow_relay_broadcast("DISCOVER");\
+              web_server_log_voice("Discovery Started");\
+              httpd_resp_send(req,"OK",2);\
+              return ESP_OK;\
+          }' $FILE
+
+      - name: Register Discover URI
+        run: |
+          FILE=examples/factory_demo/main/web_server.c
+
+          sed -i '/\/ping/a\
+                  {"/discover", HTTP_GET,\
+                      discover_h, NULL},' $FILE
+      
       # =========================================================
       # PATCH CMAKE
       # All source files explicitly listed — no duplicates
       # =========================================================
-      - name: Patch CMake
+      - name: Patch CMake Safe
         run: |
           FILE=examples/factory_demo/main/CMakeLists.txt
-          # Remove any previous injections cleanly
-          sed -i '/voice_hook.c/d'    $FILE || true
-          sed -i '/web_server.c/d'    $FILE || true
-          sed -i '/espnow_relay.c/d'  $FILE || true
-          sed -i '/node_registry.c/d' $FILE || true
-          sed -i '/relay_state.c/d'   $FILE || true
-          sed -i 's/main.c/main.c voice_hook.c web_server.c espnow_relay.c node_registry.c relay_state.c/' $FILE
+
+          grep -q voice_hook.c $FILE || \
+          sed -i '/SRCS/s/"/ voice_hook.c web_server.c espnow_relay.c node_registry.c relay_state.c"/' $FILE
 
       # =========================================================
       # PATCH MAIN — includes
