@@ -226,7 +226,7 @@ jobs:
           void relay_state_set_relay(bool on, relay_src_t src)
           {
               app_pwm_led_set_power(on);
-              s_relay = on;
+              /*s_relay = on;*/
               const char *who[] = {"VOICE","WEB","ESPNOW"};
               char log[64];
               snprintf(log, sizeof(log),
@@ -236,8 +236,8 @@ jobs:
               /* 1. Web UI event log */
               web_server_log_voice(log);
 
-              /* 2. BOX screen */
-              display_sync_update(s_light, on);
+              /* 2. BOX screen 
+              display_sync_update(s_light, on);*/
 
               /* 3. ESP-NOW relay node */
               if (src != SRC_ESPNOW)
@@ -249,7 +249,7 @@ jobs:
               relay_state_set_relay(!s_relay, src);
           }
 
-          bool relay_state_get_light(void) { return s_light; }
+          /*bool relay_state_get_light(void) { return s_light; }*/
           bool relay_state_get_relay(void) { return s_relay; }
           EOF
 
