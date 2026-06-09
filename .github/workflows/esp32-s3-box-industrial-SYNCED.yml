@@ -171,16 +171,13 @@ jobs:
           #include <stdbool.h>
 
           typedef enum {
-              SRC_VOICE  = 0,
-              SRC_WEB    = 1,
-              SRC_ESPNOW = 2,
+          SRC_VOICE  = 0,
+          SRC_WEB    = 1,
+          SRC_ESPNOW = 2,
           } relay_src_t;
 
           void relay_state_init(void);
-          void relay_state_set_light(bool on, relay_src_t src);
           void relay_state_set_relay(bool on, relay_src_t src);
-          void relay_state_toggle_relay(relay_src_t src);
-          bool relay_state_get_light(void);
           bool relay_state_get_relay(void);
           EOF
 
@@ -194,12 +191,11 @@ jobs:
           #include <stdio.h>
 
           static const char *TAG = "STATE";
-          static bool s_light = false;
-          static bool s_relay = false;
+           static bool s_relay = false;
 
           void relay_state_init(void)
           {
-              s_light = false;
+              
               s_relay = false;
               ESP_LOGI(TAG, "State manager ready");
           }
@@ -229,6 +225,7 @@ jobs:
 
           void relay_state_set_relay(bool on, relay_src_t src)
           {
+              app_pwm_led_set_power(on);
               s_relay = on;
               const char *who[] = {"VOICE","WEB","ESPNOW"};
               char log[64];
@@ -516,7 +513,12 @@ jobs:
                            strlen(msg) + 1);
           }
           EOF
-
+      - name: Request Relay State
+        run: |
+          FILE=examples/factory_demo/main/espnow_relay.c
+      
+          sed -i '/ESP-NOW ready ch/a\
+                      espnow_relay_broadcast("STATE?");' $FILE
       # =========================================================
       # VOICE HOOK
       # =========================================================
@@ -556,9 +558,9 @@ jobs:
               if (has(phrase, "light"))
               {
                   if (has(phrase, "on"))
-                      relay_state_set_light(true, SRC_VOICE);
+                      relay_state_set_relay(true, SRC_VOICE);
                   else if (has(phrase, "off"))
-                      relay_state_set_light(false, SRC_VOICE);
+                      relay_state_set_relay(false, SRC_VOICE);
               }
 
               if (has(phrase, "switch") || has(phrase, "relay"))
@@ -573,14 +575,14 @@ jobs:
 
               if (has(phrase, "all on"))
               {
-                  relay_state_set_light(true,  SRC_VOICE);
-                  relay_state_set_relay(true,  SRC_VOICE);
+                  relay_state_set_relay(true, SRC_VOICE);
+                  
               }
 
               if (has(phrase, "all off"))
               {
-                  relay_state_set_light(false, SRC_VOICE);
                   relay_state_set_relay(false, SRC_VOICE);
+                 
               }
           }
           EOF
@@ -914,7 +916,12 @@ jobs:
           web_server_start();\
           voice_hook_init();\
           espnow_relay_init();' $FILE
-
+      - name: Relay-Light Sync Fix
+        run: |
+          FILE=examples/factory_demo/main/voice_hook.c
+      
+          sed -i 's/relay_state_set_light(true, SRC_VOICE);/relay_state_set_relay(true, SRC_VOICE);/g' $FILE || true
+          sed -i 's/relay_state_set_light(false, SRC_VOICE);/relay_state_set_relay(false, SRC_VOICE);/g' $FILE || true
       # =========================================================
       # PATCH SR HANDLER
       # =========================================================
