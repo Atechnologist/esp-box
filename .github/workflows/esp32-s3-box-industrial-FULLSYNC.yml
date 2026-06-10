@@ -420,19 +420,19 @@ jobs:
           {
               ESP_LOGI(TAG, "Voice ready");
           }
+          void voice_hook_process(const char *phrase) {
+          // Log the event to confirm the hook is firing
+          ESP_LOGI("VOICE", "Hook received: %s", phrase ? phrase : "NULL");
 
-          void voice_hook_process(const char *phrase)
-          {
-              if (!phrase) return;
-              ESP_LOGI(TAG, "VOICE: %s", phrase);
+          // Map your detected commands to the state manager
+          if (strstr(phrase, "On") || strstr(phrase, "on")) {
+          relay_state_set_light(true, SRC_VOICE);
+          } else if (strstr(phrase, "Off") || strstr(phrase, "off")) {
+          relay_state_set_light(false, SRC_VOICE);
+          }
+          }
+          
 
-              if (has(phrase, "light"))
-              {
-                  if (has(phrase, "on"))
-                      relay_state_set_light(true, SRC_VOICE);
-                  else if (has(phrase, "off"))
-                      relay_state_set_light(false, SRC_VOICE);
-              }
 
               if (has(phrase, "switch") || has(phrase, "relay"))
               {
@@ -841,16 +841,17 @@ jobs:
           voice_hook_init();\
           espnow_relay_init();' $FILE
 
-      - name: Debug Speech Recognition Files
+      - name: Patch SR handler
         run: |
-          echo "==== SR FILES ===="
-          find examples/factory_demo -type f | grep -Ei "sr|speech|voice"
-
-          echo "==== SEARCH result->phrase ===="
-          grep -R "result->phrase" examples/factory_demo || true
-
-          echo "==== SEARCH ESP_LOGI.*phrase ===="
-          grep -R "phrase" examples/factory_demo || true
+          FILE=$(find examples/factory_demo -name "app_sr_handler.c" | head -1)
+          # 1. Ensure the header is included at the top
+          if ! grep -q 'voice_hook.h' "$FILE"; then
+            sed -i '1i #include "voice_hook.h"' "$FILE"
+          fi
+          
+          # 2. Inject the call directly into the command processing block.
+          # We look for the line where command_id is identified and inject the call immediately after.
+          sed -i '/I (.*) app_sr: Detected command/a \        voice_hook_process(result->phrase);' "$FILE"
 
       # =========================================================
       # SDKCONFIG
