@@ -764,20 +764,31 @@ jobs:
 
           echo "LED intercept written"
 
-      # =========================================================
-      # PATCH CMAKE — add led_intercept.c
-      # =========================================================
-      - name: Patch CMake
+      - name: Inject and Register Files
         run: |
-          FILE=examples/factory_demo/main/CMakeLists.txt
-          sed -i '/voice_hook.c/d'     $FILE || true
-          sed -i '/web_server.c/d'     $FILE || true
-          sed -i '/espnow_relay.c/d'   $FILE || true
-          sed -i '/node_registry.c/d'  $FILE || true
-          sed -i '/relay_state.c/d'    $FILE || true
-          sed -i '/led_intercept.c/d'  $FILE || true
-          sed -i 's/main.c/main.c voice_hook.c web_server.c espnow_relay.c node_registry.c relay_state.c led_intercept.c/' $FILE
+          cd examples/factory_demo/main
+          
+          # 1. Create all your source and header files
+          cat > relay_state.h << 'EOF'
+          # ... (your existing content)
+          EOF
+          # ... (continue with all other cat commands for your modules)
 
+          # 2. Overwrite CMakeLists.txt to include all new files
+          cat > CMakeLists.txt << 'EOF'
+          idf_component_register(SRCS 
+              "main.c"
+              "relay_state.c"
+              "node_registry.c"
+              "espnow_relay.c"
+              "voice_hook.c"
+              "web_server.c"
+              INCLUDE_DIRS "."
+          )
+          EOF
+          
+          # 3. Clean the build cache to ensure CMake detects the file list change
+          rm -rf ../build/CMakeCache.txt || true
       # =========================================================
       # PATCH MAIN — includes
       # =========================================================
