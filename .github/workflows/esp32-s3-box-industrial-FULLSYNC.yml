@@ -841,25 +841,16 @@ jobs:
           voice_hook_init();\
           espnow_relay_init();' $FILE
 
-      # =========================================================
-      # PATCH SR HANDLER — voice commands
-      # =========================================================
-      - name: Patch SR handler
+      - name: Debug Speech Recognition Files
         run: |
-          FILE=$(find examples/factory_demo \
-                 -name "app_sr_handler.c" | head -1)
-          if [ ! -z "$FILE" ]; then
-            if ! grep -q 'voice_hook.h' "$FILE"; then
-              sed -i '1i #include "voice_hook.h"' "$FILE"
-            fi
-            if ! grep -q 'voice_hook_process(result->phrase);' \
-                 "$FILE"; then
-              sed -i '/ESP_LOGI.*phrase/a\
-              if (result && result->phrase) {\
-                  voice_hook_process(result->phrase);\
-              }' "$FILE"
-            fi
-          fi
+          echo "==== SR FILES ===="
+          find examples/factory_demo -type f | grep -Ei "sr|speech|voice"
+
+          echo "==== SEARCH result->phrase ===="
+          grep -R "result->phrase" examples/factory_demo || true
+
+          echo "==== SEARCH ESP_LOGI.*phrase ===="
+          grep -R "phrase" examples/factory_demo || true
 
       # =========================================================
       # SDKCONFIG
