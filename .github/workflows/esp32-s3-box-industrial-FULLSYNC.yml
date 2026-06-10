@@ -395,18 +395,16 @@ jobs:
       # =========================================================
       - name: Add voice hook
         run: |
-          cat > examples/factory_demo/main/voice_hook.h << 'EOF'
-          #pragma once
-
-          void voice_hook_init(void);
-          void voice_hook_process(const char *phrase);
-          EOF
-
           cat > examples/factory_demo/main/voice_hook.c << 'EOF'
           #include "voice_hook.h"
           #include "relay_state.h"
           #include <string.h>
           #include <stdio.h>
+
+          // Initialization function required by main.c
+          void voice_hook_init(void) {
+              // Nothing to initialize currently
+          }
 
           static int has(const char *a, const char *b) {
               return a && strstr(a, b) != NULL;
