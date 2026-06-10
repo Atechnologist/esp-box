@@ -405,52 +405,27 @@ jobs:
           cat > examples/factory_demo/main/voice_hook.c << 'EOF'
           #include "voice_hook.h"
           #include "relay_state.h"
-          #include "esp_log.h"
           #include <string.h>
+          #include <stdio.h>
 
-          static const char *TAG = "VOICE";
-
-          static int has(const char *a, const char *b)
-          {
-              if (!a || !b) return 0;
-              return strstr(a, b) != NULL;
+          static int has(const char *a, const char *b) {
+              return a && strstr(a, b) != NULL;
           }
 
-          void voice_hook_init(void)
-          {
-              ESP_LOGI(TAG, "Voice ready");
-          }
           void voice_hook_process(const char *phrase) {
-          // Log the event to confirm the hook is firing
-          ESP_LOGI("VOICE", "Hook received: %s", phrase ? phrase : "NULL");
-
-          // Map your detected commands to the state manager
-          if (strstr(phrase, "On") || strstr(phrase, "on")) {
-          relay_state_set_light(true, SRC_VOICE);
-          } else if (strstr(phrase, "Off") || strstr(phrase, "off")) {
-          relay_state_set_light(false, SRC_VOICE);
-          }
-          }
-          
-
-
-              if (has(phrase, "switch") || has(phrase, "relay"))
-              {
-                  if (has(phrase, "on"))
-                      relay_state_set_relay(true, SRC_VOICE);
-                  else if (has(phrase, "off"))
-                      relay_state_set_relay(false, SRC_VOICE);
-                  else if (has(phrase, "toggle"))
-                      relay_state_toggle_relay(SRC_VOICE);
+              if (!phrase) return;
+              
+              if (has(phrase, "light")) {
+                  relay_state_set_light(has(phrase, "on"), SRC_VOICE);
               }
-
-              if (has(phrase, "all on"))
-              {
-                  relay_state_set_light(true,  SRC_VOICE);
-                  relay_state_set_relay(true,  SRC_VOICE);
+              if (has(phrase, "switch") || has(phrase, "relay")) {
+                  relay_state_toggle_relay(SRC_VOICE);
               }
-              if (has(phrase, "all off"))
-              {
+              if (has(phrase, "all on")) {
+                  relay_state_set_light(true, SRC_VOICE);
+                  relay_state_set_relay(true, SRC_VOICE);
+              }
+              if (has(phrase, "all off")) {
                   relay_state_set_light(false, SRC_VOICE);
                   relay_state_set_relay(false, SRC_VOICE);
               }
