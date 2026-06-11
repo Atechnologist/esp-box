@@ -1,0 +1,986 @@
+name: ESP32-S3-BOX INDUSTRIAL RELAY HUB FULL SYNC V3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v5.1
+    defaults:
+      run:
+        shell: bash
+    steps:
+
+      # =========================================================
+      # CHECKOUT
+      # =========================================================
+      - name: Checkout ESP-BOX
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Safe dir
+        run: git config --global --add safe.directory '*'
+
+      # =========================================================
+      # CLEAN
+      # =========================================================
+      - name: Clean
+        run: |
+          rm -rf examples/factory_demo/build || true
+          rm -rf examples/factory_demo/managed_components || true
+          rm -rf examples/factory_demo/dependencies.lock || true
+
+      # =========================================================
+      # RESTORE MANIFEST
+      # =========================================================
+      - name: Restore manifest
+        run: |
+          cd examples/factory_demo
+          git checkout idf_component.yml || true
+
+      - name: Enable Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+
+      # =========================================================
+      # FORCE ESP32-S3-BOX (not BOX-3)
+      # =========================================================
+      - name: Force ESP32-S3-BOX target
+        run: |
+          cd examples/factory_demo
+          sed -i '/CONFIG_ESP_BOX_3/d' sdkconfig.ci.box || true
+          echo "CONFIG_ESP_BOX_3=n" >> sdkconfig.ci.box
+
+      # =========================================================
+      # RELAY STATE
+      # =========================================================
+      - name: Add relay state manager
+        run: |
+          cat > examples/factory_demo/main/relay_state.h << 'EOF'
+          #pragma once
+          #include <stdbool.h>
+
+          typedef enum {
+              SRC_VOICE  = 0,
+              SRC_WEB    = 1,
+              SRC_ESPNOW = 2,
+              SRC_BOXUI  = 3,
+          } relay_src_t;
+
+          void relay_state_init(void);
+          void relay_state_set_light(bool on, relay_src_t src);
+          void relay_state_set_relay(bool on, relay_src_t src);
+          void relay_state_toggle_relay(relay_src_t src);
+          bool relay_state_get_light(void);
+          bool relay_state_get_relay(void);
+          EOF
+
+          cat > examples/factory_demo/main/relay_state.c << 'EOF'
+          #include "relay_state.h"
+          #include "app_led.h"
+          #include "web_server.h"
+          #include "espnow_relay.h"
+          #include "esp_log.h"
+          #include <stdio.h>
+
+          static const char *TAG = "STATE";
+          static bool s_light = false;
+          static bool s_relay = false;
+
+          void relay_state_init(void)
+          {
+              s_light = false;
+              s_relay = false;
+              ESP_LOGI(TAG, "State manager ready");
+          }
+
+          void relay_state_set_light(bool on, relay_src_t src)
+          {
+              s_light = on;
+              const char *who[] = {"VOICE","WEB","ESPNOW","BOXUI"};
+              char log[64];
+              snprintf(log, sizeof(log),
+                       "[%s] LIGHT %s", who[src], on ? "ON":"OFF");
+              ESP_LOGI(TAG, "%s", log);
+              web_server_log_voice(log);
+
+              /* Drive LED unless BOXUI already did it */
+              if (src != SRC_BOXUI)
+                  app_pwm_led_set_power(on);
+
+              /* Broadcast to relay unless cmd came from there */
+              if (src != SRC_ESPNOW)
+                  espnow_relay_broadcast(on ? "LIGHT:ON" : "LIGHT:OFF");
+          }
+
+          void relay_state_set_relay(bool on, relay_src_t src)
+          {
+              s_relay = on;
+              const char *who[] = {"VOICE","WEB","ESPNOW","BOXUI"};
+              char log[64];
+              snprintf(log, sizeof(log),
+                       "[%s] RELAY %s", who[src], on ? "ON":"OFF");
+              ESP_LOGI(TAG, "%s", log);
+              web_server_log_voice(log);
+
+              if (src != SRC_ESPNOW)
+                  espnow_relay_broadcast(on ? "RELAY:ON" : "RELAY:OFF");
+          }
+
+          void relay_state_toggle_relay(relay_src_t src)
+          {
+              relay_state_set_relay(!s_relay, src);
+          }
+
+          bool relay_state_get_light(void) { return s_light; }
+          bool relay_state_get_relay(void) { return s_relay; }
+          EOF
+
+      # =========================================================
+      # NODE REGISTRY
+      # =========================================================
+      - name: Add node registry
+        run: |
+          cat > examples/factory_demo/main/node_registry.h << 'EOF'
+          #pragma once
+
+          void node_registry_init(void);
+          void node_registry_add(const char *node);
+          const char **node_registry_get_all(int *count);
+          int  node_registry_count(void);
+          EOF
+
+          cat > examples/factory_demo/main/node_registry.c << 'EOF'
+          #include "node_registry.h"
+          #include "esp_log.h"
+          #include <string.h>
+
+          #define MAX_NODES 20
+          static char        nodes[MAX_NODES][32];
+          static const char *ptrs[MAX_NODES];
+          static int         n_count = 0;
+
+          void node_registry_init(void)
+          {
+              memset(nodes, 0, sizeof(nodes));
+              n_count = 0;
+          }
+
+          void node_registry_add(const char *node)
+          {
+              if (!node || node[0] == '\0') return;
+              for (int i = 0; i < n_count; i++)
+                  if (strcmp(nodes[i], node) == 0) return;
+              if (n_count >= MAX_NODES) return;
+              strncpy(nodes[n_count], node, 31);
+              ptrs[n_count] = nodes[n_count];
+              n_count++;
+              ESP_LOGI("NODE_REG", "Added: %s", node);
+          }
+
+          const char **node_registry_get_all(int *c)
+          {
+              if (c) *c = n_count;
+              return ptrs;
+          }
+
+          int node_registry_count(void) { return n_count; }
+          EOF
+
+      # =========================================================
+      # ESPNOW RELAY
+      # =========================================================
+      - name: Add espnow relay
+        run: |
+          cat > examples/factory_demo/main/espnow_relay.h << 'EOF'
+          #pragma once
+
+          void espnow_relay_init(void);
+          void espnow_relay_broadcast(const char *msg);
+          EOF
+
+          cat > examples/factory_demo/main/espnow_relay.c << 'EOF'
+          #include "espnow_relay.h"
+          #include "relay_state.h"
+          #include "node_registry.h"
+          #include "web_server.h"
+          #include "esp_now.h"
+          #include "esp_wifi.h"
+          #include "esp_log.h"
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/task.h"
+          #include <string.h>
+          #include <stdio.h>
+
+          static const char *TAG = "ESPNOW";
+          static const uint8_t BCAST[6] =
+              {0xff,0xff,0xff,0xff,0xff,0xff};
+          static bool s_ready = false;
+
+          static void mac_str(const uint8_t *m, char *out, size_t len)
+          {
+              snprintf(out, len,
+                       "%02X:%02X:%02X:%02X:%02X:%02X",
+                       m[0],m[1],m[2],m[3],m[4],m[5]);
+          }
+
+          static void recv_cb(
+              const esp_now_recv_info_t *info,
+              const uint8_t *data, int len)
+          {
+              char msg[128] = {0};
+              int  n = len < (int)sizeof(msg)-1
+                       ? len : (int)sizeof(msg)-1;
+              memcpy(msg, data, n);
+              char mac[24];
+              mac_str(info->src_addr, mac, sizeof(mac));
+              ESP_LOGI(TAG, "RX [%s] %s", mac, msg);
+              char log_line[96];
+
+              if (strncmp(msg, "DISCOVER:", 9) == 0)
+              {
+                  const char *name = msg + 9;
+                  node_registry_add(name);
+                  node_registry_add(mac);
+                  snprintf(log_line, sizeof(log_line),
+                           "NODE JOINED: %s", name);
+                  web_server_log_voice(log_line);
+                  espnow_relay_broadcast("BOX:READY");
+                  espnow_relay_broadcast(
+                      relay_state_get_light()
+                      ? "LIGHT:ON" : "LIGHT:OFF");
+                  espnow_relay_broadcast(
+                      relay_state_get_relay()
+                      ? "RELAY:ON" : "RELAY:OFF");
+                  return;
+              }
+
+              if (strncmp(msg, "NODE:", 5) == 0)
+              {
+                  char tmp[64] = {0};
+                  strncpy(tmp, msg + 5, sizeof(tmp)-1);
+                  char *sep = strchr(tmp, ':');
+                  if (sep) *sep = '\0';
+                  node_registry_add(tmp);
+                  node_registry_add(mac);
+                  return;
+              }
+
+              if (strcmp(msg, "PONG") == 0)
+              {
+                  node_registry_add(mac);
+                  snprintf(log_line, sizeof(log_line),
+                           "PONG from %s", mac);
+                  web_server_log_voice(log_line);
+                  return;
+              }
+
+              if (strncmp(msg, "ACK:LIGHT:", 10) == 0)
+              {
+                  node_registry_add(mac);
+                  bool on = strcmp(msg + 10, "ON") == 0;
+                  relay_state_set_light(on, SRC_ESPNOW);
+                  return;
+              }
+
+              if (strncmp(msg, "ACK:RELAY:", 10) == 0)
+              {
+                  node_registry_add(mac);
+                  bool on = strcmp(msg + 10, "ON") == 0;
+                  relay_state_set_relay(on, SRC_ESPNOW);
+                  return;
+              }
+
+              if (strncmp(msg, "RELAY:STATE:", 12) == 0)
+              {
+                  int light_on = 0, relay_on = 0;
+                  sscanf(msg + 12, "%d,%d", &light_on, &relay_on);
+                  relay_state_set_light(light_on != 0, SRC_ESPNOW);
+                  relay_state_set_relay(relay_on != 0, SRC_ESPNOW);
+                  return;
+              }
+
+              snprintf(log_line, sizeof(log_line),
+                       "RX [%s]: %s", mac, msg);
+              web_server_log_voice(log_line);
+          }
+
+          static void send_cb(
+              const uint8_t *mac,
+              esp_now_send_status_t status)
+          {
+              if (status != ESP_NOW_SEND_SUCCESS)
+                  ESP_LOGW(TAG,
+                      "TX FAIL %02X:%02X:%02X:%02X:%02X:%02X",
+                      mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+          }
+
+          static void ping_task(void *arg)
+          {
+              vTaskDelay(pdMS_TO_TICKS(4000));
+              while (1)
+              {
+                  if (s_ready)
+                  {
+                      esp_now_send(BCAST, (uint8_t *)"PING", 5);
+                      ESP_LOGI(TAG, "PING");
+                  }
+                  vTaskDelay(pdMS_TO_TICKS(10000));
+              }
+          }
+
+          static void espnow_init_task(void *arg)
+          {
+              uint8_t primary = 0;
+              wifi_second_chan_t second;
+              while (primary == 0)
+              {
+                  vTaskDelay(pdMS_TO_TICKS(500));
+                  esp_wifi_get_channel(&primary, &second);
+              }
+              char ch_msg[48];
+              snprintf(ch_msg, sizeof(ch_msg),
+                       "ESP-NOW ch:%d (set relay to match)", primary);
+              ESP_LOGI(TAG, "%s", ch_msg);
+              web_server_log_voice(ch_msg);
+
+              if (esp_now_init() != ESP_OK)
+              {
+                  ESP_LOGE(TAG, "esp_now_init failed");
+                  vTaskDelete(NULL);
+                  return;
+              }
+              esp_now_register_recv_cb(recv_cb);
+              esp_now_register_send_cb(send_cb);
+
+              esp_now_peer_info_t peer = {0};
+              memcpy(peer.peer_addr, BCAST, 6);
+              peer.channel = 0;
+              peer.encrypt = false;
+              esp_now_add_peer(&peer);
+
+              s_ready = true;
+              ESP_LOGI(TAG, "ESP-NOW ready ch%d", primary);
+              vTaskDelete(NULL);
+          }
+
+          void espnow_relay_init(void)
+          {
+              xTaskCreate(espnow_init_task,
+                          "espnow_init", 4096, NULL, 5, NULL);
+              xTaskCreate(ping_task,
+                          "espnow_ping", 2048, NULL, 4, NULL);
+          }
+
+          void espnow_relay_broadcast(const char *msg)
+          {
+              if (!s_ready || !msg) return;
+              esp_now_send(BCAST,
+                           (const uint8_t *)msg,
+                           strlen(msg) + 1);
+          }
+          EOF
+
+      # =========================================================
+      # VOICE HOOK
+      # =========================================================
+      - name: Add voice hook
+        run: |
+          cat > examples/factory_demo/main/voice_hook.h << 'EOF'
+          #pragma once
+
+          void voice_hook_init(void);
+          void voice_hook_process(const char *phrase);
+          EOF
+
+          cat > examples/factory_demo/main/voice_hook.c << 'EOF'
+          #include "voice_hook.h"
+          #include "relay_state.h"
+          #include "esp_log.h"
+          #include <string.h>
+
+          static const char *TAG = "VOICE";
+
+          static int has(const char *a, const char *b)
+          {
+              if (!a || !b) return 0;
+              return strstr(a, b) != NULL;
+          }
+
+          void voice_hook_init(void) { ESP_LOGI(TAG, "Voice ready"); }
+
+          void voice_hook_process(const char *phrase)
+          {
+              if (!phrase) return;
+              ESP_LOGI(TAG, "VOICE: %s", phrase);
+
+              if (has(phrase, "light"))
+              {
+                  if (has(phrase, "on"))
+                      relay_state_set_light(true, SRC_VOICE);
+                  else if (has(phrase, "off"))
+                      relay_state_set_light(false, SRC_VOICE);
+              }
+              if (has(phrase, "switch") || has(phrase, "relay"))
+              {
+                  if (has(phrase, "on"))
+                      relay_state_set_relay(true, SRC_VOICE);
+                  else if (has(phrase, "off"))
+                      relay_state_set_relay(false, SRC_VOICE);
+                  else if (has(phrase, "toggle"))
+                      relay_state_toggle_relay(SRC_VOICE);
+              }
+              if (has(phrase, "all on"))
+              {
+                  relay_state_set_light(true,  SRC_VOICE);
+                  relay_state_set_relay(true,  SRC_VOICE);
+              }
+              if (has(phrase, "all off"))
+              {
+                  relay_state_set_light(false, SRC_VOICE);
+                  relay_state_set_relay(false, SRC_VOICE);
+              }
+          }
+          EOF
+
+      # =========================================================
+      # WEB SERVER
+      # =========================================================
+      - name: Add web server
+        run: |
+          cat > examples/factory_demo/main/web_server.h << 'EOF'
+          #pragma once
+
+          void web_server_start(void);
+          void web_server_log_voice(const char *msg);
+          EOF
+
+          cat > examples/factory_demo/main/web_server.c << 'EOF'
+          #include "web_server.h"
+          #include "relay_state.h"
+          #include "node_registry.h"
+          #include "esp_http_server.h"
+          #include "esp_log.h"
+          #include "esp_app_desc.h"
+          #include <string.h>
+          #include <stdio.h>
+
+          static const char *TAG = "WEB";
+          static httpd_handle_t server = NULL;
+
+          #define LOG_SIZE 4096
+          static char logbuf[LOG_SIZE] = "-- log start --\n";
+
+          void web_server_log_voice(const char *msg)
+          {
+              if (!msg) return;
+              size_t cur  = strlen(logbuf);
+              size_t mlen = strlen(msg);
+              if (cur + mlen + 2 >= LOG_SIZE)
+              {
+                  size_t drop = mlen + 2;
+                  if (drop >= cur) drop = cur;
+                  memmove(logbuf, logbuf + drop, cur - drop + 1);
+                  cur = strlen(logbuf);
+              }
+              strncat(logbuf, msg,  LOG_SIZE - cur - 2);
+              strcat (logbuf, "\n");
+          }
+
+          static esp_err_t root_handler(httpd_req_t *req)
+          {
+              const esp_app_desc_t *app = esp_app_get_description();
+              char html[4096];
+              snprintf(html, sizeof(html),
+              "<!DOCTYPE html><html><head>"
+              "<meta charset='utf-8'><link rel='icon' href='data:,'>"
+              "<title>ESP32-BOX Industrial</title>"
+              "<style>"
+              "body{font-family:sans-serif;background:#1a1a2e;color:#eee;padding:20px;margin:0}"
+              "h1{color:#e94560;margin:0 0 4px}"
+              "p{margin:0 0 14px;color:#aaa;font-size:13px}"
+              ".row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}"
+              ".btn{padding:11px 22px;border:none;border-radius:7px;cursor:pointer;font-size:14px;font-weight:bold}"
+              ".on{background:#27ae60;color:#fff}.off{background:#e74c3c;color:#fff}"
+              ".tog{background:#8e44ad;color:#fff}.png{background:#2980b9;color:#fff}"
+              ".card{background:#16213e;border-radius:8px;padding:14px;margin-bottom:14px}"
+              ".dot{display:inline-block;width:12px;height:12px;border-radius:50%%;margin-right:6px}"
+              ".on-dot{background:#2ecc71}.off-dot{background:#7f8c8d}"
+              "table{width:100%%;border-collapse:collapse}"
+              "th,td{border:1px solid #2c3e50;padding:7px 10px;text-align:left;font-size:13px}"
+              "th{background:#0f3460}"
+              "#log{background:#0d1117;padding:12px;height:220px;overflow-y:auto;"
+                   "border-radius:6px;font-size:12px;white-space:pre-wrap;"
+                   "font-family:monospace;color:#8be9fd}"
+              "</style></head><body>"
+              "<h1>&#x1F3ED; ESP32-S3-BOX Industrial Hub</h1>"
+              "<p>Firmware: <b>%s</b></p>"
+              "<div class='card'><b>&#x1F4A1; Light</b>&nbsp;"
+              "<span id='li' class='dot off-dot'></span><span id='ls'>OFF</span><br><br>"
+              "<div class='row'>"
+              "<button class='btn on'  onclick=\"cmd('/light/on')\">Light ON</button>"
+              "<button class='btn off' onclick=\"cmd('/light/off')\">Light OFF</button>"
+              "</div></div>"
+              "<div class='card'><b>&#x26A1; Relay</b>&nbsp;"
+              "<span id='ri' class='dot off-dot'></span><span id='rs'>OFF</span><br><br>"
+              "<div class='row'>"
+              "<button class='btn on'  onclick=\"cmd('/relay/on')\">Relay ON</button>"
+              "<button class='btn off' onclick=\"cmd('/relay/off')\">Relay OFF</button>"
+              "<button class='btn tog' onclick=\"cmd('/relay/toggle')\">Toggle</button>"
+              "</div></div>"
+              "<div class='card'><b>&#x1F4E1; Nodes (<span id='nc'>-</span>)</b>"
+              "<button class='btn png' style='float:right;padding:6px 14px'"
+              " onclick=\"cmd('/ping')\">PING</button>"
+              "<table style='margin-top:10px'>"
+              "<tr><th>#</th><th>Node</th><th>Status</th></tr>"
+              "<tbody id='nodes'><tr><td colspan=3>Waiting...</td></tr></tbody></table></div>"
+              "<div class='card'><b>&#x1F4CB; Event Log</b>"
+              "<div id='log' style='margin-top:8px'>Loading...</div></div>"
+              "<script>"
+              "function cmd(u){fetch(u).then(()=>refresh());}"
+              "function refresh(){"
+              "fetch('/status').then(r=>r.json()).then(d=>{"
+              "  document.getElementById('li').className='dot '+(d.light?'on-dot':'off-dot');"
+              "  document.getElementById('ls').textContent=d.light?'ON':'OFF';"
+              "  document.getElementById('ri').className='dot '+(d.relay?'on-dot':'off-dot');"
+              "  document.getElementById('rs').textContent=d.relay?'ON':'OFF';"
+              "}).catch(()=>{});"
+              "fetch('/nodes').then(r=>r.json()).then(d=>{"
+              "  document.getElementById('nc').textContent=d.length;"
+              "  var tb=document.getElementById('nodes');"
+              "  tb.innerHTML=d.length===0?'<tr><td colspan=3>No nodes yet</td></tr>'"
+              "    :d.map((n,i)=>'<tr><td>'+(i+1)+'</td><td>'+n+"
+              "    '</td><td>&#x1F7E2; Online</td></tr>').join('');"
+              "}).catch(()=>{});"
+              "fetch('/log').then(r=>r.text()).then(t=>{"
+              "  var el=document.getElementById('log');"
+              "  el.textContent=t;el.scrollTop=el.scrollHeight;"
+              "}).catch(()=>{});"
+              "}"
+              "refresh();setInterval(refresh,2500);"
+              "</script></body></html>",
+              app->version);
+              httpd_resp_set_type(req, "text/html");
+              httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          static esp_err_t status_handler(httpd_req_t *req)
+          {
+              char buf[64];
+              snprintf(buf, sizeof(buf),
+                       "{\"light\":%s,\"relay\":%s}",
+                       relay_state_get_light() ? "true":"false",
+                       relay_state_get_relay() ? "true":"false");
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          static esp_err_t nodes_handler(httpd_req_t *req)
+          {
+              char buf[1024] = "[";
+              int  count = 0;
+              const char **nodes = node_registry_get_all(&count);
+              for (int i = 0; i < count; i++)
+              {
+                  if (i > 0) strncat(buf, ",",  sizeof(buf)-strlen(buf)-1);
+                  strncat(buf, "\"",     sizeof(buf)-strlen(buf)-1);
+                  strncat(buf, nodes[i], sizeof(buf)-strlen(buf)-1);
+                  strncat(buf, "\"",     sizeof(buf)-strlen(buf)-1);
+              }
+              strncat(buf, "]", sizeof(buf)-strlen(buf)-1);
+              httpd_resp_set_type(req, "application/json");
+              httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          static esp_err_t log_handler(httpd_req_t *req)
+          {
+              httpd_resp_set_type(req, "text/plain");
+              httpd_resp_send(req, logbuf, HTTPD_RESP_USE_STRLEN);
+              return ESP_OK;
+          }
+
+          static esp_err_t light_on_h(httpd_req_t *req)
+          { relay_state_set_light(true,  SRC_WEB); httpd_resp_send(req,"OK",2); return ESP_OK; }
+          static esp_err_t light_off_h(httpd_req_t *req)
+          { relay_state_set_light(false, SRC_WEB); httpd_resp_send(req,"OK",2); return ESP_OK; }
+          static esp_err_t relay_on_h(httpd_req_t *req)
+          { relay_state_set_relay(true,  SRC_WEB); httpd_resp_send(req,"OK",2); return ESP_OK; }
+          static esp_err_t relay_off_h(httpd_req_t *req)
+          { relay_state_set_relay(false, SRC_WEB); httpd_resp_send(req,"OK",2); return ESP_OK; }
+          static esp_err_t relay_toggle_h(httpd_req_t *req)
+          { relay_state_toggle_relay(SRC_WEB); httpd_resp_send(req,"OK",2); return ESP_OK; }
+
+          extern void espnow_relay_broadcast(const char *msg);
+
+          static esp_err_t ping_h(httpd_req_t *req)
+          {
+              espnow_relay_broadcast("PING");
+              web_server_log_voice("Manual PING sent");
+              httpd_resp_send(req, "OK", 2);
+              return ESP_OK;
+          }
+
+          static esp_err_t favicon_h(httpd_req_t *req)
+          {
+              httpd_resp_set_status(req, "204 No Content");
+              httpd_resp_send(req, NULL, 0);
+              return ESP_OK;
+          }
+
+          void web_server_start(void)
+          {
+              if (server) return;
+              httpd_config_t cfg   = HTTPD_DEFAULT_CONFIG();
+              cfg.stack_size       = 8192;
+              cfg.max_uri_handlers = 16;
+              if (httpd_start(&server, &cfg) != ESP_OK)
+              {
+                  ESP_LOGE(TAG, "httpd start failed");
+                  return;
+              }
+              httpd_uri_t uris[] = {
+                  {"/",             HTTP_GET, root_handler,   NULL},
+                  {"/status",       HTTP_GET, status_handler, NULL},
+                  {"/nodes",        HTTP_GET, nodes_handler,  NULL},
+                  {"/log",          HTTP_GET, log_handler,    NULL},
+                  {"/light/on",     HTTP_GET, light_on_h,     NULL},
+                  {"/light/off",    HTTP_GET, light_off_h,    NULL},
+                  {"/relay/on",     HTTP_GET, relay_on_h,     NULL},
+                  {"/relay/off",    HTTP_GET, relay_off_h,    NULL},
+                  {"/relay/toggle", HTTP_GET, relay_toggle_h, NULL},
+                  {"/ping",         HTTP_GET, ping_h,         NULL},
+                  {"/favicon.ico",  HTTP_GET, favicon_h,      NULL},
+              };
+              for (int i = 0;
+                   i < (int)(sizeof(uris)/sizeof(uris[0])); i++)
+                  httpd_register_uri_handler(server, &uris[i]);
+              ESP_LOGI(TAG, "Web server started");
+          }
+          EOF
+
+      # =========================================================
+      # PATCH CMAKE
+      # =========================================================
+      - name: Patch CMake
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          sed -i '/voice_hook.c/d'    $FILE || true
+          sed -i '/web_server.c/d'    $FILE || true
+          sed -i '/espnow_relay.c/d'  $FILE || true
+          sed -i '/node_registry.c/d' $FILE || true
+          sed -i '/relay_state.c/d'   $FILE || true
+          sed -i 's/main.c/main.c voice_hook.c web_server.c espnow_relay.c node_registry.c relay_state.c/' $FILE
+
+      # =========================================================
+      # PATCH MAIN — includes + init calls
+      # =========================================================
+      - name: Patch main includes
+        run: |
+          FILE=examples/factory_demo/main/main.c
+          for H in voice_hook.h web_server.h espnow_relay.h \
+                   node_registry.h relay_state.h; do
+            sed -i "/${H}/d" $FILE || true
+          done
+          LAST=$(grep -n "^#include" $FILE | tail -1 | cut -d: -f1)
+          sed -i "${LAST}a #include \"node_registry.h\"" $FILE
+          sed -i "${LAST}a #include \"relay_state.h\""   $FILE
+          sed -i "${LAST}a #include \"espnow_relay.h\""  $FILE
+          sed -i "${LAST}a #include \"web_server.h\""    $FILE
+          sed -i "${LAST}a #include \"voice_hook.h\""    $FILE
+
+      - name: Patch main calls
+        run: |
+          FILE=examples/factory_demo/main/main.c
+          for FN in voice_hook_init web_server_start    \
+                    espnow_relay_init relay_state_init  \
+                    node_registry_init; do
+            sed -i "/${FN}()/d" $FILE || true
+          done
+          sed -i '/app_rmaker_start()/a \
+          vTaskDelay(pdMS_TO_TICKS(1000));\
+          relay_state_init();\
+          node_registry_init();\
+          web_server_start();\
+          voice_hook_init();\
+          espnow_relay_init();' $FILE
+
+      # =========================================================
+      # PATCH app_sr_handler.c — Python with correct struct access
+      #
+      # The error told us:
+      #   result is sr_result_t (a STRUCT, not a pointer)
+      #   so use result.phrase  NOT  result->phrase
+      #
+      # We print the file first so we can see the exact context,
+      # then inject voice_hook_process(result.phrase) correctly.
+      # =========================================================
+      - name: Patch SR handler
+        run: |
+          python3 << 'PYEOF'
+          import os, re, sys
+
+          sr_file = None
+          for root, dirs, files in os.walk("examples/factory_demo"):
+              for f in files:
+                  if f == "app_sr_handler.c":
+                      sr_file = os.path.join(root, f)
+                      break
+
+          if not sr_file:
+              print("app_sr_handler.c not found — skip")
+              sys.exit(0)
+
+          print(f"Patching: {sr_file}")
+          with open(sr_file) as fh:
+              src = fh.read()
+
+          # ── 1. Add includes ──────────────────────────────────
+          if "voice_hook.h" not in src:
+              src = '#include "voice_hook.h"\n' + src
+          if "relay_state.h" not in src:
+              src = '#include "relay_state.h"\n' + src
+
+          # ── 2. Inject voice_hook_process ─────────────────────
+          # From the error we know:
+          #   result is sr_result_t (struct, not pointer)
+          #   phrase field exists inside it
+          # Strategy: find any ESP_LOGI that mentions "phrase"
+          # or "command" near the sr result handling and inject
+          # voice_hook_process(result.phrase) after it.
+          # Use result.phrase (dot notation, not arrow).
+
+          if "voice_hook_process" not in src:
+              # Pattern: look for where result.phrase or
+              # result.command_id is used
+              patterns = [
+                  # Match an ESP_LOGI line containing "phrase"
+                  r'(ESP_LOGI\s*\([^;]*phrase[^;]*;)',
+                  # Match an ESP_LOGI line containing "command"
+                  r'(ESP_LOGI\s*\([^;]*command[^;]*;)',
+                  # Match direct use of result.phrase
+                  r'(result\.phrase[^;]*;)',
+                  # Match result.command_id assignment/use
+                  r'(result\.command_id[^;]*;)',
+              ]
+
+              injected = False
+              for pat in patterns:
+                  m = re.search(pat, src)
+                  if m:
+                      target = m.group(0)
+                      replacement = (
+                          target +
+                          "\n    if (result.phrase) {"
+                          "\n        voice_hook_process(result.phrase);"
+                          "\n    }"
+                      )
+                      src = src.replace(target, replacement, 1)
+                      print(f"Injected voice_hook_process after:\n  {target[:80]}")
+                      injected = True
+                      break
+
+              if not injected:
+                  # Last resort: append a note and inject at
+                  # end of sr_handler_task function
+                  print("WARNING: No pattern matched. Check SR handler manually.")
+                  # Find end of sr_handler_task and insert before last }
+                  task_end = src.rfind("vTaskDelete(NULL)")
+                  if task_end != -1:
+                      insert_pt = src.rfind(";", 0, task_end) + 1
+                      inject = (
+                          "\n    /* voice relay hook — injected */\n"
+                          "    if (result.phrase) {\n"
+                          "        voice_hook_process(result.phrase);\n"
+                          "    }\n"
+                      )
+                      src = src[:insert_pt] + inject + src[insert_pt:]
+                      print("Appended voice hook before vTaskDelete")
+
+          # ── 3. Inject relay_state_set_light for BOX UI ──────
+          # app_pwm_led_set_power is called with true/false inside
+          # the sr handler — patch those calls to also notify relay
+          if "relay_state_set_light" not in src:
+              def add_relay(m):
+                  val = m.group(1)  # true or false
+                  return (
+                      f"app_pwm_led_set_power({val});\n"
+                      f"    relay_state_set_light({val}, SRC_BOXUI);"
+                  )
+              new_src = re.sub(
+                  r'app_pwm_led_set_power\((true|false)\);',
+                  add_relay, src
+              )
+              if new_src != src:
+                  src = new_src
+                  print("Injected relay_state_set_light after LED calls in SR handler")
+
+          with open(sr_file, "w") as fh:
+              fh.write(src)
+
+          print("SR handler patch complete")
+          PYEOF
+
+      # =========================================================
+      # PATCH app_led.c — inject relay sync for BOX UI buttons
+      #
+      # BOX touch buttons call app_pwm_led_set_power() in app_led.c
+      # We inject relay_state_set_light() right after the hardware
+      # call so every touch button press syncs web UI + ESP-NOW.
+      # =========================================================
+      - name: Patch app_led.c
+        run: |
+          python3 << 'PYEOF'
+          import os, re, sys
+
+          led_file = None
+          for root, dirs, files in os.walk("examples/factory_demo"):
+              for f in files:
+                  if f == "app_led.c":
+                      led_file = os.path.join(root, f)
+                      break
+
+          if not led_file:
+              print("app_led.c not found — skip")
+              sys.exit(0)
+
+          print(f"Patching: {led_file}")
+          with open(led_file) as fh:
+              src = fh.read()
+
+          print("=== app_led.c ===")
+          print(src)
+
+          changed = False
+
+          # Add relay_state.h include
+          if "relay_state.h" not in src:
+              src = '#include "relay_state.h"\n' + src
+              changed = True
+
+          # Find app_pwm_led_set_power function body and inject
+          # relay_state_set_light after the actual hardware call.
+          # We look for gpio_set_level or ledc calls inside the
+          # function and inject after the last one in the function.
+          if "relay_state_set_light" not in src:
+              # Match any gpio_set_level or ledc_set_duty call
+              hw_pat = re.compile(
+                  r'((?:gpio_set_level|ledc_set_duty|ledc_update_duty'
+                  r'|pwm_set_duty|led_strip_set_pixel)\s*\([^;]*\)\s*;)'
+              )
+              # Find the function
+              func_pat = re.compile(
+                  r'void\s+app_pwm_led_set_power\s*\([^)]*\)\s*\{'
+              )
+              fm = func_pat.search(src)
+              if fm:
+                  func_start = fm.start()
+                  # Find the matching closing brace
+                  depth = 0
+                  func_end = func_start
+                  for i in range(func_start, len(src)):
+                      if src[i] == '{': depth += 1
+                      elif src[i] == '}':
+                          depth -= 1
+                          if depth == 0:
+                              func_end = i
+                              break
+
+                  func_body = src[func_start:func_end+1]
+                  print(f"\nFound app_pwm_led_set_power:\n{func_body}\n")
+
+                  # Find last hw call in the function body
+                  hw_matches = list(hw_pat.finditer(func_body))
+                  if hw_matches:
+                      last_hw = hw_matches[-1]
+                      inject = (
+                          last_hw.group(0) +
+                          "\n    relay_state_set_light(on, SRC_BOXUI);"
+                      )
+                      new_body = (
+                          func_body[:last_hw.start()] +
+                          inject +
+                          func_body[last_hw.end():]
+                      )
+                      src = src[:func_start] + new_body + src[func_end+1:]
+                      changed = True
+                      print("Injected relay_state_set_light in app_led.c")
+                  else:
+                      # No hw call found — inject before closing brace
+                      # by finding "return" or end of function
+                      inject = "\n    relay_state_set_light(on, SRC_BOXUI);\n"
+                      close_brace_pos = func_start + func_body.rfind("}")
+                      src = src[:close_brace_pos] + inject + src[close_brace_pos:]
+                      changed = True
+                      print("Injected relay_state_set_light before closing brace")
+              else:
+                  print("app_pwm_led_set_power function not found in app_led.c")
+
+          if changed:
+              with open(led_file, "w") as fh:
+                  fh.write(src)
+              print("app_led.c saved")
+          else:
+              print("app_led.c — no changes needed")
+          PYEOF
+
+      # =========================================================
+      # SDKCONFIG
+      # =========================================================
+      - name: Patch sdkconfig
+        run: |
+          cd examples/factory_demo
+          echo 'CONFIG_ESP_TASK_WDT=n' >> sdkconfig.ci.box
+
+      # =========================================================
+      # BUILD
+      # =========================================================
+      - name: Build firmware
+        run: |
+          source $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+          idf.py fullclean
+          idf.py build
+
+      # =========================================================
+      # MERGE BIN
+      # =========================================================
+      - name: Merge firmware
+        run: |
+          source $IDF_PATH/export.sh
+          cd examples/factory_demo/build
+
+          echo "=== flash_args ==="
+          cat flash_args
+
+          python $IDF_PATH/components/esptool_py/esptool/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o factory.bin \
+            --flash_mode dio \
+            --flash_freq 80m \
+            --flash_size 16MB \
+            $(cat flash_args)
+
+          echo "=== Binary info ==="
+          ls -lh factory.bin
+          sha256sum factory.bin
+
+      # =========================================================
+      # UPLOAD
+      # =========================================================
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-s3-box-industrial
+          path: examples/factory_demo/build/factory.bin
+          retention-days: 30
