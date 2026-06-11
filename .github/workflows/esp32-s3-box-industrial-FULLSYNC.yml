@@ -947,6 +947,13 @@ jobs:
           grep -Rni "sr_handler" examples/factory_demo || true
       
           find examples/factory_demo -name "*sr*" -o -name "*speech*" -o -name "*voice*"
+
+      - name: Find SR handler
+        run: |
+         grep -R "command:Turn On the Light" \
+         examples/factory_demo/main \
+         components \
+         -n || true
       # =========================================================
       # BUILD
       # =========================================================
