@@ -954,6 +954,23 @@ jobs:
          examples/factory_demo/main \
          components \
          -n || true
+        
+      - name: Find SR source files
+        run: |
+         echo "===== app_sr ====="
+         grep -R "Detected command" examples/factory_demo components -n || true
+
+          echo "===== sr_handler ====="
+          grep -R "sr_handler" examples/factory_demo components -n || true
+
+          echo "===== Turn On the Light ====="
+          grep -R "Turn On the Light" examples/factory_demo components -n || true
+
+          echo "===== act:3 ====="
+          grep -R "act:3" examples/factory_demo components -n || true
+
+          echo "===== voice ====="
+          grep -R "voice" examples/factory_demo/main -n | head -100 || true
       # =========================================================
       # BUILD
       # =========================================================
