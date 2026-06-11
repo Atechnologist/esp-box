@@ -933,7 +933,19 @@ jobs:
         run: |
           cd examples/factory_demo
           echo 'CONFIG_ESP_TASK_WDT=n' >> sdkconfig.ci.box
-
+            - name: Find SR Handler
+          run: |
+          echo "=== SEARCHING VOICE COMMAND HANDLER ==="
+      
+          grep -Rni "command:Turn On the Light" examples/factory_demo || true
+      
+          grep -Rni "act:3" examples/factory_demo || true
+      
+          grep -Rni "Detected command" examples/factory_demo || true
+      
+          grep -Rni "sr_handler" examples/factory_demo || true
+      
+          find examples/factory_demo -name "*sr*" -o -name "*speech*" -o -name "*voice*"
       # =========================================================
       # BUILD
       # =========================================================
