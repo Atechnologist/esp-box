@@ -973,8 +973,8 @@ jobs:
           grep -R "voice" examples/factory_demo/main -n | head -100 || true
 
 
-         - name: Dump SR handler
-         run: |
+      - name: Dump SR handler
+        run: |
           echo "===== app_sr_handler.c ====="
           sed -n '130,260p' examples/factory_demo/main/app/app_sr_handler.c   
       # =========================================================
