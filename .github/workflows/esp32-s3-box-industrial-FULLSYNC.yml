@@ -894,24 +894,23 @@ jobs:
           find examples/factory_demo -name "*led*" -print || true
       
       # =========================================================
-      # PATCH SR HANDLER — voice commands
+      # PATCH SR HANDLER (Logic Injection)
       # =========================================================
       - name: Patch SR handler
         run: |
-          FILE=$(find examples/factory_demo \
-                 -name "app_sr_handler.c" | head -1)
-          if [ ! -z "$FILE" ]; then
-            if ! grep -q 'voice_hook.h' "$FILE"; then
-              sed -i '1i #include "voice_hook.h"' "$FILE"
-            fi
-            if ! grep -q 'voice_hook_process(result->phrase);' \
-                 "$FILE"; then
-              sed -i '/ESP_LOGI.*phrase/a\
-              if (result && result->phrase) {\
-                  voice_hook_process(result->phrase);\
-              }' "$FILE"
-            fi
+          FILE=$(find examples/factory_demo -name "app_sr_handler.c" | head -1)
+          
+          # 1. Ensure the header is included at the top
+          if ! grep -q 'voice_hook.h' "$FILE"; then
+            sed -i '1i #include "voice_hook.h"' "$FILE"
           fi
+          
+          # 2. Inject hooks directly into the SR command switch statement.
+          # This ensures that whenever the SR engine detects 'ON' or 'OFF',
+          # your relay_state logic is triggered in addition to the LED.
+          sed -i '/case SR_CMD_LIGHT_ON:/a \            voice_hook_process("light on");' "$FILE"
+          sed -i '/case SR_CMD_LIGHT_OFF:/a \            voice_hook_process("light off");' "$FILE"
+
       - name: Diagnostic SR Hook
         run: |
           FILE=$(find examples/factory_demo -name "app_sr_handler.c" | head -1)
