@@ -840,7 +840,58 @@ jobs:
           web_server_start();\
           voice_hook_init();\
           espnow_relay_init();' $FILE
+      # =========================================================
+      # DIAGNOSTIC - FIND REAL VOICE/LIGHT HANDLER
+      # =========================================================
+      - name: Locate Voice And Light Handlers
+        run: |
+          echo "======================================="
+          echo "SEARCHING FOR SR HANDLERS"
+          echo "======================================="
 
+          grep -RIn "sr_handler" examples/factory_demo || true
+          grep -RIn "Turn On the Light" examples/factory_demo || true
+          grep -RIn "Turn Off the Light" examples/factory_demo || true
+          grep -RIn "act:3" examples/factory_demo || true
+          grep -RIn "act:4" examples/factory_demo || true
+
+          echo ""
+          echo "======================================="
+          echo "SEARCHING FOR LIGHT CALLBACKS"
+          echo "======================================="
+
+          grep -RIn "Light" examples/factory_demo/main || true
+          grep -RIn "Power" examples/factory_demo/main || true
+          grep -RIn "esp_rmaker_param" examples/factory_demo/main || true
+          grep -RIn "app_driver_light_set_power" examples/factory_demo/main || true
+          grep -RIn "app_light_set_power" examples/factory_demo/main || true
+          grep -RIn "app_led_set_power" examples/factory_demo/main || true
+          grep -RIn "app_pwm_led_set_power" examples/factory_demo/main || true
+
+          echo ""
+          echo "======================================="
+          echo "SEARCHING FOR COMMAND TABLES"
+          echo "======================================="
+
+          grep -RIn "command_id" examples/factory_demo || true
+          grep -RIn "phrase_id" examples/factory_demo || true
+          grep -RIn "Detected command" examples/factory_demo || true
+
+          echo ""
+          echo "======================================="
+          echo "APP_SR FILES"
+          echo "======================================="
+
+          find examples/factory_demo -name "*sr*.c" -print || true
+          find examples/factory_demo -name "*sr*.h" -print || true
+
+          echo ""
+          echo "======================================="
+          echo "LIGHT DRIVER FILES"
+          echo "======================================="
+
+          find examples/factory_demo -name "*light*" -print || true
+          find examples/factory_demo -name "*led*" -print || true
       # =========================================================
       # PATCH SR HANDLER — voice commands
       # =========================================================
