@@ -892,6 +892,7 @@ jobs:
 
           find examples/factory_demo -name "*light*" -print || true
           find examples/factory_demo -name "*led*" -print || true
+      
       # =========================================================
       # PATCH SR HANDLER — voice commands
       # =========================================================
@@ -911,7 +912,20 @@ jobs:
               }' "$FILE"
             fi
           fi
-
+      - name: Diagnostic SR Hook
+        run: |
+          FILE=$(find examples/factory_demo -name "app_sr_handler.c" | head -1)
+      
+          echo "==== SR FILE ===="
+          echo "$FILE"
+      
+          grep -n "voice_hook" "$FILE" || true
+      
+          grep -n "voice_hook_process" "$FILE" || true
+      
+          grep -n "Detected command" "$FILE" || true
+      
+          sed -n '1,250p' "$FILE"
       # =========================================================
       # SDKCONFIG
       # =========================================================
