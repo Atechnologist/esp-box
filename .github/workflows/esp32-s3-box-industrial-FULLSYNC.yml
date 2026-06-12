@@ -975,7 +975,26 @@ jobs:
       - name: Dump SR handler
         run: |
           echo "===== app_sr_handler.c ====="
-          sed -n '130,260p' examples/factory_demo/main/app/app_sr_handler.c   
+          sed -n '130,260p' examples/factory_demo/main/app/app_sr_handler.c
+
+      - name: Patch SR handler voice sync
+        run: |
+         FILE=examples/factory_demo/main/app/app_sr_handler.c
+
+         sed -i '/#include "app_sr_handler.h"/a\
+         #include "relay_state.h"' $FILE
+
+         sed -i '/case SR_CMD_LIGHT_ON:/,/break;/c\
+            case SR_CMD_LIGHT_ON:\
+                relay_state_set_light(true, SRC_VOICE);\
+                relay_state_set_relay(true, SRC_VOICE);\
+                break;' $FILE
+
+         sed -i '/case SR_CMD_LIGHT_OFF:/,/break;/c\
+            case SR_CMD_LIGHT_OFF:\
+                relay_state_set_light(false, SRC_VOICE);\
+                relay_state_set_relay(false, SRC_VOICE);\
+                break;' $FILE
       # =========================================================
       # BUILD
       # =========================================================
