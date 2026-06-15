@@ -961,17 +961,23 @@ jobs:
          grep -R "ui_dev_ctrl" \
          examples/factory_demo/main \
          -n || true
+         
          - name: Patch BOX UI Sync
            run: |
            sed -i 's/app_pwm_led_set_power(!state);/relay_state_set_light(!state, SRC_BUTTON); relay_state_set_relay(!state, SRC_BUTTON);/' \
            examples/factory_demo/main/gui/ui_device_ctrl.c
 
-           - name: Add relay_state include
+         - name: Add relay_state include
              run: |
              grep -q "relay_state.h" \
              examples/factory_demo/main/gui/ui_device_ctrl.c || \
              sed -i '/#include "app_led.h"/a #include "relay_state.h"' \
              examples/factory_demo/main/gui/ui_device_ctrl.c
+
+             - name: Show UI control code
+               run: |
+               sed -n '55,90p' \
+               examples/factory_demo/main/gui/ui_device_ctrl.c
 
 
       
