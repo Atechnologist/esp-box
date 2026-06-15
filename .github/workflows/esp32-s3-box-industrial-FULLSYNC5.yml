@@ -1,4 +1,4 @@
-name: ESP32-S3-BOX INDUSTRIAL RELAY HUB FULL SYNC V5
+name: ESP32-S3-BOX INDUSTRIAL RELAY HUB FULL SYNC V6
 
 on:
   workflow_dispatch:
@@ -56,6 +56,41 @@ jobs:
           cd examples/factory_demo
           sed -i '/CONFIG_ESP_BOX_3/d' sdkconfig.ci.box || true
           echo "CONFIG_ESP_BOX_3=n" >> sdkconfig.ci.box
+
+      # =========================================================
+      # AUDIT — print every GUI and app file so we can see
+      # exactly what the light button calls in the BOX UI
+      # =========================================================
+      - name: Audit UI files
+        run: |
+          echo "=== All C files calling app_pwm_led or led_set or set_power ==="
+          grep -rn "app_pwm_led\|led_set_power\|set_power\|_led_" \
+            examples/factory_demo/main/ \
+            --include="*.c" || true
+
+          echo ""
+          echo "=== ui_device_ctrl.c FULL ==="
+          UI=$(find examples/factory_demo -name "ui_device_ctrl.c" | head -1)
+          [ -f "$UI" ] && cat -n "$UI" || echo "not found"
+
+          echo ""
+          echo "=== app_switch.c FULL ==="
+          SW=$(find examples/factory_demo -name "app_switch.c" | head -1)
+          [ -f "$SW" ] && cat -n "$SW" || echo "not found"
+
+          echo ""
+          echo "=== app_led.c FULL ==="
+          LED=$(find examples/factory_demo -name "app_led.c" | head -1)
+          [ -f "$LED" ] && cat -n "$LED" || echo "not found"
+
+          echo ""
+          echo "=== app_sr_handler.c FULL ==="
+          SR=$(find examples/factory_demo -name "app_sr_handler.c" | head -1)
+          [ -f "$SR" ] && cat -n "$SR" || echo "not found"
+
+          echo ""
+          echo "=== All .c files in main/ ==="
+          find examples/factory_demo/main -name "*.c" | sort
 
       # =========================================================
       # RELAY STATE
@@ -193,6 +228,12 @@ jobs:
 
       # =========================================================
       # ESPNOW RELAY
+      # Now also handles M5Stack wireless mic commands:
+      #   MIC:CMD:3  → Light ON  (same act codes as BOX SR)
+      #   MIC:CMD:4  → Light OFF
+      #   MIC:CMD:5  → Switch ON
+      #   MIC:CMD:6  → Switch OFF
+      #   MIC:PHRASE:turn on the light  → text phrase fallback
       # =========================================================
       - name: Add espnow relay
         run: |
@@ -215,6 +256,7 @@ jobs:
           #include "freertos/task.h"
           #include <string.h>
           #include <stdio.h>
+          #include <stdlib.h>
 
           static const char *TAG = "ESPNOW";
           static const uint8_t BCAST[6] =
@@ -226,6 +268,66 @@ jobs:
               snprintf(out, len,
                        "%02X:%02X:%02X:%02X:%02X:%02X",
                        m[0],m[1],m[2],m[3],m[4],m[5]);
+          }
+
+          /* ── handle phrase text from M5 mic ─────────────────── */
+          static void handle_mic_phrase(const char *phrase)
+          {
+              if (!phrase) return;
+
+              char log[80];
+              snprintf(log, sizeof(log), "[M5MIC] %s", phrase);
+              web_server_log_voice(log);
+              ESP_LOGI(TAG, "M5 phrase: %s", phrase);
+
+              /* Simple keyword match — mirrors voice_hook logic */
+              bool has_light  = strstr(phrase, "light") != NULL;
+              bool has_relay  = strstr(phrase, "relay") != NULL ||
+                                strstr(phrase, "switch") != NULL;
+              bool has_on     = strstr(phrase, " on")  != NULL;
+              bool has_off    = strstr(phrase, " off") != NULL;
+              bool has_all    = strstr(phrase, "all")  != NULL;
+
+              if (has_all && has_on)
+              {
+                  relay_state_set_light(true,  SRC_VOICE);
+                  relay_state_set_relay(true,  SRC_VOICE);
+              }
+              else if (has_all && has_off)
+              {
+                  relay_state_set_light(false, SRC_VOICE);
+                  relay_state_set_relay(false, SRC_VOICE);
+              }
+              else if (has_light && has_on)
+                  relay_state_set_light(true,  SRC_VOICE);
+              else if (has_light && has_off)
+                  relay_state_set_light(false, SRC_VOICE);
+              else if (has_relay && has_on)
+                  relay_state_set_relay(true,  SRC_VOICE);
+              else if (has_relay && has_off)
+                  relay_state_set_relay(false, SRC_VOICE);
+          }
+
+          /* ── handle act code from M5 mic ────────────────────── */
+          /* M5Stack sends same command_id as the BOX SR library:
+           *   act 3 = Light ON   act 4 = Light OFF
+           *   act 5 = Switch ON  act 6 = Switch OFF
+           * (matches factory demo RainMaker voice config)          */
+          static void handle_mic_cmd(int act)
+          {
+              char log[48];
+              snprintf(log, sizeof(log), "[M5MIC] act:%d", act);
+              web_server_log_voice(log);
+              ESP_LOGI(TAG, "M5 act: %d", act);
+
+              switch (act)
+              {
+                  case 3: relay_state_set_light(true,  SRC_VOICE); break;
+                  case 4: relay_state_set_light(false, SRC_VOICE); break;
+                  case 5: relay_state_set_relay(true,  SRC_VOICE); break;
+                  case 6: relay_state_set_relay(false, SRC_VOICE); break;
+                  default: break;
+              }
           }
 
           static void recv_cb(
@@ -241,6 +343,7 @@ jobs:
               ESP_LOGI(TAG, "RX [%s] %s", mac, msg);
               char log_line[96];
 
+              /* ── relay node messages ──────────────────────── */
               if (strncmp(msg, "DISCOVER:", 9) == 0)
               {
                   const char *name = msg + 9;
@@ -304,6 +407,48 @@ jobs:
                   return;
               }
 
+              /* ── M5Stack wireless mic messages ────────────── */
+
+              /* MIC:CMD:N  — act code from M5 SR library */
+              if (strncmp(msg, "MIC:CMD:", 8) == 0)
+              {
+                  node_registry_add(mac);
+                  int act = atoi(msg + 8);
+                  handle_mic_cmd(act);
+                  return;
+              }
+
+              /* MIC:PHRASE:text — recognised phrase text */
+              if (strncmp(msg, "MIC:PHRASE:", 11) == 0)
+              {
+                  node_registry_add(mac);
+                  handle_mic_phrase(msg + 11);
+                  return;
+              }
+
+              /* MIC:DISCOVER:name — M5 announces itself */
+              if (strncmp(msg, "MIC:DISCOVER:", 13) == 0)
+              {
+                  const char *name = msg + 13;
+                  node_registry_add(name);
+                  node_registry_add(mac);
+                  snprintf(log_line, sizeof(log_line),
+                           "MIC NODE: %s", name);
+                  web_server_log_voice(log_line);
+                  /* Acknowledge so M5 knows it's connected */
+                  espnow_relay_broadcast("BOX:READY");
+                  return;
+              }
+
+              /* MIC:WAKE — wake word detected on M5, BOX plays tone */
+              if (strcmp(msg, "MIC:WAKE") == 0)
+              {
+                  node_registry_add(mac);
+                  web_server_log_voice("[M5MIC] Wake word detected");
+                  return;
+              }
+
+              /* Unknown */
               snprintf(log_line, sizeof(log_line),
                        "RX [%s]: %s", mac, msg);
               web_server_log_voice(log_line);
@@ -651,7 +796,7 @@ jobs:
       # =========================================================
       # PATCH app_sr_handler.c
       # Inject relay_state_set_light after app_pwm_led_set_power
-      # calls — covers voice commands (already working)
+      # (voice commands — already working, keep this patch)
       # =========================================================
       - name: Patch app_sr_handler.c
         run: |
@@ -666,8 +811,7 @@ jobs:
                       break
 
           if not sr_file:
-              print("app_sr_handler.c not found")
-              sys.exit(0)
+              print("not found"); sys.exit(0)
 
           with open(sr_file) as fh:
               src = fh.read()
@@ -679,19 +823,16 @@ jobs:
               changed = True
 
           if "relay_state_set_light" not in src:
-              def inject_light(m):
+              def inject(m):
                   val = m.group(1)
-                  return (
-                      f"app_pwm_led_set_power({val});\n"
-                      f"        relay_state_set_light({val}, SRC_BOXUI);"
-                  )
-              new_src = re.sub(
+                  return (f"app_pwm_led_set_power({val});\n"
+                          f"        relay_state_set_light({val}, SRC_BOXUI);")
+              new = re.sub(
                   r'app_pwm_led_set_power\(\s*(true|false|\w+)\s*\)\s*;',
-                  inject_light, src)
-              if new_src != src:
-                  src = new_src
-                  changed = True
-                  print("SR handler: injected relay_state_set_light")
+                  inject, src)
+              if new != src:
+                  src = new; changed = True
+                  print("SR handler: relay_state_set_light injected")
 
           if changed:
               with open(sr_file, "w") as fh:
@@ -699,163 +840,95 @@ jobs:
           PYEOF
 
       # =========================================================
-      # PATCH ui_device_ctrl.c
+      # PATCH ALL GUI/APP FILES — broad sweep
       #
-      # This is the file that handles BOX touchscreen button taps.
-      # It calls app_pwm_led_set_power() directly when the light
-      # toggle is pressed — which is why the LED turns on but the
-      # relay node doesn't get notified.
+      # Since ui_device_ctrl.c does NOT call app_pwm_led_set_power
+      # directly, we do a broad Python sweep across ALL .c files
+      # in the main/ tree looking for any function that sets LED
+      # state that we haven't patched yet.
       #
-      # We print the file so we can confirm the exact call site,
-      # then inject relay_state_set_light after each LED call.
+      # The Audit step output will show us exactly which file
+      # and function the light button uses so we can confirm.
       # =========================================================
-      - name: Patch ui_device_ctrl.c
+      - name: Patch all LED call sites
         run: |
           python3 << 'PYEOF'
           import os, re, sys
 
-          ui_file = None
-          for root, dirs, files in os.walk("examples/factory_demo"):
-              for f in files:
-                  if f == "ui_device_ctrl.c":
-                      ui_file = os.path.join(root, f)
-                      break
+          # Files we already handle — skip them here
+          already_patched = {
+              "app_sr_handler.c",
+              "relay_state.c",
+              "web_server.c",
+              "espnow_relay.c",
+              "node_registry.c",
+          }
 
-          if not ui_file:
-              print("ui_device_ctrl.c not found")
-              sys.exit(0)
+          # Patterns that indicate an LED state set
+          led_patterns = [
+              # Direct power call (bool literal or variable)
+              re.compile(
+                  r'app_pwm_led_set_power\(\s*(true|false|\w+)\s*\)\s*;'),
+              # RGB set with all zeros = off, or non-zero = on
+              re.compile(
+                  r'app_led_set_all_rgb\(\s*(\d+)\s*,\s*\d+\s*,\s*\d+\s*\)\s*;'),
+              # app_led_set_power if it exists
+              re.compile(
+                  r'app_led_set_power\(\s*(true|false|\w+)\s*\)\s*;'),
+          ]
 
-          print(f"=== Patching: {ui_file} ===")
-          with open(ui_file) as fh:
-              src = fh.read()
+          total_injected = 0
 
-          print(src)
-          print("=== End ui_device_ctrl.c ===")
+          for root, dirs, files in os.walk("examples/factory_demo/main"):
+              for fname in files:
+                  if not fname.endswith(".c"):
+                      continue
+                  if fname in already_patched:
+                      continue
 
-          changed = False
+                  fpath = os.path.join(root, fname)
+                  with open(fpath) as fh:
+                      src = fh.read()
 
-          # Add relay_state.h include
-          if "relay_state.h" not in src:
-              src = '#include "relay_state.h"\n' + src
-              changed = True
-              print("Added relay_state.h include")
+                  # Skip files that don't mention LED at all
+                  if ("app_pwm_led" not in src and
+                      "app_led_set" not in src):
+                      continue
 
-          # Inject relay_state_set_light after every
-          # app_pwm_led_set_power call in this file
-          if "relay_state_set_light" not in src:
-              def inject_light(m):
-                  val = m.group(1)   # true, false, or variable name
-                  # Determine bool expression for relay call
-                  if val in ('true', 'false'):
-                      bool_val = val
-                  else:
-                      # It's a variable — pass it directly
-                      bool_val = val
-                  return (
-                      f"app_pwm_led_set_power({val});\n"
-                      f"    relay_state_set_light({bool_val}, SRC_BOXUI);"
-                  )
-              new_src = re.sub(
-                  r'app_pwm_led_set_power\(\s*(true|false|\w+)\s*\)\s*;',
-                  inject_light, src)
-              if new_src != src:
-                  src = new_src
-                  changed = True
-                  print("ui_device_ctrl: injected relay_state_set_light")
-              else:
-                  print("WARNING: no app_pwm_led_set_power found in ui_device_ctrl.c")
+                  print(f"\n--- Checking: {fpath} ---")
 
-          # Also look for gpio_set_level calls controlling switch/relay
-          # gpio 38 is the switch per RainMaker dump
-          if "relay_state_set_relay" not in src:
-              def inject_relay(m):
-                  full  = m.group(0)
-                  level = m.group(1)   # the level argument
-                  bool_val = (
-                      'true'  if level in ('1', 'true')  else
-                      'false' if level in ('0', 'false') else
-                      f"({level} != 0)"
-                  )
-                  return (
-                      full + "\n"
-                      f"    relay_state_set_relay({bool_val}, SRC_BOXUI);"
-                  )
-              gpio_pat = re.compile(
-                  r'gpio_set_level\s*\([^,)]+,\s*(\w+)\s*\)\s*;'
-              )
-              new_src = gpio_pat.sub(inject_relay, src)
-              if new_src != src:
-                  src = new_src
-                  changed = True
-                  print("ui_device_ctrl: injected relay_state_set_relay after GPIO")
+                  changed = False
 
-          if changed:
-              with open(ui_file, "w") as fh:
-                  fh.write(src)
-              print("ui_device_ctrl.c saved")
-          else:
-              print("ui_device_ctrl.c — no changes needed")
-          PYEOF
+                  # Add include if needed
+                  if "relay_state.h" not in src:
+                      src = '#include "relay_state.h"\n' + src
+                      changed = True
 
-      # =========================================================
-      # PATCH app_led.c
-      # Belt-and-suspenders: also patch app_led.c itself so any
-      # other caller of app_pwm_led_set_power is covered
-      # =========================================================
-      - name: Patch app_led.c
-        run: |
-          python3 << 'PYEOF'
-          import os, re, sys
+                  # Inject after app_pwm_led_set_power calls
+                  if "relay_state_set_light" not in src:
+                      def inject_led(m):
+                          val = m.group(1)
+                          return (
+                              f"app_pwm_led_set_power({val});\n"
+                              f"    relay_state_set_light({val}, SRC_BOXUI);"
+                          )
+                      new = re.sub(
+                          r'app_pwm_led_set_power\(\s*(true|false|\w+)\s*\)\s*;',
+                          inject_led, src)
+                      if new != src:
+                          src = new; changed = True
+                          print(f"  -> injected relay_state_set_light")
+                          total_injected += 1
 
-          led_file = None
-          for root, dirs, files in os.walk("examples/factory_demo"):
-              for f in files:
-                  if f == "app_led.c":
-                      led_file = os.path.join(root, f)
-                      break
+                  if changed:
+                      with open(fpath, "w") as fh:
+                          fh.write(src)
+                      print(f"  -> saved {fname}")
 
-          if not led_file:
-              print("app_led.c not found")
-              sys.exit(0)
-
-          with open(led_file) as fh:
-              src = fh.read()
-
-          changed = False
-
-          if "relay_state.h" not in src:
-              src = '#include "relay_state.h"\n' + src
-              changed = True
-
-          if "relay_state_set_light" not in src:
-              # Find app_pwm_led_set_power function and get param name
-              func_pat = re.compile(
-                  r'void\s+app_pwm_led_set_power\s*\(\s*bool\s+(\w+)\s*\)')
-              fm = func_pat.search(src)
-              if fm:
-                  param = fm.group(1)
-                  # Find closing brace of function
-                  func_start = fm.start()
-                  depth = 0
-                  func_end = func_start
-                  for i in range(func_start, len(src)):
-                      if src[i] == '{': depth += 1
-                      elif src[i] == '}':
-                          depth -= 1
-                          if depth == 0:
-                              func_end = i
-                              break
-                  inject = (
-                      f"\n    relay_state_set_light({param}, SRC_BOXUI);"
-                  )
-                  src = (src[:func_end] + inject + "\n" +
-                         src[func_end:])
-                  changed = True
-                  print(f"app_led.c: injected relay_state_set_light({param})")
-
-          if changed:
-              with open(led_file, "w") as fh:
-                  fh.write(src)
+          print(f"\nTotal files patched: {total_injected}")
+          if total_injected == 0:
+              print("WARNING: No LED call sites found outside SR handler.")
+              print("Check Audit step output for the actual function name used.")
           PYEOF
 
       # =========================================================
