@@ -939,6 +939,28 @@ jobs:
           cd examples/factory_demo
           echo 'CONFIG_ESP_TASK_WDT=n' >> sdkconfig.ci.box
 
+      
+      - name: Find BOX UI Light Handler
+        run: |
+         echo "===== ui_dev_ctrl ====="
+         grep -R "set_power" \
+         examples/factory_demo/main \
+         -n || true
+
+         echo "===== Light Power ====="
+         grep -R "Request to set the power of Light" \
+         examples/factory_demo/main \
+         -n || true
+
+         echo "===== app_pwm_led_set_power ====="
+         grep -R "app_pwm_led_set_power" \
+         examples/factory_demo/main \
+         -n || true
+
+         echo "===== ui_dev_ctrl ====="
+         grep -R "ui_dev_ctrl" \
+         examples/factory_demo/main \
+         -n || true
       # =========================================================
       # BUILD
       # =========================================================
