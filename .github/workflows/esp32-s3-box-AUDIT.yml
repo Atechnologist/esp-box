@@ -1,0 +1,131 @@
+name: ESP32-S3-BOX AUDIT ONLY
+
+on:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v5.1
+    defaults:
+      run:
+        shell: bash
+    steps:
+
+      # =========================================================
+      # CHECKOUT
+      # =========================================================
+      - name: Checkout ESP-BOX
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-box
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Safe dir
+        run: git config --global --add safe.directory '*'
+
+      # =========================================================
+      # RESTORE MANIFEST (needed to pull managed components)
+      # =========================================================
+      - name: Restore manifest
+        run: |
+          cd examples/factory_demo
+          git checkout idf_component.yml || true
+
+      - name: Enable Component Manager
+        run: echo "IDF_COMPONENT_MANAGER=1" >> $GITHUB_ENV
+
+      # =========================================================
+      # RECONFIGURE — pulls managed_components so GUI files exist
+      # =========================================================
+      - name: Reconfigure to pull components
+        run: |
+          source $IDF_PATH/export.sh
+          cd examples/factory_demo
+          idf.py set-target esp32s3
+          cp sdkconfig.ci.box sdkconfig
+          idf.py reconfigure || true
+
+      # =========================================================
+      # AUDIT
+      # =========================================================
+
+      - name: 1 — All files calling app_pwm_led_set_power
+        run: |
+          echo "===== app_pwm_led_set_power callers ====="
+          grep -rn "app_pwm_led_set_power" \
+            examples/factory_demo/ \
+            --include="*.c" --include="*.h" || echo "NONE"
+
+      - name: 2 — All files calling app_led_set
+        run: |
+          echo "===== app_led_set* callers ====="
+          grep -rn "app_led_set\|app_led_ctrl\|led_set\|set_power" \
+            examples/factory_demo/main/ \
+            --include="*.c" || echo "NONE"
+
+      - name: 3 — ui_device_ctrl.c full source
+        run: |
+          echo "===== ui_device_ctrl.c ====="
+          find examples/factory_demo -name "ui_device_ctrl.c" \
+            -exec cat -n {} \; || echo "NOT FOUND"
+
+      - name: 4 — app_led.c full source
+        run: |
+          echo "===== app_led.c ====="
+          find examples/factory_demo -name "app_led.c" \
+            -exec cat -n {} \; || echo "NOT FOUND"
+
+      - name: 5 — app_switch.c full source
+        run: |
+          echo "===== app_switch.c ====="
+          find examples/factory_demo -name "app_switch.c" \
+            -exec cat -n {} \; || echo "NOT FOUND"
+
+      - name: 6 — app_sr_handler.c full source
+        run: |
+          echo "===== app_sr_handler.c ====="
+          find examples/factory_demo -name "app_sr_handler.c" \
+            -exec cat -n {} \; || echo "NOT FOUND"
+
+      - name: 7 — All GUI .c files list
+        run: |
+          echo "===== GUI source files ====="
+          find examples/factory_demo/main -name "*.c" | sort
+
+      - name: 8 — Every function called from ui_device_ctrl
+        run: |
+          echo "===== ui_device_ctrl.c outgoing calls ====="
+          find examples/factory_demo -name "ui_device_ctrl.c" \
+            -exec grep -n "[a-z_]*(" {} \; | \
+            grep -v "//" | grep -v "^\s*/\*" || echo "NOT FOUND"
+
+      - name: 9 — Light toggle callback — who handles it
+        run: |
+          echo "===== light toggle / switch callbacks ====="
+          grep -rn "light\|Light\|toggle\|switch\|Switch\|power\|Power" \
+            examples/factory_demo/main/ \
+            --include="*.c" | \
+            grep -v "\.o\|build/" | \
+            grep "cb\|callback\|handler\|event\|click\|tap\|btn" \
+            || echo "NONE"
+
+      - name: 10 — RainMaker write callback for Light Power
+        run: |
+          echo "===== RainMaker write callbacks ====="
+          find examples/factory_demo -name "*.c" \
+            -exec grep -ln "write_cb\|rmaker.*write\|param.*write" {} \; | \
+            xargs -I{} sh -c 'echo "--- {} ---"; cat -n {}'
+
+      - name: 11 — app_rmaker.c full source
+        run: |
+          echo "===== app_rmaker.c ====="
+          find examples/factory_demo -name "app_rmaker.c" \
+            -exec cat -n {} \; || echo "NOT FOUND"
+
+      - name: 12 — Directory tree of main
+        run: |
+          echo "===== main/ directory tree ====="
+          find examples/factory_demo/main -type f | sort
