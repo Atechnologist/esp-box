@@ -988,6 +988,11 @@ jobs:
          echo "===== relay_state.h ====="
          sed -n '1,120p' \
          examples/factory_demo/main/relay_state.h || true
+      
+      - name: Fix BOX UI relay source
+        run: |
+         sed -i 's/SRC_BUTTON/SRC_BOXUI/g' \
+         examples/factory_demo/main/gui/ui_device_ctrl.c
       # =========================================================
       # BUILD
       # =========================================================
