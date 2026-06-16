@@ -993,6 +993,11 @@ jobs:
         run: |
          sed -i 's/SRC_BUTTON/SRC_BOXUI/g' \
          examples/factory_demo/main/gui/ui_device_ctrl.c
+      
+      - name: UI callback diagnostic
+        run: |
+         sed -i '/relay_state_set_light/i\        ESP_LOGI("BOXUI", "Light button pressed");' \
+         examples/factory_demo/main/gui/ui_device_ctrl.c
       # =========================================================
       # BUILD
       # =========================================================
