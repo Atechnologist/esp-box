@@ -1004,6 +1004,10 @@ jobs:
           examples/factory_demo/main/gui/ui_device_ctrl.c
       
           sed -n '60,90p' examples/factory_demo/main/gui/ui_device_ctrl.c   
+
+      - name: Show relay_state.c
+        run: |
+         sed -n '1,120p' examples/factory_demo/main/relay_state.c
       # =========================================================
       # BUILD
       # =========================================================
@@ -1016,7 +1020,8 @@ jobs:
           idf.py fullclean
           idf.py build
 
-      # =========================================================
+      
+     # =========================================================
       # MERGE BIN
       # =========================================================
       - name: Merge firmware
