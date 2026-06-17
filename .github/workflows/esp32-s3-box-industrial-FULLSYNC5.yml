@@ -1008,6 +1008,11 @@ jobs:
       - name: Show relay_state.c
         run: |
          sed -n '1,120p' examples/factory_demo/main/relay_state.c
+
+      - name: Fix BOX UI LED handling
+        run: |
+         sed -i 's/if (src != SRC_BOXUI)//g' \
+         examples/factory_demo/main/relay_state.c
       # =========================================================
       # BUILD
       # =========================================================
