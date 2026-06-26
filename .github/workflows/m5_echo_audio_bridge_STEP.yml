@@ -12,8 +12,8 @@
       # local mic input, it runs alongside it. Both audio
       # sources feed the same recognizer.
       # =========================================================
-      - name: Add m5_echo_bridge
-        run: |
+     - name: Add m5_echo_bridge
+       run: |
           cat > examples/factory_demo/main/m5_echo_bridge.h << 'EOF'
           #pragma once
           #include <stdint.h>
