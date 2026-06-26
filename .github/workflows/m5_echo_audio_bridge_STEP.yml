@@ -1,18 +1,3 @@
-      # =========================================================
-      # M5 ECHO AUDIO BRIDGE
-      #
-      # Receives binary PCM frames from the M5 ATOM Echo over
-      # ESP-NOW (distinguished from text messages by leading
-      # byte 0xA5) and feeds reassembled audio into the SAME
-      # esp-sr recognition pipeline already used for the BOX's
-      # built-in mic, by writing into the AFE ring buffer that
-      # app_sr.c reads from.
-      #
-      # This file is ADDITIVE — it does not replace the BOX's
-      # local mic input, it runs alongside it. Both audio
-      # sources feed the same recognizer.
-      # =========================================================
-      
        - name: Add m5_echo_bridge
          run: |
           cat > examples/factory_demo/main/m5_echo_bridge.h << 'EOF'
