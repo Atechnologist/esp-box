@@ -1,0 +1,242 @@
+      # =========================================================
+      # M5 ECHO AUDIO BRIDGE
+      #
+      # Receives binary PCM frames from the M5 ATOM Echo over
+      # ESP-NOW (distinguished from text messages by leading
+      # byte 0xA5) and feeds reassembled audio into the SAME
+      # esp-sr recognition pipeline already used for the BOX's
+      # built-in mic, by writing into the AFE ring buffer that
+      # app_sr.c reads from.
+      #
+      # This file is ADDITIVE — it does not replace the BOX's
+      # local mic input, it runs alongside it. Both audio
+      # sources feed the same recognizer.
+      # =========================================================
+      - name: Add m5_echo_bridge
+        run: |
+          cat > examples/factory_demo/main/m5_echo_bridge.h << 'EOF'
+          #pragma once
+          #include <stdint.h>
+          #include <stddef.h>
+
+          void m5_echo_bridge_init(void);
+
+          /* Called by espnow_relay when a binary audio frame
+           * arrives (leading byte 0xA5).                       */
+          void m5_echo_bridge_handle_frame(const uint8_t *data,
+                                           int len);
+          EOF
+
+          cat > examples/factory_demo/main/m5_echo_bridge.c << 'EOF'
+          #include "m5_echo_bridge.h"
+          #include "esp_log.h"
+          #include "freertos/FreeRTOS.h"
+          #include "freertos/ringbuf.h"
+          #include <string.h>
+
+          static const char *TAG = "M5_ECHO";
+
+          #define FRAME_MARKER     0xA5
+          #define FRAME_START_UTT  0xFF
+          #define FRAME_END_UTT    0xFE
+
+          /* Ring buffer holding reassembled PCM16 audio.
+           * app_sr.c's audio feed task should be modified to
+           * also pull from this buffer — see integration note
+           * at the bottom of this file.                         */
+          static RingbufHandle_t s_audio_rb = NULL;
+          #define AUDIO_RB_SIZE (32 * 1024)   /* ~1 second @16kHz */
+
+          static bool s_utterance_active = false;
+          static uint32_t s_frames_received = 0;
+          static uint32_t s_bytes_received  = 0;
+
+          void m5_echo_bridge_init(void)
+          {
+              s_audio_rb = xRingbufferCreate(
+                  AUDIO_RB_SIZE, RINGBUF_TYPE_BYTEBUF);
+
+              if (!s_audio_rb)
+              {
+                  ESP_LOGE(TAG, "Failed to create audio ring buffer");
+                  return;
+              }
+
+              ESP_LOGI(TAG, "M5 Echo audio bridge ready (%d byte buffer)",
+                       AUDIO_RB_SIZE);
+          }
+
+          void m5_echo_bridge_handle_frame(const uint8_t *data, int len)
+          {
+              if (len < 4 || data[0] != FRAME_MARKER) return;
+
+              uint8_t  marker = data[1];
+              uint16_t chunk_len = data[2] | (data[3] << 8);
+
+              if (marker == FRAME_START_UTT)
+              {
+                  s_utterance_active = true;
+                  s_frames_received  = 0;
+                  s_bytes_received   = 0;
+
+                  /* Clear stale audio from any previous utterance */
+                  if (s_audio_rb)
+                  {
+                      size_t avail;
+                      void *item;
+                      while ((item = xRingbufferReceive(
+                                  s_audio_rb, &avail, 0)) != NULL)
+                      {
+                          vRingbufferReturnItem(s_audio_rb, item);
+                      }
+                  }
+
+                  ESP_LOGI(TAG, "Utterance START");
+                  return;
+              }
+
+              if (marker == FRAME_END_UTT)
+              {
+                  s_utterance_active = false;
+                  ESP_LOGI(TAG,
+                           "Utterance END (%u frames, %u bytes)",
+                           s_frames_received, s_bytes_received);
+                  return;
+              }
+
+              /* Regular audio chunk */
+              if (!s_utterance_active)
+              {
+                  ESP_LOGW(TAG, "Audio chunk without START — ignoring");
+                  return;
+              }
+
+              if (chunk_len == 0 || (4 + chunk_len) > len) return;
+
+              if (s_audio_rb)
+              {
+                  BaseType_t ok = xRingbufferSend(
+                      s_audio_rb,
+                      data + 4,
+                      chunk_len,
+                      pdMS_TO_TICKS(20));
+
+                  if (ok != pdTRUE)
+                  {
+                      ESP_LOGW(TAG, "Ring buffer full — dropping chunk");
+                  }
+              }
+
+              s_frames_received++;
+              s_bytes_received += chunk_len;
+          }
+
+          /* ── accessor for app_sr.c integration ──────────────────
+           * Call this from the audio feed task to pull bytes that
+           * came from the M5 Echo, mixed in alongside the BOX's
+           * own I2S mic samples. Returns bytes copied, 0 if empty.
+           *
+           *   size_t n = m5_echo_bridge_read(buf, want_len);
+           *
+           * NOTE: This function is intentionally NOT static so it
+           * can be called from app_sr.c after this header is
+           * included there. See integration instructions below.
+           * ──────────────────────────────────────────────────── */
+          size_t m5_echo_bridge_read(uint8_t *out, size_t max_len)
+          {
+              if (!s_audio_rb) return 0;
+
+              size_t item_size = 0;
+              uint8_t *item = (uint8_t *)xRingbufferReceiveUpTo(
+                  s_audio_rb, &item_size, 0, max_len);
+
+              if (!item) return 0;
+
+              memcpy(out, item, item_size);
+              vRingbufferReturnItem(s_audio_rb, item);
+              return item_size;
+          }
+          EOF
+
+      # =========================================================
+      # PATCH espnow_relay.c — route binary frames to bridge
+      #
+      # Binary audio frames are distinguished from text protocol
+      # messages by checking the first byte. Text messages
+      # (DISCOVER:, PING, ACK:, etc.) always start with a
+      # printable ASCII character. 0xA5 is not printable ASCII,
+      # so this check is safe and unambiguous.
+      # =========================================================
+      - name: Patch espnow_relay.c for audio frames
+        run: |
+          python3 << 'PYEOF'
+          import re
+
+          path = "examples/factory_demo/main/espnow_relay.c"
+
+          with open(path) as fh:
+              src = fh.read()
+
+          changed = False
+
+          if "m5_echo_bridge.h" not in src:
+              src = '#include "m5_echo_bridge.h"\n' + src
+              changed = True
+
+          # Insert a binary-frame check at the TOP of recv_cb,
+          # before any text-based strncmp comparisons run.
+          marker = "static void recv_cb("
+          idx = src.find(marker)
+          if idx != -1 and "FRAME_MARKER" not in src[idx:idx+2000]:
+              # Find the opening brace of recv_cb and the first
+              # statement after it (memcpy of msg)
+              brace_idx = src.find("{", idx)
+              # Find end of the existing memcpy(msg, data, n); line
+              memcpy_idx = src.find("memcpy(msg, data, n);", brace_idx)
+              if memcpy_idx != -1:
+                  insert_at = memcpy_idx + len("memcpy(msg, data, n);")
+                  inject = (
+                      "\n\n              /* Binary audio frame from M5 Echo mic —\n"
+                      "               * check BEFORE any text parsing since 0xA5\n"
+                      "               * is not valid ASCII for our text protocol */\n"
+                      "              if (len > 0 && data[0] == 0xA5)\n"
+                      "              {\n"
+                      "                  m5_echo_bridge_handle_frame(data, len);\n"
+                      "                  return;\n"
+                      "              }"
+                  )
+                  src = src[:insert_at] + inject + src[insert_at:]
+                  changed = True
+                  print("Injected binary frame check in recv_cb")
+              else:
+                  print("WARNING: could not find memcpy(msg, data, n); pattern")
+
+          if changed:
+              with open(path, "w") as fh:
+                  fh.write(src)
+              print("espnow_relay.c patched for audio frames")
+          PYEOF
+
+      # =========================================================
+      # PATCH CMakeLists.txt — add m5_echo_bridge.c
+      # =========================================================
+      - name: Patch CMake for m5_echo_bridge
+        run: |
+          FILE=examples/factory_demo/main/CMakeLists.txt
+          sed -i '/m5_echo_bridge.c/d' $FILE || true
+          sed -i 's/relay_state.c/relay_state.c m5_echo_bridge.c/' $FILE
+
+      # =========================================================
+      # PATCH main.c — init the bridge
+      # =========================================================
+      - name: Patch main.c for m5_echo_bridge
+        run: |
+          FILE=examples/factory_demo/main/main.c
+          sed -i '/m5_echo_bridge.h/d' $FILE || true
+          sed -i '/m5_echo_bridge_init()/d' $FILE || true
+
+          LAST=$(grep -n "^#include" $FILE | tail -1 | cut -d: -f1)
+          sed -i "${LAST}a #include \"m5_echo_bridge.h\"" $FILE
+
+          sed -i '/espnow_relay_init()/a \
+          m5_echo_bridge_init();' $FILE
