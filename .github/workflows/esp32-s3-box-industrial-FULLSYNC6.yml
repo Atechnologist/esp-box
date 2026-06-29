@@ -406,7 +406,52 @@ jobs:
                   relay_state_set_relay(relay_on != 0, SRC_ESPNOW);
                   return;
               }
+              
+              /* ---------- Wireless remote commands (ATOM Echo etc.) ---------- */
 
+            if (strcmp(msg, "LIGHT:ON") == 0)
+            {
+                ESP_LOGI(TAG, "RX: LIGHT ON");
+                relay_state_set_light(true, SRC_ESPNOW);
+                relay_state_set_relay(true, SRC_ESPNOW);
+                return;
+            }
+            
+            if (strcmp(msg, "LIGHT:OFF") == 0)
+            {
+                ESP_LOGI(TAG, "RX: LIGHT OFF");
+                relay_state_set_light(false, SRC_ESPNOW);
+                relay_state_set_relay(false, SRC_ESPNOW);
+                return;
+            }
+            
+            if (strcmp(msg, "RELAY:ON") == 0)
+            {
+                ESP_LOGI(TAG, "RX: RELAY ON");
+                relay_state_set_relay(true, SRC_ESPNOW);
+                return;
+            }
+            
+            if (strcmp(msg, "RELAY:OFF") == 0)
+            {
+                ESP_LOGI(TAG, "RX: RELAY OFF");
+                relay_state_set_relay(false, SRC_ESPNOW);
+                return;
+            }
+            
+            if (strcmp(msg, "VOICE:ON") == 0)
+            {
+                ESP_LOGI(TAG, "RX: VOICE ON");
+                web_server_log_voice("Remote microphone active");
+                return;
+            }
+            
+            if (strcmp(msg, "VOICE:OFF") == 0)
+            {
+                ESP_LOGI(TAG, "RX: VOICE OFF");
+                web_server_log_voice("Remote microphone idle");
+                return;
+            }
               /* ── M5Stack wireless mic messages ────────────── */
 
               /* MIC:CMD:N  — act code from M5 SR library */
