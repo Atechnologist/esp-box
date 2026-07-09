@@ -28,17 +28,38 @@ jobs:
       - name: Safe dir
         run: git config --global --add safe.directory '*'
 
+      - name: Debug Repository Layout
+        run: |
+         echo "Current directory:"
+         pwd
+
+         echo ""
+         echo "Repository root:"
+         ls -la
+
+         echo ""
+         echo "Looking for patches directory..."
+         find . -type d -name patches
+
+         echo ""
+         echo "Looking for espnow_manager..."
+         find . -name espnow_manager.c
+
+         echo ""
+         echo "Repository tree (first few levels):"
+         find . -maxdepth 3
+
 
       # ==========================================
       # Install ESP-BOX OS Core
       # ==========================================
 
-      - name: Install ESP-BOX OS Core
-        run: |
-          mkdir -p examples/factory_demo/main/core/espnow_manager
+      #- name: Install ESP-BOX OS Core
+        #run: |
+          #mkdir -p examples/factory_demo/main/core/espnow_manager
       
-          cp -r patches/core/espnow_manager/* \
-             examples/factory_demo/main/core/espnow_manager/  
+          #cp -r patches/core/espnow_manager/* \
+             #examples/factory_demo/main/core/espnow_manager/  
 
       # =========================================================
       # CLEAN
