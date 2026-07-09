@@ -54,12 +54,12 @@ jobs:
       # Install ESP-BOX OS Core
       # ==========================================
 
-      #- name: Install ESP-BOX OS Core
-        #run: |
+      - name: Install ESP-BOX OS Core
+        run: |
           #mkdir -p examples/factory_demo/main/core/espnow_manager
       
-          #cp -r patches/core/espnow_manager/* \
-             #examples/factory_demo/main/core/espnow_manager/  
+          cp -r patches/core/espnow_manager/* \
+             examples/factory_demo/main/core/espnow_manager/  
 
       # =========================================================
       # CLEAN
