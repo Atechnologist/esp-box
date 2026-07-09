@@ -34,23 +34,23 @@ jobs:
           ./tools/build_espbox_os.sh
           
       - name: Install ESP-BOX OS
-       run: |
+        run: |
 
-        mkdir -p examples/factory_demo/main/core
-        mkdir -p examples/factory_demo/main/hardware
-        mkdir -p examples/factory_demo/main/services
-        mkdir -p examples/factory_demo/main/ai
+         mkdir -p examples/factory_demo/main/core
+         mkdir -p examples/factory_demo/main/hardware
+         mkdir -p examples/factory_demo/main/services
+         mkdir -p examples/factory_demo/main/ai
 
          cp -r patches/core/* \
           examples/factory_demo/main/core/ || true
 
-        cp -r patches/hardware/* \
+         cp -r patches/hardware/* \
           examples/factory_demo/main/hardware/ || true
 
-        cp -r patches/services/* \
+         cp -r patches/services/* \
           examples/factory_demo/main/services/ || true
 
-        cp -r patches/ai/* \
+         cp -r patches/ai/* \
           examples/factory_demo/main/ai/ || true
        
       # =========================================================
