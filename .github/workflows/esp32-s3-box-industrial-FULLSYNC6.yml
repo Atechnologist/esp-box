@@ -28,39 +28,31 @@ jobs:
       - name: Safe dir
         run: git config --global --add safe.directory '*'
 
-      - name: Debug Repository Layout
+      - name: Build ESP-BOX OS
         run: |
-         echo "Current directory:"
-         pwd
+         chmod +x tools/build_espbox_os.sh
+          ./tools/build_espbox_os.sh
+          
+      - name: Install ESP-BOX OS
+       run: |
 
-         echo ""
-         echo "Repository root:"
-         ls -la
+        mkdir -p examples/factory_demo/main/core
+        mkdir -p examples/factory_demo/main/hardware
+        mkdir -p examples/factory_demo/main/services
+        mkdir -p examples/factory_demo/main/ai
 
-         echo ""
-         echo "Looking for patches directory..."
-         find . -type d -name patches
+         cp -r patches/core/* \
+          examples/factory_demo/main/core/ || true
 
-         echo ""
-         echo "Looking for espnow_manager..."
-         find . -name espnow_manager.c
+        cp -r patches/hardware/* \
+          examples/factory_demo/main/hardware/ || true
 
-         echo ""
-         echo "Repository tree (first few levels):"
-         find . -maxdepth 3
+        cp -r patches/services/* \
+          examples/factory_demo/main/services/ || true
 
-
-      # ==========================================
-      # Install ESP-BOX OS Core
-      # ==========================================
-
-      - name: Install ESP-BOX OS Core
-        run: |
-          #mkdir -p examples/factory_demo/main/core/espnow_manager
-      
-          cp -r patches/core/espnow_manager/* \
-             examples/factory_demo/main/core/espnow_manager/  
-
+        cp -r patches/ai/* \
+          examples/factory_demo/main/ai/ || true
+       
       # =========================================================
       # CLEAN
       # =========================================================
