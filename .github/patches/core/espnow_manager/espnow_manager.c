@@ -1,8 +1,30 @@
-- name: Copy ESP-NOW Manager
+#include "espnow_manager.h"
 
-  run: |
+bool espnow_manager_init(void)
+{
+    return true;
+}
 
-    mkdir -p examples/factory_demo/main/core/espnow_manager
+void espnow_manager_task(void)
+{
+}
 
-    cp -r patches/core/espnow_manager/* \
-       examples/factory_demo/main/core/espnow_manager/
+bool espnow_manager_send(const uint8_t *mac,
+                         const char *message)
+{
+    (void)mac;
+    (void)message;
+    return false;
+}
+
+bool espnow_manager_broadcast(const char *message)
+{
+    (void)message;
+    return false;
+}
+
+void espnow_manager_set_callback(
+    espnow_rx_callback_t cb)
+{
+    (void)cb;
+}
