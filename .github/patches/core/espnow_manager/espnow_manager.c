@@ -1,6 +1,6 @@
 #include "espnow_manager.h"
 
-bool espnow_manager_init(void) #test
+bool espnow_manager_init(void) 
 {
     return true;
 }
