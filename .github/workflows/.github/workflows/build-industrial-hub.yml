@@ -1,0 +1,60 @@
+name: Build Industrial Hub
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Verify repository
+      run: |
+        echo "Repository:"
+        pwd
+        ls -la
+
+        echo ""
+        echo "Patches:"
+        find patches -type f || true
+
+    - name: Install ESP-BOX OS modules
+      run: |
+
+        mkdir -p examples/factory_demo/main/core
+        mkdir -p examples/factory_demo/main/hardware
+        mkdir -p examples/factory_demo/main/services
+        mkdir -p examples/factory_demo/main/ai
+
+        cp -rv patches/core/. examples/factory_demo/main/core/ || true
+        cp -rv patches/hardware/. examples/factory_demo/main/hardware/ || true
+        cp -rv patches/services/. examples/factory_demo/main/services/ || true
+        cp -rv patches/ai/. examples/factory_demo/main/ai/ || true
+
+    - name: Verify installation
+      run: |
+
+        echo "Installed files:"
+        find examples/factory_demo/main
+
+    - name: ESP-IDF Build
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.1
+        target: esp32s3
+        path: examples/factory_demo
+
+    - name: Upload Firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: industrial-hub-firmware
+        path: |
+          examples/factory_demo/build/*.bin
+          examples/factory_demo/build/bootloader/*.bin
+          examples/factory_demo/build/partition_table/*.bin
